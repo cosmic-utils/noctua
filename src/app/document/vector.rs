@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 // src/app/document/vector.rs
 //
 // Vector documents (SVG, etc.).

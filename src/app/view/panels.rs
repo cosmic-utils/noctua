@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 // src/app/view/panels.rs
 //
 // Header, footer, and side panels composing the main layout.

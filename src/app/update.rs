@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0 OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 // src/app/update.rs
 //
 // Application update loop: applies messages to the global model state.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0 OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 // src/app/document/file.rs
 //
 // Opening files and dispatching to the correct concrete document type.

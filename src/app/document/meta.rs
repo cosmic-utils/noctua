@@ -1,2 +1,2 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 // src/app/document/meta.rs
