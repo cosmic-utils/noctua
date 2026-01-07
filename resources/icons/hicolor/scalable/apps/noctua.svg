@@ -1,0 +1,31 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+<!-- resources/icons/hicolor/scalable/apps/org.noctua.Noctua.svg -->
+<!-- Stylized owl icon for Noctua, with one eye as a document/magnifying glass. -->
+
+<svg width="256" height="256" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle (optional, for contrast) -->
+  <circle cx="12" cy="12" r="10" fill="#2a2a4a" opacity="0.8"/>
+
+  <!-- Owl body (stylized) -->
+  <path d="M12 4C7 4 3 8 3 13v6l4-2 4 2 4-2 4 2v-6c0-5-4-9-9-9z"
+        fill="#2a2a4a" stroke="#e0e0e0" stroke-width="0.3"/>
+
+  <!-- Left eye (normal, small) -->
+  <circle cx="8" cy="10" r="1.8" fill="#ffd700" stroke="#333" stroke-width="0.2"/>
+  <circle cx="8" cy="10" r="0.8" fill="#333"/>
+
+  <!-- Right eye (document/magnifying glass, large) -->
+  <rect x="14" y="8" width="3" height="4" fill="white" rx="0.5" stroke="#333" stroke-width="0.2"/>
+  <path d="M15.5 9.5h-2v1h2v-1z" fill="#333" opacity="0.3"/> <!-- Document lines -->
+  <path d="M15.5 11.5h-2v1h2v-1z" fill="#333" opacity="0.3"/>
+  <path d="M15.5 10.5h-1v1h1v-1z" fill="#333" opacity="0.3"/>
+  <path d="M13 8.5a2.5 2.5 0 0 1 5 0" stroke="#333" stroke-width="0.3" fill="none"/> <!-- Magnifying glass handle -->
+
+  <!-- Beak (arrow-shaped) -->
+  <path d="M12 14l-1 1.5M12 14l1 1.5" stroke="#ffd700" stroke-width="0.5" fill="none"/>
+
+  <!-- Feathers (wisdom symbols) -->
+  <path d="M8 5c-1 0-2 1-2 2" stroke="#e0e0e0" stroke-width="0.3" fill="none"/>
+  <path d="M10 4c-1 1-1 2 0 3" stroke="#e0e0e0" stroke-width="0.3" fill="none"/>
+  <path d="M16 4c1 1 1 2 0 3" stroke="#e0e0e0" stroke-width="0.3" fill="none"/>
+</svg>

@@ -1,0 +1,16 @@
+.cargo/
+*.pdb
+**/*.rs.bk
+DEVNOTE.md
+tmp/
+debug/
+target/
+vendor/
+vendor.tar
+debian/*
+!debian/changelog
+!debian/control
+!debian/copyright
+!debian/install
+!debian/rules
+!debian/source

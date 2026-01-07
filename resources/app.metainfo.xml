@@ -1,0 +1,50 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+<!-- resources/app.metainfo.xml -->
+<!-- AppStream metadata for software centers (e.g., COSMIC Store, GNOME Software, KDE Discover). -->
+
+<?xml version="1.0" encoding="UTF-8" ?>
+<component type="desktop-application">
+  <id>org.codeberg.wfx.Noctua</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MPL-2.0</project_license>
+  <name>Noctua</name>
+  <summary>A wise document and image viewer for the COSMIC™ desktop</summary>
+  <description>
+    <p>
+      Noctua is a lightweight, mouse, touch and keyboard-driven viewer for images, PDFs, and vector graphics.
+      Built with Rust and libcosmic, it integrates seamlessly with COSMIC™ and GTK-based desktops.
+    </p>
+  </description>
+  <icon type="remote" width="64" height="64" scale="1">
+    https://codeberg.org/wfx/comsic-image-viewer/raw/main/resources/icons/hicolor/scalable/apps/icon.svg
+  </icon>
+  <url type="vcs-browser">https://codeberg.org/wfx/comsic-image-viewer</url>
+  <launchable type="desktop-id">org.codeberg.wfx.Noctua.desktop</launchable>
+  <provides>
+    <id>org.codeberg.wfx.Noctua</id>
+    <binaries>
+      <binary>noctua</binary>
+    </binaries>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </supports>
+  <categories>
+    <category>Graphics</category>
+    <category>Viewer</category>
+    <category>Utility</category>
+  </categories>
+  <keywords>
+    <keyword>image</keyword>
+    <keyword>document</keyword>
+    <keyword>pdf</keyword>
+    <keyword>viewer</keyword>
+    <keyword>cosmic</keyword>
+  </keywords>
+  <content_rating type="oars-1.1" />
+</component>

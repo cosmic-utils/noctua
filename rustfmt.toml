@@ -1,0 +1,5 @@
+# rustfmt.toml
+reorder_imports = false
+reorder_modules = false
+imports_granularity = "Preserve"
+group_imports = "Preserve"

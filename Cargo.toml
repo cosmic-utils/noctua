@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Cargo.toml
+#
+# Project metadata and dependencies for the Noctua document viewer.
+
+[package]
+name = "noctua"
+version = "0.1.0"
+edition = "2024"
+description = "A wise document and image viewer for the COSMIC™ desktop"
+repository = "https://codeberg.org/wfx/noctua"
+authors = ["Wolfgang Morawetz <wfx@mailbox.org>"]
+license = "GPL-3.0-or-later"
+keywords = ["document", "image", "viewer", "pdf", "cosmic"]
+categories = ["gui", "multimedia::graphics", "multimedia::images"]
+
+[dependencies]
+# Error handling
+anyhow = "1"
+
+# Async / concurrency
+futures-util = "0.3.31"
+tokio = { version = "1.48.0", features = ["full"] }
+
+# Logging
+log = "0.4.20"
+simple_logger = "4.2.0"
+
+# i18n / localization
+i18n-embed = { version = "0.16", features = [
+    "fluent-system",
+    "desktop-requester",
+] }
+i18n-embed-fl = "0.10"
+
+# Misc utilities
+open = "5.3.2"
+rust-embed = "8.8.0"
+image = "0.25.9"
+clap = { version = "4.5.54", features = ["derive"] }
+env_logger = "0.11.8"
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+# See https://github.com/pop-os/libcosmic/blob/master/Cargo.toml for available features.
+features = [
+    # Accessibility support
+    "a11y",
+    # About widget for the app
+    "about",
+    # Uses cosmic-settings-daemon to watch for config file changes
+    "dbus-config",
+    # Support creating additional application windows.
+    "multi-window",
+    # On app startup, focuses an existing instance if the app is already open
+    "single-instance",
+    # Uses tokio as the executor for the runtime
+    "tokio",
+    # Windowing support for X11, Windows, Mac, & Redox
+    "winit",
+    # Add Wayland support to winit
+    "wayland",
+    # GPU-accelerated rendering
+    "wgpu",
+]
+
+# Uncomment to test a locally-cloned libcosmic
+# [patch.'https://github.com/pop-os/libcosmic']
+# libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
+# cosmic-theme = { path = "../libcosmic/cosmic-theme" }
