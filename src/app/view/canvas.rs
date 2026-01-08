@@ -7,9 +7,9 @@ use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{container, image, text, Column, Row};
 use cosmic::Element;
 
-use crate::fl;
 use crate::app::model::ViewMode;
 use crate::app::{AppMessage, AppModel};
+use crate::fl;
 
 /// Render the center canvas area with the current document.
 pub fn view(model: &AppModel) -> Element<'_, AppMessage> {
@@ -30,11 +30,11 @@ pub fn view(model: &AppModel) -> Element<'_, AppMessage> {
                     .width(Length::Fixed(native_w as f32))
                     .height(Length::Fixed(native_h as f32))
             }
-            ViewMode::Custom(_) => {
+            ViewMode::Custom(zoom) => {
                 // Custom zoom factor applied to native size.
                 let (native_w, native_h) = doc.dimensions();
-                let scaled_w = (native_w as f32 * model.zoom).round();
-                let scaled_h = (native_h as f32 * model.zoom).round();
+                let scaled_w = (native_w as f32 * zoom).round();
+                let scaled_h = (native_h as f32 * zoom).round();
                 image::Image::new(handle)
                     .width(Length::Fixed(scaled_w))
                     .height(Length::Fixed(scaled_h))

@@ -14,7 +14,7 @@ pub mod vector;
 use cosmic::iced::widget::image as iced_image;
 use cosmic::iced_renderer::graphics::image::image_rs::ImageFormat as CosmicImageFormat;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use self::portable::PortableDocument;
 use self::raster::RasterDocument;
@@ -86,15 +86,6 @@ impl DocumentContent {
             DocumentContent::Raster(doc) => doc.handle.clone(),
             DocumentContent::Vector(doc) => doc.handle.clone(),
             DocumentContent::Portable(doc) => doc.handle.clone(),
-        }
-    }
-
-    /// Returns the underlying filesystem path of this document, if any.
-    pub fn path(&self) -> Option<&PathBuf> {
-        match self {
-            DocumentContent::Raster(doc) => doc.path.as_ref(),
-            DocumentContent::Vector(doc) => Some(&doc.path),
-            DocumentContent::Portable(doc) => Some(&doc.path),
         }
     }
 

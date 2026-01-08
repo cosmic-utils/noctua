@@ -30,6 +30,9 @@ no_document_loaded = No document loaded.
 
 ## Labels
 zoom = Zoom
+tools = Tools
+crop = Crop
+scale = Scale
 
 ## Error messages
 error-failed-to-open = Failed to open “{ $path }”.

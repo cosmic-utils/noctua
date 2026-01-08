@@ -5,18 +5,30 @@
 
 use std::path::PathBuf;
 
-use crate::config::AppConfig;
 use crate::app::document::DocumentContent;
+use crate::config::AppConfig;
 
 /// How the document is currently fitted into the window.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ViewMode {
     /// Fit document to available window size.
     Fit,
     /// Display at 100% (1.0 scale).
     ActualSize,
-    /// Custom zoom factor.
+    /// Custom zoom factor (e.g., 0.5 = 50%, 2.0 = 200%).
     Custom(f32),
+}
+
+impl ViewMode {
+    /// Return the effective zoom factor for this mode.
+    /// For `Fit`, returns `None` since the factor depends on window size.
+    pub fn zoom_factor(&self) -> Option<f32> {
+        match self {
+            ViewMode::Fit => None,
+            ViewMode::ActualSize => Some(1.0),
+            ViewMode::Custom(z) => Some(*z),
+        }
+    }
 }
 
 /// Current editing / interaction mode.
@@ -50,7 +62,6 @@ pub struct AppModel {
 
     /// View / zoom state.
     pub view_mode: ViewMode,
-    pub zoom: f32,
 
     /// Pan offset (in pixels, relative to centered position).
     pub pan_x: f32,
@@ -77,7 +88,6 @@ impl AppModel {
             folder_entries: Vec::new(),
             current_index: None,
             view_mode: ViewMode::Fit,
-            zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
             show_left_panel: false,
@@ -101,5 +111,10 @@ impl AppModel {
     pub fn reset_pan(&mut self) {
         self.pan_x = 0.0;
         self.pan_y = 0.0;
+    }
+
+    /// Get the current zoom factor, if applicable.
+    pub fn zoom_factor(&self) -> Option<f32> {
+        self.view_mode.zoom_factor()
     }
 }

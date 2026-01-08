@@ -8,12 +8,12 @@ use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{self, Column, Container, Row, Text};
 
 use crate::fl;
+use crate::app::model::ViewMode;
 use crate::app::{AppMessage, AppModel};
 
 /// Top header bar (global actions, toggles).
 pub fn header(_model: &AppModel) -> Element<'_, AppMessage> {
     let content = Row::new().spacing(8).align_y(Alignment::Center);
-    //.push(Text::new(fl!("noctua-app-name")).size(18));
     // In a real implementation, add more buttons/actions here.
 
     Container::new(content)
@@ -30,7 +30,13 @@ pub fn footer(model: &AppModel) -> Element<'_, AppMessage> {
         .push(widget::button::standard("<").on_press(AppMessage::PrevDocument))
         .push(widget::button::standard(">").on_press(AppMessage::NextDocument));
 
-    let zoom_info = Text::new(format!("Zoom: {:.0}%", model.zoom * 100.0));
+    let zoom_text = match model.view_mode {
+        ViewMode::Fit => "Fit".to_string(),
+        ViewMode::ActualSize => "100%".to_string(),
+        ViewMode::Custom(zoom_factor) => format!("{:.0}%", zoom_factor * 100.0),
+    };
+
+    let zoom_info = Text::new(format!("Zoom: {}", zoom_text));
 
     let content = Row::new()
         .spacing(16)
@@ -52,10 +58,9 @@ pub fn left_panel(model: &AppModel) -> Option<Element<'_, AppMessage>> {
 
     let tools = Column::new()
         .spacing(4)
-        .push(Text::new("Tools"))
-        .push(widget::button::standard("Crop").on_press(AppMessage::ToggleCropMode))
-        .push(widget::button::standard("Scale").on_press(AppMessage::ToggleScaleMode));
-    // Later: color pickers, marker tools, text tool, etc.
+        .push(Text::new(fl!("tools")))
+        .push(widget::button::standard(fl!("crop")).on_press(AppMessage::ToggleCropMode))
+        .push(widget::button::standard(fl!("scale")).on_press(AppMessage::ToggleScaleMode));
 
     let panel = Container::new(tools)
         .width(Length::Fixed(180.0))
@@ -78,7 +83,6 @@ pub fn right_panel(model: &AppModel) -> Option<Element<'_, AppMessage>> {
             "Current index: {:?}",
             model.current_index
         )));
-    // Later: real EXIF / tags from model.metadata_cache
 
     let panel = Container::new(meta)
         .width(Length::Fixed(220.0))

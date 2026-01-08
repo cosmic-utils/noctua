@@ -3,9 +3,6 @@
 //
 // Application update loop: applies messages to the global model state.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
 use super::document;
 use super::message::AppMessage;
 use super::model::{AppModel, ToolMode, ViewMode, PAN_STEP};
@@ -14,21 +11,20 @@ use super::model::{AppModel, ToolMode, ViewMode, PAN_STEP};
 ///
 /// This is the single place where application state is mutated.
 pub fn update(model: &mut AppModel, msg: AppMessage) {
-    // Debug output: log every received message.
     println!("update(): received message: {:?}", msg);
 
     match msg {
         // ===== File / navigation ==========================================================
         AppMessage::OpenPath(path) => {
-            open_single_path(model, path);
+            document::file::open_single_file(model, &path);
         }
 
         AppMessage::NextDocument => {
-            go_to_next_document(model);
+            document::file::navigate_next(model);
         }
 
         AppMessage::PrevDocument => {
-            go_to_prev_document(model);
+            document::file::navigate_prev(model);
         }
 
         // ===== Panels =====================================================================
@@ -43,7 +39,6 @@ pub fn update(model: &mut AppModel, msg: AppMessage) {
         AppMessage::ZoomIn => zoom_in(model),
         AppMessage::ZoomOut => zoom_out(model),
         AppMessage::ZoomReset => {
-            model.zoom = 1.0;
             model.view_mode = ViewMode::ActualSize;
             model.reset_pan();
         }
@@ -121,106 +116,26 @@ pub fn update(model: &mut AppModel, msg: AppMessage) {
     }
 }
 
-/// Open a single path, refreshing navigation context.
-fn open_single_path(model: &mut AppModel, path: PathBuf) {
-    // Try to load the concrete document type (raster/vector/portable).
-    match document::file::open_document(path.clone()) {
-        Ok(doc) => {
-            // Update current document.
-            model.document = Some(doc);
-            model.current_path = Some(path.clone());
-            model.clear_error();
-
-            // Reset view state for new document.
-            model.reset_pan();
-            model.zoom = 1.0;
-            model.view_mode = ViewMode::Fit;
-
-            // Refresh folder listing based on parent directory.
-            if let Some(parent) = path.parent() {
-                refresh_folder_entries(model, parent, &path);
-            }
-        }
-        Err(err) => {
-            model.document = None;
-            model.current_path = None;
-            model.set_error(err.to_string());
-        }
-    }
-}
-
-/// Refresh the `folder_entries` list and current index.
-fn refresh_folder_entries(model: &mut AppModel, folder: &Path, current: &Path) {
-    let mut entries: Vec<PathBuf> = Vec::new();
-
-    if let Ok(read_dir) = fs::read_dir(folder) {
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-
-            // Only keep files that are recognized as supported documents.
-            if document::DocumentKind::from_path(&path).is_some() {
-                entries.push(path);
-            }
-        }
-    }
-
-    entries.sort();
-
-    // Determine current index.
-    let current_index = entries.iter().position(|p| p == current);
-
-    model.folder_entries = entries;
-    model.current_index = current_index;
-}
-
-/// Go to next document in the current folder, if any.
-fn go_to_next_document(model: &mut AppModel) {
-    let len = model.folder_entries.len();
-    let Some(idx) = model.current_index else {
-        return;
-    };
-    if len == 0 {
-        return;
-    }
-
-    let next_idx = (idx + 1) % len;
-    if let Some(path) = model.folder_entries.get(next_idx).cloned() {
-        model.current_index = Some(next_idx);
-        open_single_path(model, path);
-    }
-}
-
-/// Go to previous document in the current folder, if any.
-fn go_to_prev_document(model: &mut AppModel) {
-    let len = model.folder_entries.len();
-    let Some(idx) = model.current_index else {
-        return;
-    };
-    if len == 0 {
-        return;
-    }
-
-    let prev_idx = (idx + len - 1) % len;
-    if let Some(path) = model.folder_entries.get(prev_idx).cloned() {
-        model.current_index = Some(prev_idx);
-        open_single_path(model, path);
-    }
-}
-
-/// Increment zoom level.
+/// Increment zoom level by 10%.
 fn zoom_in(model: &mut AppModel) {
-    let factor = 1.1_f32;
-    let new_zoom = (model.zoom * factor).clamp(0.05, 20.0);
-
-    model.zoom = new_zoom;
+    let current = current_zoom(model);
+    let new_zoom = (current * 1.1).clamp(0.05, 20.0);
     model.view_mode = ViewMode::Custom(new_zoom);
 }
 
-/// Decrement zoom level.
+/// Decrement zoom level by ~9% (inverse of 1.1).
 fn zoom_out(model: &mut AppModel) {
-    let factor = 1.0 / 1.1_f32;
-    let new_zoom = (model.zoom * factor).clamp(0.05, 20.0);
-
-    model.zoom = new_zoom;
+    let current = current_zoom(model);
+    let new_zoom = (current / 1.1).clamp(0.05, 20.0);
     model.view_mode = ViewMode::Custom(new_zoom);
+}
+
+/// Extract the current effective zoom factor from the view mode.
+/// For `Fit` mode, we assume 1.0 as starting point when switching to custom zoom.
+fn current_zoom(model: &AppModel) -> f32 {
+    match model.view_mode {
+        ViewMode::Fit => 1.0,
+        ViewMode::ActualSize => 1.0,
+        ViewMode::Custom(z) => z,
+    }
 }
