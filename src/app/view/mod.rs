@@ -1,49 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // src/app/view/mod.rs
 //
-// Root layout for the main application window.
+// View module root, combining all view components.
 
-pub mod canvas;
+mod canvas;
+pub mod footer;
 pub mod panels;
 
 use cosmic::Element;
-use cosmic::iced::Length;
-use cosmic::widget::{Column, Container, Row};
 
 use crate::app::{AppMessage, AppModel};
 
-/// Main window layout (header, center row, footer).
+/// Main application view (canvas area).
 pub fn view(model: &AppModel) -> Element<'_, AppMessage> {
-    let header = panels::header(model);
-    let footer = panels::footer(model);
-    let left_panel = panels::left_panel(model);
-    let right_panel = panels::right_panel(model);
-    let canvas = canvas::view(model);
-
-    // Build middle row step by step to handle optional panels.
-    let mut middle_row = Row::new().spacing(8).height(Length::Fill);
-
-    if let Some(left) = left_panel {
-        middle_row = middle_row.push(left);
-    }
-
-    middle_row = middle_row.push(canvas);
-
-    if let Some(right) = right_panel {
-        middle_row = middle_row.push(right);
-    }
-
-    let content = Column::new()
-        .spacing(8)
-        .padding(8)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .push(header)
-        .push(middle_row)
-        .push(footer);
-
-    Container::new(content)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    canvas::view(model)
 }

@@ -5,9 +5,8 @@
 
 use std::path::PathBuf;
 
-use crate::app::document::DocumentContent;
 use crate::app::document::meta::DocumentMeta;
-
+use crate::app::document::DocumentContent;
 use crate::config::AppConfig;
 
 /// How the document is currently fitted into the window.
@@ -54,7 +53,7 @@ pub struct AppModel {
     pub document: Option<DocumentContent>,
 
     /// Cached metadata for the current document.
-    /// Loaded lazily when the right panel is opened.
+    /// Loaded lazily when the metadata panel is opened.
     pub metadata: Option<DocumentMeta>,
 
     /// Path of the currently opened document, if any.
@@ -72,10 +71,6 @@ pub struct AppModel {
     /// Pan offset (in pixels, relative to centered position).
     pub pan_x: f32,
     pub pan_y: f32,
-
-    /// Panel visibility.
-    pub show_left_panel: bool,
-    pub show_right_panel: bool,
 
     /// Current tool mode.
     pub tool_mode: ToolMode,
@@ -97,8 +92,6 @@ impl AppModel {
             view_mode: ViewMode::Fit,
             pan_x: 0.0,
             pan_y: 0.0,
-            show_left_panel: false,
-            show_right_panel: false,
             tool_mode: ToolMode::None,
             error: None,
         }

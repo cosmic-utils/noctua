@@ -9,46 +9,21 @@ use super::model::{AppModel, ToolMode, ViewMode, PAN_STEP};
 
 /// Central update function applying messages to the model.
 ///
-/// This is the single place where application state is mutated.
+/// Panel toggle messages (ToggleContextPage) are handled directly in
+/// `Noctua::update()` since they affect COSMIC's Core state.
 pub fn update(model: &mut AppModel, msg: AppMessage) {
-    println!("update(): received message: {:?}", msg);
-
     match msg {
         // ===== File / navigation ==========================================================
         AppMessage::OpenPath(path) => {
             document::file::open_single_file(model, &path);
-            // Refresh metadata if panel is visible.
-            if model.show_right_panel {
-                refresh_metadata(model);
-            }
         }
 
         AppMessage::NextDocument => {
             document::file::navigate_next(model);
-            // Refresh metadata if panel is visible.
-            if model.show_right_panel {
-                refresh_metadata(model);
-            }
         }
 
         AppMessage::PrevDocument => {
             document::file::navigate_prev(model);
-            // Refresh metadata if panel is visible.
-            if model.show_right_panel {
-                refresh_metadata(model);
-            }
-        }
-
-        // ===== Panels =====================================================================
-        AppMessage::ToggleLeftPanel => {
-            model.show_left_panel = !model.show_left_panel;
-        }
-        AppMessage::ToggleRightPanel => {
-            model.show_right_panel = !model.show_right_panel;
-            // Load metadata lazily when panel becomes visible.
-            if model.show_right_panel && model.metadata.is_none() {
-                refresh_metadata(model);
-            }
         }
 
         // ===== View / zoom ===============================================================
@@ -80,7 +55,7 @@ pub fn update(model: &mut AppModel, msg: AppMessage) {
             model.reset_pan();
         }
 
-        // ===== Tools =====================================================================
+        // ===== Tool modes ================================================================
         AppMessage::ToggleCropMode => {
             model.tool_mode = if model.tool_mode == ToolMode::Crop {
                 ToolMode::None
@@ -131,6 +106,11 @@ pub fn update(model: &mut AppModel, msg: AppMessage) {
             model.clear_error();
         }
 
+        // ===== Handled elsewhere =========================================================
+        AppMessage::ToggleContextPage(_) => {
+            // Handled in Noctua::update() directly.
+        }
+
         AppMessage::NoOp => {
             // Intentionally do nothing.
         }
@@ -152,7 +132,6 @@ fn zoom_out(model: &mut AppModel) {
 }
 
 /// Extract the current effective zoom factor from the view mode.
-/// For `Fit` mode, we assume 1.0 as starting point when switching to custom zoom.
 fn current_zoom(model: &AppModel) -> f32 {
     match model.view_mode {
         ViewMode::Fit => 1.0,

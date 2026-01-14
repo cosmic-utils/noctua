@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // src/app/view/canvas.rs
 //
-/// Renders the center canvas area with the current document.
-//
+// Renders the center canvas area with the current document.
+
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{container, image, text, Column, Row};
 use cosmic::Element;
@@ -55,7 +55,8 @@ pub fn view(model: &AppModel) -> Element<'_, AppMessage> {
             )
             .into()
     } else {
-        container(text(fl!("no_document_loaded")))
+        // No document loaded placeholder.
+        container(text(fl!("no-document")))
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .width(Length::Fill)

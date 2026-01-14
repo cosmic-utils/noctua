@@ -1,57 +1,73 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // src/app/message.rs
 //
-// Top-level application messages (events, IO, and UI signals).
+// All application messages (events, user actions, signals).
 
 use std::path::PathBuf;
 
-/// Top-level application messages.
-///
-/// These are produced by:
-/// - UI widgets (buttons, menus, etc.)
-/// - keyboard shortcuts
-/// - async tasks (file loading, etc.)
+use crate::app::ContextPage;
+
+/// Messages emitted by user actions, async I/O, or internal signals.
 #[derive(Debug, Clone)]
 pub enum AppMessage {
-    /// User requested to open a single file.
+    // === File / Navigation ===
+    /// Open a file at the given path.
     OpenPath(PathBuf),
-
-    /// Navigate to next/previous document in the current folder.
+    /// Navigate to the next document in folder.
     NextDocument,
+    /// Navigate to the previous document in folder.
     PrevDocument,
 
-    /// Refresh metadata (e.g., when panel becomes visible or document changes).
-    RefreshMetadata,
+    // === Transformations ===
+    /// Rotate 90° clockwise.
+    RotateCW,
+    /// Rotate 90° counter-clockwise.
+    RotateCCW,
+    /// Flip horizontally (mirror).
+    FlipHorizontal,
+    /// Flip vertically.
+    FlipVertical,
 
-    /// Basic view / panel toggles.
-    ToggleLeftPanel,
-    ToggleRightPanel,
-
-    /// View / zoom control.
+    // === Zoom ===
+    /// Zoom in by a fixed step.
     ZoomIn,
+    /// Zoom out by a fixed step.
     ZoomOut,
+    /// Reset zoom to 100%.
     ZoomReset,
+    /// Fit document to window.
     ZoomFit,
 
-    /// Pan control (Ctrl + arrow keys).
+    // === Pan ===
+    /// Pan image left.
     PanLeft,
+    /// Pan image right.
     PanRight,
+    /// Pan image up.
     PanUp,
+    /// Pan image down.
     PanDown,
+    /// Reset pan to center.
     PanReset,
 
-    /// Editing / tool modes.
+    // === Tool Modes ===
+    /// Toggle crop mode.
     ToggleCropMode,
+    /// Toggle scale mode.
     ToggleScaleMode,
 
-    /// Document transformations.
-    FlipHorizontal,
-    FlipVertical,
-    RotateCW,
-    RotateCCW,
+    // === Panels (COSMIC-managed) ===
+    /// Toggle a context drawer page.
+    ToggleContextPage(ContextPage),
 
-    /// Generic error reporting from lower layers.
+    // === Metadata ===
+    /// Refresh metadata from the current document.
+    RefreshMetadata,
+
+    // === Errors ===
+    /// Display an error message.
     ShowError(String),
+    /// Clear the current error.
     ClearError,
 
     /// Fallback for unhandled or no-op cases.

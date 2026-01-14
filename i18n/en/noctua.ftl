@@ -25,8 +25,8 @@ menu-view-flip-vertical = Flip Vertically
 menu-view-rotate-cw = Rotate Clockwise
 menu-view-rotate-ccw = Rotate Counter-Clockwise
 
-## Note messages
-no_document_loaded = No document loaded.
+## Placeholders / empty states
+no-document = No document loaded
 
 ## Labels
 zoom = Zoom
@@ -35,10 +35,17 @@ crop = Crop
 scale = Scale
 
 ## Error messages
-error-failed-to-open = Failed to open “{ $path }”.
+error-failed-to-open = Failed to open "{ $path }".
 error-unsupported-format = Unsupported file format.
 
-# Metadata panel
+## Properties panel
+panel-properties = Properties
+meta-dimensions = Dimensions
+meta-format = Format
+meta-pages = Pages
+meta-current-page = Current Page
+
+## Metadata panel (extended)
 metadata = Metadata
 file-name = File
 format = Format
@@ -46,7 +53,7 @@ resolution = Resolution
 file-size = Size
 color-type = Color
 
-# EXIF data
+## EXIF data
 exif-data = EXIF Data
 camera = Camera
 date-taken = Date
@@ -56,6 +63,5 @@ iso = ISO
 focal-length = Focal
 gps = GPS
 
-# States
+## States
 loading-metadata = Loading...
-no-document = No document

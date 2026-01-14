@@ -10,10 +10,11 @@ pub mod update;
 
 mod view;
 
-use cosmic::app::Core;
+use cosmic::app::{context_drawer, Core};
 use cosmic::iced::keyboard::{self, key::Named, Key, Modifiers};
 use cosmic::iced::window;
 use cosmic::iced::Subscription;
+use cosmic::widget::{button, icon, nav_bar};
 use cosmic::{Action, Element, Task};
 
 pub use message::AppMessage;
@@ -28,10 +29,19 @@ pub enum Flags {
     Args(Args),
 }
 
+/// Context page displayed in right drawer.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum ContextPage {
+    #[default]
+    Properties,
+}
+
 /// Main application type.
 pub struct Noctua {
     core: Core,
     pub model: AppModel,
+    nav: nav_bar::Model,
+    context_page: ContextPage,
 }
 
 impl cosmic::Application for Noctua {
@@ -49,7 +59,7 @@ impl cosmic::Application for Noctua {
         &mut self.core
     }
 
-    fn init(core: Core, flags: Self::Flags) -> (Self, Task<Action<Self::Message>>) {
+    fn init(mut core: Core, flags: Self::Flags) -> (Self, Task<Action<Self::Message>>) {
         let config = AppConfig::default();
         let mut model = AppModel::new(config);
 
@@ -59,7 +69,21 @@ impl cosmic::Application for Noctua {
             document::file::open_initial_path(&mut model, path);
         }
 
-        (Self { core, model }, Task::none())
+        // Initialize empty nav bar (for folder/thumbnail navigation later).
+        let nav = nav_bar::Model::default();
+
+        // Context drawer hidden by default.
+        core.window.show_context = false;
+
+        (
+            Self {
+                core,
+                model,
+                nav,
+                context_page: ContextPage::default(),
+            },
+            Task::none(),
+        )
     }
 
     fn on_close_requested(&self, _id: window::Id) -> Option<Self::Message> {
@@ -67,6 +91,17 @@ impl cosmic::Application for Noctua {
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Action<Self::Message>> {
+        // Handle panel toggle messages.
+        if let AppMessage::ToggleContextPage(page) = &message {
+            if self.context_page == *page {
+                self.core.window.show_context = !self.core.window.show_context;
+            } else {
+                self.context_page = *page;
+                self.core.window.show_context = true;
+            }
+            return Task::none();
+        }
+
         update::update(&mut self.model, message);
         Task::none()
     }
@@ -77,6 +112,38 @@ impl cosmic::Application for Noctua {
 
     fn view_window(&self, _id: window::Id) -> Element<Self::Message> {
         self.view()
+    }
+
+    /// Header end items (right side of header bar).
+    fn header_end(&self) -> Vec<Element<Self::Message>> {
+        vec![
+            // Properties panel toggle button.
+            button::icon(icon::from_name("document-properties-symbolic"))
+                .on_press(AppMessage::ToggleContextPage(ContextPage::Properties))
+                .into(),
+        ]
+    }
+
+    /// Right-side context drawer (properties panel).
+    fn context_drawer(&self) -> Option<context_drawer::ContextDrawer<Self::Message>> {
+        if !self.core.window.show_context {
+            return None;
+        }
+
+        Some(context_drawer::context_drawer(
+            view::panels::properties_panel(&self.model),
+            AppMessage::ToggleContextPage(ContextPage::Properties),
+        ))
+    }
+
+    /// Nav bar model for left panel.
+    fn nav_model(&self) -> Option<&nav_bar::Model> {
+        Some(&self.nav)
+    }
+
+    /// Footer with zoom controls and document info.
+    fn footer(&self) -> Option<Element<Self::Message>> {
+        Some(view::footer::view(&self.model))
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
@@ -132,6 +199,11 @@ fn handle_key_press(key: Key, modifiers: Modifiers) -> Option<AppMessage> {
 
         // Reset pan.
         Key::Character("0") => Some(PanReset),
+
+        // Toggle properties panel with 'i' for info.
+        Key::Character(ch) if ch.eq_ignore_ascii_case("i") => {
+            Some(ToggleContextPage(ContextPage::Properties))
+        }
 
         _ => None,
     }
