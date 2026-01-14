@@ -11,10 +11,11 @@ pub mod update;
 mod view;
 
 use cosmic::app::{context_drawer, Core};
+use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::keyboard::{self, key::Named, Key, Modifiers};
 use cosmic::iced::window;
-use cosmic::iced::Subscription;
-use cosmic::widget::{button, icon, nav_bar};
+use cosmic::iced::{Length, Subscription};
+use cosmic::widget::{button, horizontal_space, icon, nav_bar};
 use cosmic::{Action, Element, Task};
 
 pub use message::AppMessage;
@@ -42,6 +43,8 @@ pub struct Noctua {
     pub model: AppModel,
     nav: nav_bar::Model,
     context_page: ContextPage,
+    config: AppConfig,
+    config_handler: Option<cosmic_config::Config>,
 }
 
 impl cosmic::Application for Noctua {
@@ -60,8 +63,17 @@ impl cosmic::Application for Noctua {
     }
 
     fn init(mut core: Core, flags: Self::Flags) -> (Self, Task<Action<Self::Message>>) {
-        let config = AppConfig::default();
-        let mut model = AppModel::new(config);
+        // Load persisted config.
+        let (config, config_handler) =
+            match cosmic_config::Config::new(Self::APP_ID, AppConfig::VERSION) {
+                Ok(handler) => {
+                    let config = AppConfig::get_entry(&handler).unwrap_or_default();
+                    (config, Some(handler))
+                }
+                Err(_) => (AppConfig::default(), None),
+            };
+
+        let mut model = AppModel::new(config.clone());
 
         // Use CLI arguments from `flags` to open initial file or folder.
         let Flags::Args(args) = flags;
@@ -72,8 +84,9 @@ impl cosmic::Application for Noctua {
         // Initialize empty nav bar (for folder/thumbnail navigation later).
         let nav = nav_bar::Model::default();
 
-        // Context drawer hidden by default.
-        core.window.show_context = false;
+        // Apply persisted panel states.
+        core.window.show_context = config.context_drawer_visible;
+        core.nav_bar_set_toggled(config.nav_bar_visible);
 
         (
             Self {
@@ -81,6 +94,8 @@ impl cosmic::Application for Noctua {
                 model,
                 nav,
                 context_page: ContextPage::default(),
+                config,
+                config_handler,
             },
             Task::none(),
         )
@@ -91,63 +106,76 @@ impl cosmic::Application for Noctua {
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Action<Self::Message>> {
-        // Handle panel toggle messages.
-        if let AppMessage::ToggleContextPage(page) = &message {
-            if self.context_page == *page {
-                self.core.window.show_context = !self.core.window.show_context;
-            } else {
-                self.context_page = *page;
-                self.core.window.show_context = true;
+        match &message {
+            // Handle nav bar toggle.
+            AppMessage::ToggleNavBar => {
+                self.config.nav_bar_visible = !self.config.nav_bar_visible;
+                self.core.nav_bar_set_toggled(self.config.nav_bar_visible);
+                self.save_config();
+                return Task::none();
             }
-            return Task::none();
+
+            // Handle context panel toggle.
+            AppMessage::ToggleContextPage(page) => {
+                if self.context_page == *page {
+                    self.core.window.show_context = !self.core.window.show_context;
+                } else {
+                    self.context_page = *page;
+                    self.core.window.show_context = true;
+                }
+                self.config.context_drawer_visible = self.core.window.show_context;
+                self.save_config();
+                return Task::none();
+            }
+
+            _ => {}
         }
 
         update::update(&mut self.model, message);
         Task::none()
     }
 
+    fn header_start(&self) -> Vec<Element<Self::Message>> {
+        view::header::header_start(&self.model)
+    }
+
+    fn header_end(&self) -> Vec<Element<Self::Message>> {
+        view::header::header_end(&self.model)
+    }
+
     fn view(&self) -> Element<Self::Message> {
         view::view(&self.model)
     }
 
-    fn view_window(&self, _id: window::Id) -> Element<Self::Message> {
-        self.view()
-    }
-
-    /// Header end items (right side of header bar).
-    fn header_end(&self) -> Vec<Element<Self::Message>> {
-        vec![
-            // Properties panel toggle button.
-            button::icon(icon::from_name("document-properties-symbolic"))
-                .on_press(AppMessage::ToggleContextPage(ContextPage::Properties))
-                .into(),
-        ]
-    }
-
-    /// Right-side context drawer (properties panel).
     fn context_drawer(&self) -> Option<context_drawer::ContextDrawer<Self::Message>> {
         if !self.core.window.show_context {
             return None;
         }
-
         Some(context_drawer::context_drawer(
             view::panels::properties_panel(&self.model),
             AppMessage::ToggleContextPage(ContextPage::Properties),
         ))
     }
 
-    /// Nav bar model for left panel.
     fn nav_model(&self) -> Option<&nav_bar::Model> {
         Some(&self.nav)
     }
 
-    /// Footer with zoom controls and document info.
     fn footer(&self) -> Option<Element<Self::Message>> {
         Some(view::footer::view(&self.model))
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
         keyboard::on_key_press(handle_key_press)
+    }
+}
+
+impl Noctua {
+    /// Save current config to disk.
+    fn save_config(&self) {
+        if let Some(ref handler) = self.config_handler {
+            let _ = self.config.write_entry(handler);
+        }
     }
 }
 
@@ -200,10 +228,11 @@ fn handle_key_press(key: Key, modifiers: Modifiers) -> Option<AppMessage> {
         // Reset pan.
         Key::Character("0") => Some(PanReset),
 
-        // Toggle properties panel with 'i' for info.
+        // Toggle panels.
         Key::Character(ch) if ch.eq_ignore_ascii_case("i") => {
             Some(ToggleContextPage(ContextPage::Properties))
         }
+        Key::Character(ch) if ch.eq_ignore_ascii_case("n") => Some(ToggleNavBar),
 
         _ => None,
     }

@@ -111,6 +111,10 @@ pub fn update(model: &mut AppModel, msg: AppMessage) {
             // Handled in Noctua::update() directly.
         }
 
+        AppMessage::ToggleNavBar => {
+            // Handled in Noctua::update() directly.
+        }
+
         AppMessage::NoOp => {
             // Intentionally do nothing.
         }

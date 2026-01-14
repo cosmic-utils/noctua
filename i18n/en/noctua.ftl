@@ -40,28 +40,27 @@ error-unsupported-format = Unsupported file format.
 
 ## Properties panel
 panel-properties = Properties
-meta-dimensions = Dimensions
+meta-section-file = File Information
+meta-section-exif = Camera Information
+
+## Basic metadata
+meta-filename = Name
 meta-format = Format
+meta-dimensions = Dimensions
+meta-filesize = Size
+meta-colortype = Color Type
+meta-path = Path
 meta-pages = Pages
 meta-current-page = Current Page
 
-## Metadata panel (extended)
-metadata = Metadata
-file-name = File
-format = Format
-resolution = Resolution
-file-size = Size
-color-type = Color
-
-## EXIF data
-exif-data = EXIF Data
-camera = Camera
-date-taken = Date
-exposure = Exposure
-aperture = Aperture
-iso = ISO
-focal-length = Focal
-gps = GPS
+## EXIF metadata
+meta-camera = Camera
+meta-datetime = Date Taken
+meta-exposure = Exposure
+meta-aperture = Aperture
+meta-iso = ISO
+meta-focal = Focal Length
+meta-gps = GPS Location
 
 ## States
 loading-metadata = Loading...

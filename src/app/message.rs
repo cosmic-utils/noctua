@@ -59,6 +59,8 @@ pub enum AppMessage {
     // === Panels (COSMIC-managed) ===
     /// Toggle a context drawer page.
     ToggleContextPage(ContextPage),
+    /// Toggle the nav bar (left panel) visibility.
+    ToggleNavBar,
 
     // === Metadata ===
     /// Refresh metadata from the current document.
