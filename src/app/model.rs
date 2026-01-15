@@ -46,9 +46,6 @@ pub const PAN_STEP: f32 = 50.0;
 /// Global application state.
 #[derive(Debug)]
 pub struct AppModel {
-    /// Static configuration loaded at startup.
-    pub config: AppConfig,
-
     /// Currently opened document (raster/vector/portable).
     pub document: Option<DocumentContent>,
 
@@ -81,9 +78,8 @@ pub struct AppModel {
 
 impl AppModel {
     /// Construct a new application state from configuration.
-    pub fn new(config: AppConfig) -> Self {
+    pub fn new(_config: AppConfig) -> Self {
         Self {
-            config,
             document: None,
             metadata: None,
             current_path: None,
