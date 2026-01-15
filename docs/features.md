@@ -211,5 +211,3 @@ Features marked as "Planned" have their message handlers already prepared in the
 - `OpenPath`, `RefreshMetadata` in `src/app/message.rs`
 - `ToggleCropMode`, `ToggleScaleMode` in transformation handlers
 - Comments marked with `TODO:` in document implementations
-
-Pull requests welcome! See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
