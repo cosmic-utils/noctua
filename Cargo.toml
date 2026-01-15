@@ -42,6 +42,7 @@ dirs = "5.0"
 image = "0.25.9"
 clap = { version = "4.5.54", features = ["derive"] }
 env_logger = "0.11.8"
+wallpaper = "3.2"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"

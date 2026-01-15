@@ -3,7 +3,8 @@
 //
 // Panel content for COSMIC context drawer.
 
-use cosmic::widget::{column, divider, row, text};
+use cosmic::iced::Length;
+use cosmic::widget::{button, column, divider, horizontal_space, icon, row, text};
 use cosmic::Element;
 
 use crate::app::{AppMessage, AppModel};
@@ -13,8 +14,8 @@ use crate::fl;
 pub fn properties_panel(model: &AppModel) -> Element<'static, AppMessage> {
     let mut content = column::with_capacity(16).spacing(8);
 
-    // Header.
-    content = content.push(text::title4(fl!("panel-properties")));
+    // Header with action icons
+    content = content.push(panel_header(model));
 
     // Display document metadata if available.
     if let Some(ref doc) = model.document {
@@ -115,5 +116,32 @@ fn meta_row_small(label: String, value: String) -> Element<'static, AppMessage> 
         .spacing(2)
         .push(text::caption(format!("{}:", label)))
         .push(text::caption(value))
+        .into()
+}
+
+/// Panel header with title and action icon buttons.
+fn panel_header(model: &AppModel) -> Element<'static, AppMessage> {
+    let has_doc = model.document.is_some();
+
+    row::with_capacity(5)
+        .spacing(4)
+        .align_y(cosmic::iced::Alignment::Center)
+        .push(text::title4(fl!("panel-properties")))
+        .push(horizontal_space().width(Length::Fill))
+        .push(
+            button::icon(icon::from_name("image-x-generic-symbolic"))
+                .on_press_maybe(has_doc.then_some(AppMessage::SetAsWallpaper))
+                .tooltip(fl!("action-set-wallpaper"))
+        )
+        // .push(
+        //     button::icon(icon::from_name("system-run-symbolic"))
+        //         .on_press_maybe(has_doc.then_some(AppMessage::NoOp)) // TODO: Implement
+        //         .tooltip(fl!("action-open-with"))
+        // )
+        // .push(
+        //     button::icon(icon::from_name("system-file-manager-symbolic"))
+        //         .on_press_maybe(has_doc.then_some(AppMessage::NoOp)) // TODO: Implement
+        //         .tooltip(fl!("action-show-in-folder"))
+        // )
         .into()
 }

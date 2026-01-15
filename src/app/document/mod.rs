@@ -110,3 +110,35 @@ impl DocumentContent {
         }
     }
 }
+
+/// Set an image file as desktop wallpaper.
+///
+/// This function attempts multiple methods in order:
+/// 1. COSMIC Desktop (direct config file modification)
+/// 2. wallpaper crate (KDE, XFCE, Windows, macOS)
+/// 3. gsettings (GNOME)
+/// 4. feh (tiling window managers)
+///
+/// The operation is performed asynchronously and logs success/failure.
+pub fn set_as_wallpaper(path: &Path) {
+    // Canonicalize to absolute path
+    let abs_path = match path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("Failed to canonicalize path {}: {}", path.display(), e);
+            return;
+        }
+    };
+
+    // Convert to string
+    let path_str = match abs_path.to_str() {
+        Some(s) => s.to_string(),
+        None => {
+            log::error!("Invalid UTF-8 in path: {}", abs_path.display());
+            return;
+        }
+    };
+
+    // Delegate to utils with concrete string type
+    utils::set_as_wallpaper(&path_str);
+}

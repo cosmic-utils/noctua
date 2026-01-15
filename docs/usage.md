@@ -75,6 +75,12 @@ All transformations are lossless and show in real-time.
 | `i` | Toggle properties      | Show/hide the properties panel (metadata)|
 | `n` | Toggle navigation      | Show/hide the navigation sidebar         |
 
+### Actions
+
+| Key | Action                 | Description                              |
+|:----|:-----------------------|:-----------------------------------------|
+| `w` | Set as wallpaper       | Set the current image as desktop wallpaper|
+
 ## Mouse Controls
 
 ### Zoom
@@ -100,6 +106,26 @@ The header toolbar provides quick access to common operations:
 
 ### Right Side
 - **Properties toggle**: Show/hide the metadata panel
+
+## Properties Panel
+
+The properties panel (toggle with `i`) displays image metadata and provides quick actions:
+
+### Action Buttons
+Located at the top-right of the properties panel:
+
+- **Set as Wallpaper** (`w` key): Set the current image as your desktop wallpaper
+  - Works with COSMIC, GNOME, KDE, XFCE, and tiling window managers
+  - Automatically detects your desktop environment
+  - Falls back to alternative methods if the primary method fails
+  
+- **Open With** (planned): Open the image with another application
+
+- **Show in Folder** (planned): Open the containing folder in your file manager
+
+### Metadata Display
+- **File Information**: Name, format, dimensions, file size, color type
+- **Camera Information** (if available): Camera model, date taken, exposure settings, GPS location
 
 ## Footer Information
 

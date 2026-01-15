@@ -104,6 +104,11 @@ pub fn update(model: &mut AppModel, msg: AppMessage) {
             refresh_metadata(model);
         }
 
+        // ===== Wallpaper =================================================================
+        AppMessage::SetAsWallpaper => {
+            set_as_wallpaper(model);
+        }
+
         // ===== Error handling ============================================================
         AppMessage::ShowError(msg) => {
             model.set_error(msg);
@@ -153,4 +158,19 @@ fn current_zoom(model: &AppModel) -> f32 {
 /// Refresh metadata from the current document.
 fn refresh_metadata(model: &mut AppModel) {
     model.metadata = model.document.as_ref().map(|doc| doc.extract_meta());
+}
+
+/// Set the current image as desktop wallpaper.
+fn set_as_wallpaper(model: &mut AppModel) {
+    let Some(path) = model.current_path.as_ref() else {
+        model.set_error("No image loaded");
+        return;
+    };
+
+    let path = path.clone();
+
+    // Spawn async task to set wallpaper
+    tokio::spawn(async move {
+        document::set_as_wallpaper(&path);
+    });
 }

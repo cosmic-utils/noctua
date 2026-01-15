@@ -70,6 +70,10 @@ pub enum AppMessage {
     #[allow(dead_code)]
     RefreshMetadata,
 
+    // === Wallpaper ===
+    /// Set current image as wallpaper.
+    SetAsWallpaper,
+
     // === Errors ===
     /// Display an error message.
     #[allow(dead_code)]

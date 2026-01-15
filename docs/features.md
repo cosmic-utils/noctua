@@ -104,6 +104,10 @@ This document describes the implemented and planned features of Noctua, a modern
 - **Properties panel**:
   - Image metadata display
   - File information
+  - Action buttons:
+    - Set as Wallpaper (works with COSMIC, GNOME, KDE, XFCE, and tiling WMs)
+    - Open With… (planned)
+    - Show in Folder (planned)
   - Toggle with `i` key or toolbar button
 - **Navigation panel** (Left sidebar):
   - Toggle with `n` key or toolbar button
@@ -116,6 +120,23 @@ Full keyboard-driven workflow:
 - Pan: `Ctrl + ←` `Ctrl + →` `Ctrl + ↑` `Ctrl + ↓`
 - Transform: `r` `Shift+r` `h` `v`
 - Panels: `i` `n`
+- Actions: `w` (Set as Wallpaper)
+
+### Desktop Integration
+
+#### Wallpaper Support (Implemented)
+- **Set as Wallpaper**: One-click wallpaper setting with cross-desktop compatibility
+- **Supported desktop environments**:
+  - COSMIC Desktop (direct config file integration)
+  - GNOME (via gsettings)
+  - KDE Plasma (via wallpaper crate)
+  - XFCE (via wallpaper crate)
+  - Tiling window managers (via feh)
+- **Multiple access methods**:
+  - Keyboard shortcut: `w`
+  - Icon button in Properties panel
+  - Tooltip support for discoverability
+- **Automatic fallback**: Tries multiple methods until one succeeds
 
 ### Configuration
 

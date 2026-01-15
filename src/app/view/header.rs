@@ -52,7 +52,10 @@ pub fn header_start(model: &AppModel) -> Vec<Element<'_, AppMessage>> {
 
 /// Build the right side of the header bar.
 pub fn header_end(_model: &AppModel) -> Vec<Element<'_, AppMessage>> {
-    vec![button::icon(icon::from_name("dialog-information-symbolic"))
-        .on_press(AppMessage::ToggleContextPage(ContextPage::Properties))
-        .into()]
+    vec![
+        // Info panel toggle
+        button::icon(icon::from_name("dialog-information-symbolic"))
+            .on_press(AppMessage::ToggleContextPage(ContextPage::Properties))
+            .into(),
+    ]
 }

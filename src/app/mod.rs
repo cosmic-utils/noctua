@@ -244,6 +244,9 @@ fn handle_key_press(key: Key, modifiers: Modifiers) -> Option<AppMessage> {
         }
         Key::Character(ch) if ch.eq_ignore_ascii_case("n") => Some(ToggleNavBar),
 
+        // Wallpaper.
+        Key::Character(ch) if ch.eq_ignore_ascii_case("w") => Some(SetAsWallpaper),
+
         _ => None,
     }
 }

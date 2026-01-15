@@ -40,8 +40,14 @@ error-unsupported-format = Unsupported file format.
 
 ## Properties panel
 panel-properties = Properties
+panel-actions = Actions
 meta-section-file = File Information
 meta-section-exif = Camera Information
+
+## Action buttons
+action-set-wallpaper = Set as Wallpaper
+action-open-with = Open With…
+action-show-in-folder = Show in Folder
 
 ## Basic metadata
 meta-filename = Name
