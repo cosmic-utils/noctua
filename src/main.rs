@@ -3,15 +3,18 @@
 //
 // Application entry point.
 
-mod app;
+mod ui;
+mod application;
+mod domain;
+mod infrastructure;
+
 mod config;
-mod constant;
 mod i18n;
 
 use anyhow::Result;
 use clap::Parser;
 use cosmic::app::Settings;
-use crate::app::Noctua;
+use crate::ui::NoctuaApp;
 
 #[derive(Parser, Debug, Clone)]
 #[command(version, about)]
@@ -35,6 +38,6 @@ fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
 
-    cosmic::app::run::<Noctua>(Settings::default(), app::Flags::Args(args))
+    cosmic::app::run::<NoctuaApp>(Settings::default(), ui::app::Flags::Args(args))
         .map_err(|e| anyhow::anyhow!(e))
 }

@@ -94,7 +94,10 @@ impl VectorDocument {
     }
 
     /// Extract metadata for this vector document.
-    pub fn extract_meta(&self, path: &Path) -> crate::domain::document::core::metadata::DocumentMeta {
+    pub fn extract_meta(
+        &self,
+        path: &Path,
+    ) -> crate::domain::document::core::metadata::DocumentMeta {
         use crate::domain::document::core::metadata::{BasicMeta, DocumentMeta};
 
         let file_name = path

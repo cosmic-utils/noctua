@@ -20,6 +20,7 @@ window-title = { $filename ->
 
 
 ## Menu entries
+menu-main = Menu
 menu-file-open = Open…
 menu-file-quit = Quit
 menu-view-zoom-in = Zoom In
@@ -51,7 +52,7 @@ status-zoom-fit = Fit
 status-zoom-percent = { $percent }%
 status-doc-dimensions = { $width } × { $height }
 status-nav-position = { $current } / { $total }
-status-separator =  | 
+status-separator =  |
 
 
 ## Placeholders / Empty states
@@ -119,3 +120,9 @@ action-show-in-folder = Show in Folder
 ## Navigation panel (thumbnails)
 nav-panel-title = Pages
 nav-panel-loading = Loading { $current } / { $total }…
+
+
+## Format panel
+format-section-title = Paper Format
+format-section-subtitle = Select paper size for export
+orientation-section-title = Orientation

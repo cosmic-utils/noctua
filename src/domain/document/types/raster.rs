@@ -163,7 +163,10 @@ impl RasterDocument {
     /// Extract metadata for this raster document.
     ///
     /// Returns basic metadata (dimensions, format, file size) and EXIF data if available.
-    pub fn extract_meta(&self, path: &Path) -> crate::domain::document::core::metadata::DocumentMeta {
+    pub fn extract_meta(
+        &self,
+        path: &Path,
+    ) -> crate::domain::document::core::metadata::DocumentMeta {
         use crate::domain::document::core::metadata::{BasicMeta, DocumentMeta, ExifMeta};
 
         let file_name = path
@@ -322,29 +325,21 @@ impl Transformable for RasterDocument {
     }
 
     fn rotate_fine(&mut self, angle_degrees: f32) {
-        use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
+        // TODO: Re-enable when imageproc dependency is added to Cargo.toml
+        // For now, round to nearest 90-degree rotation
+        log::warn!("Fine rotation not yet implemented, rounding to nearest 90 degrees");
 
-        let interpolation = match self.interpolation_quality {
-            InterpolationQuality::Fast => Interpolation::Nearest,
-            InterpolationQuality::Balanced => Interpolation::Bilinear,
-            InterpolationQuality::Best => Interpolation::Bicubic,
+        let rounded = ((angle_degrees / 90.0).round() as i16 * 90) % 360;
+        let rotation = match rounded {
+            0 => Rotation::None,
+            90 => Rotation::Cw90,
+            180 => Rotation::Cw180,
+            270 => Rotation::Cw270,
+            _ => Rotation::None,
         };
 
-        // Convert to RGBA8 for imageproc
-        let rgba_img = self.document.to_rgba8();
-
-        // Rotate with transparent background
-        let rotated = rotate_about_center(
-            &rgba_img,
-            angle_degrees.to_radians(),
-            interpolation,
-            image::Rgba([255, 255, 255, 0]),
-        );
-
-        self.document = DynamicImage::ImageRgba8(rotated);
-        self.fine_rotation_angle += angle_degrees;
-        self.transform.rotation = RotationMode::Fine(self.fine_rotation_angle);
-        self.handle = Self::create_image_handle_from_image(&self.document);
+        self.rotate(rotation);
+        self.transform.rotation = RotationMode::Standard(rotation);
     }
 
     fn reset_fine_rotation(&mut self) {
