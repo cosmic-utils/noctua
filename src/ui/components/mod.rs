@@ -3,4 +3,4 @@
 //
 // UI components: reusable widgets and controls.
 
-pub mod crop;
+// Crop functionality moved to ui/widgets
