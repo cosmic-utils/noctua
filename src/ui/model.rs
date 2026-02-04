@@ -5,7 +5,7 @@
 
 use cosmic::iced::Size;
 
-use crate::ui::components::crop::CropSelection;
+use crate::ui::widgets::CropSelection;
 use crate::config::AppConfig;
 
 // =============================================================================

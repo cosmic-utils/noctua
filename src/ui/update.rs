@@ -11,7 +11,7 @@ use super::model::{AppModel, ToolMode, ViewMode};
 use crate::application::commands::transform_document::{TransformDocumentCommand, TransformOperation};
 use crate::application::commands::crop_document::CropDocumentCommand;
 
-use crate::ui::components::crop::DragHandle;
+use crate::ui::widgets::DragHandle;
 
 // =============================================================================
 // Update Result
@@ -200,12 +200,12 @@ pub fn update(app: &mut NoctuaApp, msg: &AppMessage) -> UpdateResult {
         AppMessage::ApplyCrop => {
             if app.model.tool_mode == ToolMode::Crop {
                 // Get crop selection region
-                if let Some(region) = &app.model.crop_selection.region {
+                if let Some(crop_region) = app.model.crop_selection.to_crop_region() {
                     // Create crop command from canvas selection
                     let pan_offset = cosmic::iced::Vector::new(app.model.pan_x, app.model.pan_y);
 
                     match CropDocumentCommand::from_canvas_selection(
-                        region,
+                        &crop_region,
                         app.model.canvas_size,
                         app.model.image_size,
                         app.model.scale,

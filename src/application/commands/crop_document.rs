@@ -8,7 +8,7 @@ use cosmic::iced::{ContentFit, Size, Vector};
 use crate::application::DocumentManager;
 use crate::domain::document::core::content::DocumentKind;
 use crate::domain::document::core::document::DocResult;
-use crate::ui::components::crop::CropRegion;
+use crate::ui::widgets::CropRegion;
 
 /// Crop document command.
 ///
@@ -52,7 +52,8 @@ impl CropDocumentCommand {
         scale: f32,
         pan_offset: Vector,
     ) -> Result<Self, String> {
-        let canvas_rect = crop_region.as_tuple();
+        let (x, y, w, h) = crop_region.as_tuple();
+        let canvas_rect = (x as f32, y as f32, w as f32, h as f32);
 
         // Convert canvas coordinates to image pixel coordinates
         let image_rect = Self::canvas_rect_to_image_rect(

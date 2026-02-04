@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use crate::ui::components::crop::DragHandle;
+use crate::ui::widgets::DragHandle;
 
 #[derive(Debug, Clone)]
 pub enum AppMessage {

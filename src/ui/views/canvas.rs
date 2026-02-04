@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// src/app/view/canvas.rs
+// src/ui/views/canvas.rs
 //
 // Render the center canvas area with the current document.
 
 use cosmic::iced::widget::image::FilterMethod;
 use cosmic::iced::{ContentFit, Length};
-use cosmic::iced_widget::stack;
 use cosmic::widget::{container, text};
 use cosmic::Element;
 
-use crate::ui::components::crop::crop_overlay;
 use super::image_viewer::Viewer;
 use crate::ui::model::{ToolMode, ViewMode};
 use crate::ui::{AppMessage, AppModel};
@@ -49,16 +47,12 @@ pub fn view<'a>(
             .scale_step(config.scale_step - 1.0)
             .disable_pan(model.tool_mode == ToolMode::Crop);
 
-        if model.tool_mode == ToolMode::Crop {
-            let overlay = crop_overlay(&model.crop_selection, config.crop_show_grid);
-
-            stack![img_viewer, overlay].into()
-        } else {
-            container(img_viewer)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        }
+        // TODO: Add crop dialog when ToolMode::Crop
+        // For now, just show the viewer
+        container(img_viewer)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     } else {
         container(text(fl!("no-document")))
             .width(Length::Fill)
