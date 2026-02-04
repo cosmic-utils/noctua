@@ -7,7 +7,6 @@ pub mod canvas;
 pub mod footer;
 pub mod format_panel;
 pub mod header;
-pub mod image_viewer;
 pub mod pages_panel;
 pub mod panels;
 

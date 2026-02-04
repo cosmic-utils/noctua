@@ -126,31 +126,6 @@ pub fn update(app: &mut NoctuaApp, msg: &AppMessage) -> UpdateResult {
             app.model.reset_pan();
         }
 
-        AppMessage::ViewerStateChanged {
-            scale,
-            offset_x,
-            offset_y,
-            canvas_size,
-            image_size,
-        } => {
-            // Detect scale changes (zoom vs just pan)
-            let old_scale = app.model.scale;
-
-            // Update model from viewer state
-            app.model.scale = *scale;
-            app.model.pan_x = *offset_x;
-            app.model.pan_y = *offset_y;
-            app.model.canvas_size = *canvas_size;
-            app.model.image_size = *image_size;
-
-            // If scale changed, user zoomed -> switch to Custom mode
-            // (Fit mode is only maintained when explicitly set via ZoomFit button)
-            if old_scale != *scale {
-                app.model.view_mode = ViewMode::Custom;
-            }
-        }
-
-        // ---- Pan control ---------------------------------------------------------
         AppMessage::PanLeft => {
             app.model.pan_x -= app.config.pan_step;
         }
