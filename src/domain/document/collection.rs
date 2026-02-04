@@ -103,11 +103,12 @@ impl DocumentCollection {
     /// Returns the new index if successful, None if already at the end.
     pub fn next(&mut self) -> Option<usize> {
         if let Some(current) = self.current_index
-            && current + 1 < self.paths.len() {
-                self.current_index = Some(current + 1);
-                self.current_document = None; // Clear document (needs reload)
-                return self.current_index;
-            }
+            && current + 1 < self.paths.len()
+        {
+            self.current_index = Some(current + 1);
+            self.current_document = None; // Clear document (needs reload)
+            return self.current_index;
+        }
         None
     }
 
@@ -116,11 +117,12 @@ impl DocumentCollection {
     /// Returns the new index if successful, None if already at the start.
     pub fn previous(&mut self) -> Option<usize> {
         if let Some(current) = self.current_index
-            && current > 0 {
-                self.current_index = Some(current - 1);
-                self.current_document = None; // Clear document (needs reload)
-                return self.current_index;
-            }
+            && current > 0
+        {
+            self.current_index = Some(current - 1);
+            self.current_document = None; // Clear document (needs reload)
+            return self.current_index;
+        }
         None
     }
 

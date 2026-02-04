@@ -5,7 +5,6 @@
 
 pub mod commands;
 pub mod document_manager;
-pub mod queries;
 pub mod services;
 
 // Re-export document manager
