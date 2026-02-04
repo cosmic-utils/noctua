@@ -5,10 +5,11 @@
 
 use cosmic::iced::widget::image::FilterMethod;
 use cosmic::iced::{ContentFit, Length};
+use cosmic::iced_widget::stack;
 use cosmic::widget::{container, text};
 use cosmic::Element;
 
-use crate::ui::widgets::Viewer;
+use crate::ui::widgets::{crop_overlay, Viewer};
 use crate::ui::model::{ToolMode, ViewMode};
 use crate::ui::{AppMessage, AppModel};
 use crate::application::DocumentManager;
@@ -47,11 +48,16 @@ pub fn view<'a>(
             .scale_step(config.scale_step - 1.0)
             .disable_pan(model.tool_mode == ToolMode::Crop);
 
-        // TODO: Re-add simple crop overlay (not as complex dialog)
-        container(img_viewer)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        // Overlay crop UI when in crop mode
+        if model.tool_mode == ToolMode::Crop {
+            let overlay = crop_overlay(&model.crop_selection, config.crop_show_grid);
+            stack![img_viewer, overlay].into()
+        } else {
+            container(img_viewer)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        }
     } else {
         container(text(fl!("no-document")))
             .width(Length::Fill)

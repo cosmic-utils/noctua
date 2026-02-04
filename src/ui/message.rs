@@ -62,6 +62,7 @@ pub enum AppMessage {
         max_x: f32,
         max_y: f32,
     },
+
     CropDragEnd,
 
     // Panels.
