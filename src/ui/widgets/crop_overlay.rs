@@ -14,7 +14,6 @@ use cosmic::{
             widget::Tree,
         },
         event::{Event, Status},
-        keyboard,
         mouse::{self, Button, Cursor},
     },
 };
@@ -370,22 +369,6 @@ impl Widget<AppMessage, cosmic::Theme, Renderer> for CropOverlay {
                     shell.publish(AppMessage::CropDragEnd);
                     return Status::Captured;
                 }
-            }
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Enter),
-                ..
-            }) => {
-                if self.selection.has_selection() {
-                    shell.publish(AppMessage::ApplyCrop);
-                    return Status::Captured;
-                }
-            }
-            Event::Keyboard(keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                ..
-            }) => {
-                shell.publish(AppMessage::CancelCrop);
-                return Status::Captured;
             }
             _ => {}
         }
