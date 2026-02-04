@@ -52,8 +52,6 @@ pub enum AppMessage {
     CropDragMove {
         x: f32,
         y: f32,
-        max_x: f32,
-        max_y: f32,
     },
     CropDragEnd,
 

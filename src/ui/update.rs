@@ -223,9 +223,11 @@ pub fn update(app: &mut NoctuaApp, msg: &AppMessage) -> UpdateResult {
                 }
             }
         }
-        AppMessage::CropDragMove { x, y, max_x, max_y } => {
+        AppMessage::CropDragMove { x, y } => {
             if app.model.tool_mode == ToolMode::Crop {
-                app.model.crop_selection.update_drag(*x, *y, *max_x, *max_y);
+                if let Some((img_w, img_h)) = app.model.current_dimensions {
+                    app.model.crop_selection.update_drag(*x, *y, img_w as f32, img_h as f32);
+                }
             }
         }
         AppMessage::CropDragEnd => {
