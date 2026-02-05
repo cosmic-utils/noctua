@@ -16,38 +16,11 @@ An image viewer application for the COSMIC™ desktop
 
 ## Architecture
 
-Noctua follows Clean Architecture principles with clear separation of concerns:
-
-```
-src/
-├── main.rs              # Application entry point
-├── ui/                  # UI Layer (COSMIC interface)
-│   ├── app.rs           # Application state & lifecycle
-│   ├── model.rs         # UI state + cached render data
-│   ├── update.rs        # Message handlers
-│   ├── sync.rs          # Model synchronization
-│   ├── views/           # View components
-│   └── components/      # Reusable widgets
-├── application/         # Application Layer (use cases)
-│   ├── document_manager.rs  # Document orchestration
-│   ├── commands/        # Write operations (Transform, Crop)
-│   └── services/        # Shared services (Cache)
-├── domain/              # Domain Layer (business logic)
-│   ├── document/        # Document abstractions & operations
-│   │   ├── core/        # Traits & types (Renderable, Transformable)
-│   │   ├── types/       # Implementations (Raster, Vector, Portable)
-│   │   └── operations/  # Transform, render, export operations
-│   └── errors.rs        # Domain errors
-└── infrastructure/      # Infrastructure Layer (external systems)
-    ├── loaders/         # Document loading (image, SVG, PDF)
-    ├── cache/           # Thumbnail caching
-    ├── filesystem/      # File operations
-    └── system/          # System integration (wallpaper)
-```
+Noctua follows Clean Architecture principles with clear separation of concerns.
 
 **Key Patterns:**
 - **MVU (Model-View-Update)**: Elm architecture via libcosmic
-- **Command Pattern**: All operations go through commands
+- **Command Pattern**: Domain operations encapsulated in commands
 - **Dependency Inversion**: Domain has no dependencies on infrastructure
 - **Type-Erased Documents**: `DocumentContent` enum for unified handling
 
@@ -88,7 +61,6 @@ sudo zypper install poppler-glib-devel
 
 - [Usage](docs/usage.md)
 - [Features](docs/features.md)
-- [Development Guide](docs/development.md)
 
 ## License
 
