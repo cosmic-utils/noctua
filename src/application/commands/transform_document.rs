@@ -9,6 +9,7 @@ use crate::domain::document::operations::transform;
 
 /// Transformation operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum TransformOperation {
     /// Rotate clockwise by 90 degrees.
     RotateCw,

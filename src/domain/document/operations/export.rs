@@ -66,6 +66,7 @@ impl ExportFormat {
 
 /// Export options for image formats.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ImageExportOptions {
     /// Quality setting (0-100) for lossy formats.
     pub quality: u8,

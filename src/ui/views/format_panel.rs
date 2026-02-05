@@ -6,12 +6,21 @@
 use cosmic::widget::{column, radio, text};
 use cosmic::Element;
 
-use crate::ui::model::{AppModel, Orientation, PaperFormat};
+use crate::ui::model::{AppMode, AppModel, Orientation, PaperFormat};
 use crate::ui::AppMessage;
 use crate::fl;
 
 /// Build the format panel view for the navigation bar.
 pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
+    // Extract values from Transform mode
+    let (paper_format, orientation) = match &model.mode {
+        AppMode::Transform {
+            paper_format,
+            orientation,
+        } => (*paper_format, *orientation),
+        _ => (None, Orientation::default()),
+    };
+
     let mut content = column::with_capacity(20).spacing(12).padding(16);
 
     // --- Format Section ---
@@ -24,7 +33,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
         radio(
             "US Letter (216 × 279 mm)",
             PaperFormat::UsLetter,
-            model.paper_format,
+            paper_format,
             AppMessage::SetPaperFormat,
         )
         .size(16),
@@ -37,7 +46,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
             radio(
                 PaperFormat::IsoA0.display_name(),
                 PaperFormat::IsoA0,
-                model.paper_format,
+                paper_format,
                 AppMessage::SetPaperFormat,
             )
             .size(16),
@@ -46,7 +55,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
             radio(
                 PaperFormat::IsoA1.display_name(),
                 PaperFormat::IsoA1,
-                model.paper_format,
+                paper_format,
                 AppMessage::SetPaperFormat,
             )
             .size(16),
@@ -55,7 +64,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
             radio(
                 PaperFormat::IsoA2.display_name(),
                 PaperFormat::IsoA2,
-                model.paper_format,
+                paper_format,
                 AppMessage::SetPaperFormat,
             )
             .size(16),
@@ -64,7 +73,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
             radio(
                 PaperFormat::IsoA3.display_name(),
                 PaperFormat::IsoA3,
-                model.paper_format,
+                paper_format,
                 AppMessage::SetPaperFormat,
             )
             .size(16),
@@ -73,7 +82,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
             radio(
                 PaperFormat::IsoA4.display_name(),
                 PaperFormat::IsoA4,
-                model.paper_format,
+                paper_format,
                 AppMessage::SetPaperFormat,
             )
             .size(16),
@@ -82,7 +91,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
             radio(
                 PaperFormat::IsoA5.display_name(),
                 PaperFormat::IsoA5,
-                model.paper_format,
+                paper_format,
                 AppMessage::SetPaperFormat,
             )
             .size(16),
@@ -91,7 +100,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
             radio(
                 PaperFormat::IsoA6.display_name(),
                 PaperFormat::IsoA6,
-                model.paper_format,
+                paper_format,
                 AppMessage::SetPaperFormat,
             )
             .size(16),
@@ -107,7 +116,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
         radio(
             "Horizontal",
             Orientation::Horizontal,
-            Some(model.orientation),
+            Some(orientation),
             AppMessage::SetOrientation,
         )
         .size(16),
@@ -118,7 +127,7 @@ pub fn view(model: &AppModel) -> Element<'static, AppMessage> {
         radio(
             "Vertical",
             Orientation::Vertical,
-            Some(model.orientation),
+            Some(orientation),
             AppMessage::SetOrientation,
         )
         .size(16),

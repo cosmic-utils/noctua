@@ -15,10 +15,10 @@ use crate::fl;
 
 /// Build the start (left) side of the header bar.
 pub fn start<'a>(
-    model: &'a AppModel,
-    _manager: &'a DocumentManager,
+    _model: &'a AppModel,
+    manager: &'a DocumentManager,
 ) -> Vec<Element<'a, AppMessage>> {
-    let has_doc = model.current_image_handle.is_some();
+    let has_doc = manager.current_document().is_some();
 
     // Left section: Panel toggle + Menu + Navigation
     let left_controls = row()

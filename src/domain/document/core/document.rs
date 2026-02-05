@@ -126,6 +126,7 @@ impl RotationMode {
 
 /// Interpolation quality for fine rotation and resizing operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub enum InterpolationQuality {
     /// Fast, nearest neighbor interpolation.
     Fast,

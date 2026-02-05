@@ -11,9 +11,6 @@ pub mod components;
 pub mod views;
 pub mod widgets;
 
-// Internal module for syncing model from DocumentManager
-pub(crate) mod sync;
-
 // Re-export main types
 pub use app::NoctuaApp;
 pub use message::AppMessage;

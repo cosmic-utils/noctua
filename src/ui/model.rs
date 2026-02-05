@@ -2,6 +2,9 @@
 // src/ui/model.rs
 //
 // UI state (view, tools, panels).
+//
+// AppModel contains ONLY UI-specific state.
+// Document state lives in DocumentManager (application layer).
 
 use cosmic::iced::Size;
 
@@ -9,29 +12,20 @@ use crate::ui::widgets::CropSelection;
 use crate::config::AppConfig;
 
 // =============================================================================
-// Enums
+// View Mode
 // =============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewMode {
+    #[default]
     Fit,
     ActualSize,
     Custom,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolMode {
-    None,
-    Crop,
-    Scale,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NavPanel {
-    None,
-    Pages,
-    Format,
-}
+// =============================================================================
+// Paper Format (for export/transform)
+// =============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaperFormat {
@@ -75,109 +69,212 @@ impl PaperFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Orientation {
     Horizontal,
+    #[default]
     Vertical,
 }
 
 // =============================================================================
-// Model
+// Application Mode (combines tool + panel state)
+// =============================================================================
+
+/// Application mode - unified tool and panel state.
+///
+/// Each mode determines:
+/// - Active tool behavior
+/// - Right panel content
+/// - Available shortcuts
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum AppMode {
+    /// Normal viewing mode - no active tool
+    View,
+
+    /// Crop mode with selection
+    Crop { selection: CropSelection },
+
+    /// Transform/export mode
+    Transform {
+        paper_format: Option<PaperFormat>,
+        orientation: Orientation,
+    },
+
+    /// Fullscreen mode (all panels hidden)
+    Fullscreen,
+}
+
+impl Default for AppMode {
+    fn default() -> Self {
+        Self::View
+    }
+}
+
+impl AppMode {
+    /// Get the right panel that should be shown for this mode
+    pub fn right_panel(&self) -> Option<RightPanel> {
+        match self {
+            Self::View => Some(RightPanel::Properties),
+            Self::Crop { .. } => Some(RightPanel::CropTools),
+            Self::Transform { .. } => Some(RightPanel::TransformTools),
+            Self::Fullscreen => None,
+        }
+    }
+
+    /// Check if mode is an active tool (not View/Fullscreen)
+    pub fn is_tool_active(&self) -> bool {
+        matches!(self, Self::Crop { .. } | Self::Transform { .. })
+    }
+}
+
+// =============================================================================
+// Viewport (zoom, pan, canvas)
+// =============================================================================
+
+/// Viewport state - zoom, pan, canvas dimensions.
+#[derive(Debug, Clone)]
+pub struct Viewport {
+    /// Current scale factor
+    pub scale: f32,
+
+    /// Pan offset X
+    pub pan_x: f32,
+
+    /// Pan offset Y
+    pub pan_y: f32,
+
+    /// Canvas size (container)
+    pub canvas_size: Size,
+
+    /// Image size (after scaling)
+    pub image_size: Size,
+
+    /// Fit mode
+    pub fit_mode: ViewMode,
+
+    /// Scroll container ID
+    pub scroll_id: cosmic::widget::Id,
+
+    /// Cached image handle for rendering (updated when document or scale changes)
+    pub cached_image_handle: Option<cosmic::widget::image::Handle>,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            canvas_size: Size::ZERO,
+            image_size: Size::ZERO,
+            fit_mode: ViewMode::Fit,
+            scroll_id: cosmic::widget::Id::new("canvas-scroll"),
+            cached_image_handle: None,
+        }
+    }
+}
+
+impl Viewport {
+    /// Reset pan to center
+    pub fn reset_pan(&mut self) {
+        self.pan_x = 0.0;
+        self.pan_y = 0.0;
+    }
+}
+
+// =============================================================================
+// Panel State
+// =============================================================================
+
+/// Panel visibility state.
+#[derive(Debug, Clone, Default)]
+pub struct PanelState {
+    /// Left panel (thumbnails for multi-page)
+    pub left: Option<LeftPanel>,
+
+    /// Right panel (context-dependent tools/properties)
+    pub right: Option<RightPanel>,
+}
+
+/// Left panel types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftPanel {
+    /// Thumbnail navigation for multi-page documents
+    Thumbnails,
+}
+
+/// Right panel types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum RightPanel {
+    /// Document properties and metadata
+    Properties,
+
+    /// Crop mode tools
+    CropTools,
+
+    /// Transform/export tools
+    TransformTools,
+}
+
+// =============================================================================
+// AppModel (UI State Only)
 // =============================================================================
 
 /// UI state for the application.
 ///
-/// This struct holds only UI-related state (view, tools, panels).
-/// Document data is managed by DocumentManager in the application layer.
-/// Cached render data is stored here for performance.
+/// Contains ONLY UI-specific state:
+/// - Current mode (view/tool)
+/// - Viewport (zoom/pan)
+/// - Panel visibility
+/// - Transient UI state (errors, menu)
+///
+/// Document state (current file, metadata, etc.) lives in DocumentManager!
 pub struct AppModel {
-    // Cached rendering data (read-only from DocumentManager)
-    pub current_image_handle: Option<cosmic::widget::image::Handle>,
-    pub current_dimensions: Option<(u32, u32)>,
-    pub current_page: Option<usize>,
-    pub page_count: Option<usize>,
+    /// Current application mode
+    pub mode: AppMode,
 
-    // Cached metadata (read-only)
-    pub metadata: Option<crate::domain::document::core::metadata::DocumentMeta>,
+    /// Viewport state
+    pub viewport: Viewport,
 
-    // Navigation info (read-only)
-    pub current_path: Option<std::path::PathBuf>,
-    pub current_index: Option<usize>,
-    pub folder_count: usize,
+    /// Panel visibility
+    pub panels: PanelState,
 
-    // View state
-    pub view_mode: ViewMode,
-    pub pan_x: f32,
-    pub pan_y: f32,
-    pub scale: f32,
-    pub canvas_size: Size,
-    pub image_size: Size,
-    pub scroll_id: cosmic::widget::Id,
+    /// Error message to display
+    pub error: Option<String>,
 
-    // Tool state
-    pub tool_mode: ToolMode,
-    pub crop_selection: CropSelection,
-
-    // Format settings (for export)
-    pub paper_format: Option<PaperFormat>,
-    pub orientation: Orientation,
-
-    // UI panels
-    pub active_nav_panel: NavPanel,
-    pub last_nav_panel: Option<NavPanel>,
+    /// Is main menu open?
     pub menu_open: bool,
 
-    // UI feedback
-    pub error: Option<String>,
+    /// Tick counter for animations
     pub tick: u64,
 }
 
 impl AppModel {
     pub fn new(_config: AppConfig) -> Self {
         Self {
-            // Cached data
-            current_image_handle: None,
-            current_dimensions: None,
-            current_page: None,
-            page_count: None,
-            metadata: None,
-            current_path: None,
-            current_index: None,
-            folder_count: 0,
-            // View state
-            view_mode: ViewMode::Fit,
-            pan_x: 0.0,
-            pan_y: 0.0,
-            scale: 1.0,
-            canvas_size: Size::ZERO,
-            image_size: Size::ZERO,
-            scroll_id: cosmic::widget::Id::new("canvas-scroll"),
-            // Tool state
-            tool_mode: ToolMode::None,
-            crop_selection: CropSelection::default(),
-            // Format settings
-            paper_format: None,
-            orientation: Orientation::Vertical,
-            // UI panels
-            active_nav_panel: NavPanel::None,
-            last_nav_panel: None,
-            menu_open: false,
-            // UI feedback
+            mode: AppMode::default(),
+            viewport: Viewport::default(),
+            panels: PanelState::default(),
             error: None,
+            menu_open: false,
             tick: 0,
         }
     }
 
+    /// Set error message
     pub fn set_error<S: Into<String>>(&mut self, msg: S) {
         self.error = Some(msg.into());
     }
 
+    /// Clear error message
     pub fn clear_error(&mut self) {
         self.error = None;
     }
 
+    /// Reset viewport pan to center
     pub fn reset_pan(&mut self) {
-        self.pan_x = 0.0;
-        self.pan_y = 0.0;
+        self.viewport.reset_pan();
     }
 }

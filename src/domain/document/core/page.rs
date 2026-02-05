@@ -7,6 +7,7 @@ use cosmic::widget::image::Handle as ImageHandle;
 
 /// Represents a single page in a multi-page document.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Page {
     /// Page index (0-based).
     pub index: usize,

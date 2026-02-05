@@ -19,19 +19,18 @@ use crate::fl;
 /// Build the page navigation panel view.
 /// Returns None if the current document doesn't support multiple pages.
 pub fn view<'a>(
-    model: &'a AppModel,
+    _model: &'a AppModel,
     manager: &'a DocumentManager,
 ) -> Option<Element<'a, AppMessage>> {
-    // Only show for multi-page documents.
-    let page_count = model.page_count?;
+    // Get document and check if it's multi-page
+    let doc = manager.current_document()?;
+    let page_count = doc.page_count();
+
     if page_count <= 1 {
         return None;
     }
 
-    let current_page = model.current_page.unwrap_or(0);
-
-    // Get document for thumbnail loading status
-    let doc = manager.current_document()?;
+    let current_page = doc.current_page();
     let loaded = doc.thumbnails_loaded();
 
     let mut content = column::with_capacity(page_count + 1)

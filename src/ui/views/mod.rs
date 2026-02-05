@@ -7,6 +7,7 @@ pub mod canvas;
 pub mod footer;
 pub mod format_panel;
 pub mod header;
+pub mod meta_panel;
 pub mod pages_panel;
 pub mod panels;
 
@@ -14,7 +15,7 @@ use cosmic::iced::Length;
 use cosmic::widget::container;
 use cosmic::{Action, Element};
 
-use crate::ui::model::NavPanel;
+use crate::ui::model::LeftPanel;
 use crate::ui::{AppMessage, AppModel};
 use crate::application::DocumentManager;
 use crate::config::AppConfig;
@@ -30,39 +31,21 @@ pub fn view<'a>(
 
 /// Navigation bar content (left panel).
 ///
-/// Shows different panels based on `active_nav_panel` state:
-/// - `NavPanel::Format`: Format and orientation selection
-/// - `NavPanel::Pages`: Page thumbnails (multi-page documents)
-/// - `NavPanel::None`: Hidden
+/// Shows different panels based on panel state:
+/// - `LeftPanel::Thumbnails`: Page thumbnails (multi-page documents)
+/// - `None`: Hidden
 pub fn nav_bar<'a>(
     model: &'a AppModel,
     manager: &'a DocumentManager,
 ) -> Option<Element<'a, Action<AppMessage>>> {
-    match model.active_nav_panel {
-        NavPanel::None => None,
-        NavPanel::Format => {
-            let panel = format_panel::view(model);
-            Some(
-                container(panel.map(Action::App))
-                    .width(Length::Shrink)
-                    .height(Length::Fill)
-                    .max_width(250)
-                    .into(),
-            )
-        }
-        NavPanel::Pages => {
-            // Check if document has multiple pages using cached data
-            if model.page_count.unwrap_or(1) <= 1 {
-                return None;
-            }
-
-            pages_panel::view(model, manager).map(|panel| {
-                container(panel.map(Action::App))
-                    .width(Length::Shrink)
-                    .height(Length::Fill)
-                    .max_width(200)
-                    .into()
-            })
-        }
+    match model.panels.left {
+        None => None,
+        Some(LeftPanel::Thumbnails) => pages_panel::view(model, manager).map(|panel| {
+            container(panel.map(Action::App))
+                .width(Length::Shrink)
+                .height(Length::Fill)
+                .max_width(250)
+                .into()
+        }),
     }
 }

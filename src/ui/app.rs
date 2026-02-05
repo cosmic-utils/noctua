@@ -97,9 +97,6 @@ impl cosmic::Application for NoctuaApp {
             }
         }
 
-        // Sync model from document manager after loading initial document
-        crate::ui::sync::sync_model_from_manager(&mut model, &mut document_manager);
-
         // Initialize nav bar model (required for COSMIC to show toggle icon).
         let nav = nav_bar::Model::default();
 
@@ -131,7 +128,7 @@ impl cosmic::Application for NoctuaApp {
     fn update(&mut self, message: Self::Message) -> Task<Action<Self::Message>> {
         match &message {
             AppMessage::ToggleNavBar => {
-                use crate::ui::model::NavPanel;
+                use crate::ui::model::LeftPanel;
 
                 self.core.nav_bar_toggle();
                 let is_visible = self.core.nav_bar_active();
@@ -139,36 +136,26 @@ impl cosmic::Application for NoctuaApp {
                 self.save_config();
 
                 if is_visible {
-                    // Opening nav bar - restore last panel or default to Pages for multi-page docs
-                    if let Some(last_panel) = self.model.last_nav_panel {
-                        self.model.active_nav_panel = last_panel;
-                    } else if let Some(doc) = self.document_manager.current_document()
+                    // Opening nav bar - show thumbnails for multi-page docs
+                    if let Some(doc) = self.document_manager.current_document()
                         && doc.is_multi_page()
                     {
-                        self.model.active_nav_panel = NavPanel::Pages;
+                        self.model.panels.left = Some(LeftPanel::Thumbnails);
                     }
-                    return start_thumbnail_generation_task(&self.model);
+                } else {
+                    // Closing nav bar - hide left panel
+                    self.model.panels.left = None;
                 }
-                // Closing nav bar - remember current panel
-                if self.model.active_nav_panel != NavPanel::None {
-                    self.model.last_nav_panel = Some(self.model.active_nav_panel);
-                }
-                self.model.active_nav_panel = NavPanel::None;
                 return Task::none();
             }
 
             AppMessage::OpenFormatPanel => {
-                use crate::ui::model::NavPanel;
-
-                // Set active panel to Format
-                self.model.active_nav_panel = NavPanel::Format;
-
-                // Open nav bar if not already open
-                if !self.core.nav_bar_active() {
-                    self.core.nav_bar_toggle();
-                    self.config.nav_bar_visible = true;
-                    self.save_config();
-                }
+                // Format panel is now part of Transform mode
+                // Switch to Transform mode which shows format tools in right panel
+                self.model.mode = crate::ui::model::AppMode::Transform {
+                    paper_format: None,
+                    orientation: crate::ui::model::Orientation::default(),
+                };
 
                 return Task::none();
             }
