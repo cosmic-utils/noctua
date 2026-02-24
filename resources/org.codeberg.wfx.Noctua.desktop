@@ -1,6 +1,7 @@
 [Desktop Entry]
 Name=Noctua
 Comment=A wise document and image viewer for the COSMIC™ desktop
+Comment[cs]=Chytrý prohlížeč dokumentů a obrázku pro prostředí COSMIC™
 Type=Application
 Icon=org.codeberg.wfx.Noctua
 Exec=noctua %F
@@ -9,4 +10,5 @@ StartupNotify=true
 Categories=Graphics;Viewer;Utility;
 StartupWMClass=org.codeberg.wfx.Noctua
 Keywords=image;document;pdf;viewer;cosmic;
+Keywords[cs]=obrázek;dokument;pdf;prohlížeč;fotka;
 MimeType=image/png;image/jpeg;image/gif;image/webp;image/bmp;image/tiff;image/svg+xml;application/pdf;

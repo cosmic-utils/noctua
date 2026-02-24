@@ -8,11 +8,16 @@
   <project_license>GPL-3.0-or-later</project_license>
   <name>Noctua</name>
   <summary>A wise document and image viewer for the COSMIC™ desktop</summary>
+  <summary xml:lang="cs">Chytrý prohlížeč dokumentů a obrázků pro prostředí COSMIC™</summary>
 
   <description>
     <p>
       Noctua is a lightweight, keyboard-driven viewer for images, PDFs, and vector graphics.
       Built with Rust and libcosmic, it integrates seamlessly with COSMIC™ and GTK-based desktops.
+    </p>
+    <p xml:lang="cs">
+      Noctua je nenáročný prohlížeč obrázků, PDF a vektorové grafiky, snadno ovladatelný pomocí klávesnice.
+      Je napsaný v jazyce Rust a postavený na libcosmic, díky čemuž se plynule integruje s prostředím COSMIC™ a prostředími založenými na GTK.
     </p>
   </description>
 
