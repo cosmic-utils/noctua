@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.codeberg.wfx.Noctua</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Noctua</name>
+  <summary>Noctua – a document viewer for the COSMIC™ desktop</summary>
+  <icon type="remote" width="64" height="64" scale="1">
+    https://codeberg.org/wfx/noctua/raw/main/resources/icons/hicolor/scalable/apps/icon.svg
+  </icon>
+  <url type="vcs-browser">https://codeberg.org/wfx/noctua</url>
+  <launchable type="desktop-id">org.codeberg.wfx.Noctua.desktop</launchable>
+  <provides>
+    <id>org.codeberg.wfx.Noctua</id>
+    <binaries>
+      <binary>noctua</binary>
+    </binaries>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </supports>
+  <categories>
+    <category>COSMIC</category>
+  </categories>
+  <keywords>
+    <keyword>COSMIC</keyword>
+  </keywords>
+  <content_rating type="oars-1.1" />
+</component>
+

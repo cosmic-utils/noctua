@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "core",
+    "ui/cosmic",
+    "ui/cli"
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Noctua – a document viewer for the COSMIC™ desktop"
+repository = "https://codeberg.org/wfx/noctua"

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Noctua
+Comment=Noctua – a document viewer for the COSMIC™ desktop
+Type=Application
+Icon=org.codeberg.wfx.Noctua
+Exec=noctua %F
+Terminal=false
+StartupNotify=true
+Categories=COSMIC
+Keywords=COSMIC
+MimeType=
