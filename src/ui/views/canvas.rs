@@ -52,7 +52,7 @@ pub fn view<'a>(
             .width(Length::Fill)
             .height(Length::Fill)
             .content_fit(content_fit)
-            .filter_method(FilterMethod::Nearest)
+            .filter_method(FilterMethod::Linear)
             .min_scale(config.min_scale)
             .max_scale(config.max_scale)
             .scale_step(config.scale_step - 1.0)
