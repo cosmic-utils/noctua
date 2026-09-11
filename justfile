@@ -60,6 +60,14 @@ check-json: (check '--message-format=json')
 run *args:
     env RUST_BACKTRACE=full cargo run --release {{args}}
 
+# Directory containing libpdfium.so (e.g. a pdfium component build output
+# or /usr/local/lib). Used to set LD_LIBRARY_PATH when running tests.
+pdfium-lib-dir := env('PDFIUM_LIB_DIR', '/usr/local/lib')
+
+# Run the test suite with pdfium available.
+test *args:
+    env LD_LIBRARY_PATH="{{ pdfium-lib-dir }}" cargo test {{args}}
+
 # Installs files
 install:
     install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{bin-dst}}

@@ -266,9 +266,8 @@ fn generate_svg(path: &Path, size: &ThumbSize) -> Result<(u32, u32, Vec<u8>), St
 fn generate_pdf(path: &Path, size: &ThumbSize) -> Result<(u32, u32, Vec<u8>), StorageError> {
     use pdfium_render::prelude::*;
 
-    let bindings = Pdfium::bind_to_system_library()
-        .map_err(|e| StorageError::Thumb(format!("Failed to bind pdfium: {e}")))?;
-    let pdfium = Pdfium::new(bindings);
+    // The single shared pdfium instance; binding pdfium twice hangs.
+    let pdfium = crate::pdfium_ops::pdfium();
 
     let document = pdfium
         .load_pdf_from_file(path, None)

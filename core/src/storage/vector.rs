@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::document::model::Vector;
+use crate::document::Vector;
 use crate::storage::StorageError;
 
 /// Load SVG metadata without parsing the entire document or rendering.

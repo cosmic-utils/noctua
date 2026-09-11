@@ -4,8 +4,42 @@
 // UI-independent render engine.
 // Takes a LoadedContent + page + zoom, returns pure RGBA pixels.
 
-use crate::document::model::{LoadedContent, PageInfo};
+use crate::document::PageInfo;
 use crate::storage::StorageError;
+#[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
+use std::marker::PhantomData;
+
+#[cfg(feature = "pdfium-render")]
+pub mod worker;
+
+/// Content loaded from disk, kept in memory for rendering.
+///
+/// The render engine consumes this to produce RGBA pixels.
+/// It is intentionally not serializable — it lives only in RAM.
+#[derive(Debug)]
+pub enum LoadedContent<'a> {
+    /// Single raster image (PNG, JPEG, WebP, etc.).
+    Raster {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+    /// SVG document parsed into a resvg tree.
+    #[cfg(feature = "resvg")]
+    Svg {
+        tree: resvg::usvg::Tree,
+        width: f32,
+        height: f32,
+    },
+    /// PDF document loaded via pdfium.
+    #[cfg(feature = "pdfium-render")]
+    Pdf {
+        document: pdfium_render::prelude::PdfDocument<'a>,
+    },
+    /// Placeholder variant that carries the lifetime when no render features are active.
+    #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
+    _Phantom { _marker: PhantomData<&'a ()> },
+}
 
 /// RGBA pixel buffer produced by the render engine.
 #[derive(Debug, Clone)]
@@ -257,6 +291,7 @@ fn render_pdf(
 
 // ── Placeholder (no backend available) ──
 
+#[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
 fn render_placeholder(w: u32, _h: u32, zoom: f32) -> Result<RenderedPage, RenderError> {
     let w = ((w as f32) * zoom).round() as u32;
     let h = 60u32; // Fixed height signals "unsupported" to the consumer

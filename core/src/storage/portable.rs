@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::document::model::Portable;
+use crate::document::Portable;
 use crate::storage::StorageError;
 
 /// Load PDF metadata without rendering pages.
@@ -17,8 +17,8 @@ pub fn load_pdf_metadata(path: &Path) -> Result<(Portable, u32), StorageError> {
     {
         use pdfium_render::prelude::*;
 
-        // Initialize Pdfium (may load native library)
-        let pdfium = Pdfium::default();
+        // The single shared pdfium instance; binding pdfium twice hangs.
+        let pdfium = crate::pdfium_ops::pdfium();
 
         // Load the PDF document (reads only metadata, not full content)
         let document = pdfium

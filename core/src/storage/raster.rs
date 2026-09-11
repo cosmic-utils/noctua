@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::document::model::Raster;
+use crate::document::Raster;
 use crate::storage::StorageError;
 
 /// Load raster image metadata without decoding pixel data.

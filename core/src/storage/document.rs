@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// src/storage/document.rs
+// core/src/storage/document.rs
 //
 // Manages physical document files on the filesystem.
 
 use super::StorageError;
-use crate::document::model::{DocumentEntry, DocumentInfo, Kind, Metadata};
-use chrono;
+use crate::document::{DocumentInfo, Kind, Metadata};
 use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
-use uuid::Uuid;
 
 /// Metadata about a physical file, obtained via `std::fs::metadata`.
 #[derive(Debug, Clone)]
@@ -38,21 +36,6 @@ pub fn metadata(path: &Path) -> Result<FileMetadata, StorageError> {
         size_bytes,
         modified,
     })
-}
-
-/// Deletes a file from the filesystem.
-///
-/// **Warning:** This is a permanent operation. The UI must ask for confirmation
-/// before issuing a `Command::Delete`.
-pub fn delete(path: &Path) -> Result<(), StorageError> {
-    fs::remove_file(path)?;
-    Ok(())
-}
-
-/// Copies a file from `source` to `destination` (save as).
-pub fn copy(source: &Path, destination: &Path) -> Result<u64, StorageError> {
-    let bytes_copied = fs::copy(source, destination)?;
-    Ok(bytes_copied)
 }
 
 /// Detected file format based on extension and magic bytes.
@@ -138,16 +121,16 @@ fn read_first_bytes(path: &Path) -> Result<Vec<u8>, StorageError> {
     Ok(buffer)
 }
 
-/// Load a document from a file path, extracting all metadata without loading content.
+/// Load document metadata from a file path.
 ///
-/// This is the central document loading function that follows the same pattern as
-/// `storage::workspace::load()`. It detects the document format, extracts format-specific
-/// metadata, and returns a complete `DocumentEntry` ready for the `DocumentManager`.
+/// Detects the document format, extracts format-specific metadata, and
+/// returns a complete `DocumentInfo`. The file content itself is not kept
+/// in memory.
 ///
 /// # Errors
-/// Returns `StorageError` if the file cannot be read, is corrupted, or the format
-/// is unsupported.
-pub fn load(path: &Path) -> Result<DocumentEntry, StorageError> {
+/// Returns `StorageError` if the file cannot be read, is corrupted, or the
+/// format is unsupported.
+pub fn load(path: &Path) -> Result<DocumentInfo, StorageError> {
     // 1. Basic file metadata (size, modification time)
     let file_meta = metadata(path)?;
 
@@ -174,7 +157,7 @@ pub fn load(path: &Path) -> Result<DocumentEntry, StorageError> {
         Format::Unknown => (Kind::Unknown, 1),
     };
 
-    // 5. Extract EXIF metadata (primarily for raster images)
+    // 5. Extract basic metadata
     let mut doc_metadata = Metadata::default();
 
     // Add file modification time to metadata
@@ -182,22 +165,11 @@ pub fn load(path: &Path) -> Result<DocumentEntry, StorageError> {
         doc_metadata.modified_at = Some(chrono::DateTime::from(modified));
     }
 
-    // TODO: Extract additional metadata (EXIF, XMP, etc.)
-
-    // 6. Construct DocumentEntry
-    Ok(DocumentEntry {
-        id: Uuid::new_v4(),
-        path: path.to_path_buf(),
-        display_name: None,
-        current_page: 1,
-        rotation_degrees: 0,
-        flip_horizontal: false,
-        flip_vertical: false,
-        info: Some(DocumentInfo {
-            file_size_bytes: file_meta.size_bytes,
-            number_of_pages,
-            kind,
-            metadata: doc_metadata,
-        }),
+    // 6. Construct DocumentInfo
+    Ok(DocumentInfo {
+        file_size_bytes: file_meta.size_bytes,
+        number_of_pages,
+        kind,
+        metadata: doc_metadata,
     })
 }

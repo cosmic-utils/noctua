@@ -1,8 +1,7 @@
 [workspace]
 members = [
     "core",
-    "ui/cosmic",
-    "ui/cli"
+    "ui/cosmic"
 ]
 resolver = "2"
 

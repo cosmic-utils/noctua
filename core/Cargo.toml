@@ -19,10 +19,16 @@ indexmap = { version = "2.0", features = ["serde"] }
 # Document backends
 image = "0.25"
 kamadak-exif = { version = "0.5", optional = true }
-pdfium-render = { version = "0.8", optional = true }
+pdfium-render = { version = "0.8", features = ["sync"], optional = true }
 resvg = { version = "0.45", optional = true }
 
 # Thumbnail cache (freedesktop.org spec)
 dirs = "5.0"
 md5 = "0.7"
 png = "0.17"
+
+[dev-dependencies]
+pdfium-render = { version = "0.8", features = ["sync"] }
+
+[features]
+default = ["pdfium-render", "resvg"]
