@@ -7,7 +7,7 @@ use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::alignment::{Horizontal, Vertical};
 use cosmic::iced::{Alignment, Length, Subscription};
 use cosmic::widget::{self, about::About, icon, menu, nav_bar};
-use cosmic::{iced_futures, prelude::*};
+use cosmic::{iced, prelude::*};
 use futures_util::SinkExt;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -260,9 +260,9 @@ impl cosmic::Application for AppModel {
         // Conditionally enables a timer that emits a message every second.
         if self.watch_is_active {
             subscriptions.push(Subscription::run(|| {
-                iced_futures::stream::channel(
+                iced::stream::channel(
                     1,
-                    |mut emitter: iced_futures::futures::channel::mpsc::Sender<Message>| async move {
+                    |mut emitter: iced::futures::channel::mpsc::Sender<Message>| async move {
                         let mut time = 1;
                         let mut interval = tokio::time::interval(Duration::from_secs(1));
 
