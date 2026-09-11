@@ -13,6 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::pdfium_ops::{Command, CommandResult, PdfOpsManager};
+use crate::storage::thumbcache::ThumbSize;
 
 /// Priority of a job. Higher values run first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,8 +32,9 @@ pub enum Job {
     Op(Command),
     /// Render a page of an arbitrary PDF file at the given zoom.
     RenderFilePage { path: PathBuf, page: u32, zoom: f32 },
-    /// Render the first page of a PDF file as a thumbnail.
-    RenderThumb { path: PathBuf },
+    /// Render the first page of a PDF file as a thumbnail and store it
+    /// in the freedesktop thumbnail cache.
+    RenderThumb { path: PathBuf, size: ThumbSize },
 }
 
 /// Result of a finished job.
@@ -211,7 +213,7 @@ fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
     let result = match job.job {
         Job::Op(command) => JobResult::Op(manager.execute(command)),
         Job::RenderFilePage { path, page, zoom } => render_file_page(&path, page, zoom),
-        Job::RenderThumb { path } => render_thumb(&path),
+        Job::RenderThumb { path, size } => render_thumb(&path, size),
     };
     let _ = job.reply.send(result);
 }
@@ -242,8 +244,22 @@ fn render_file_page(path: &std::path::Path, page: u32, zoom: f32) -> JobResult {
     }
 }
 
-/// Render the first page of a PDF file as a thumbnail-sized image.
-fn render_thumb(path: &std::path::Path) -> JobResult {
+/// Render the first page of a PDF file as a thumbnail-sized image and
+/// store it in the freedesktop thumbnail cache.
+fn render_thumb(path: &std::path::Path, size: ThumbSize) -> JobResult {
+    // Serve from cache when a valid entry already exists.
+    match crate::storage::thumbcache::lookup(path, size) {
+        Ok(Some((width, height, rgba_data))) => {
+            return JobResult::Rendered {
+                width,
+                height,
+                rgba_data,
+            };
+        }
+        Ok(None) => {}
+        Err(e) => return JobResult::Error(format!("{e:?}")),
+    }
+
     let mut scratch = PdfOpsManager::new();
     match scratch.execute(Command::Open {
         path: path.to_path_buf(),
@@ -251,18 +267,24 @@ fn render_thumb(path: &std::path::Path) -> JobResult {
         CommandResult::Ok => {
             let result = scratch.execute(Command::RenderPage {
                 page: 1,
-                zoom: 0.25, // first page at reduced size; freedesktop cache scales further
+                zoom: 0.25, // first page at reduced size; the cache entry is the source of truth
             });
             match result {
                 CommandResult::Rendered {
                     width,
                     height,
                     rgba_data,
-                } => JobResult::Rendered {
-                    width,
-                    height,
-                    rgba_data,
-                },
+                } => {
+                    let thumb = (width, height, rgba_data);
+                    if let Err(e) = crate::storage::thumbcache::store(path, size, &thumb) {
+                        return JobResult::Error(format!("{e:?}"));
+                    }
+                    JobResult::Rendered {
+                        width: thumb.0,
+                        height: thumb.1,
+                        rgba_data: thumb.2,
+                    }
+                }
                 CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
                 _ => JobResult::Error("unexpected render result".to_string()),
             }

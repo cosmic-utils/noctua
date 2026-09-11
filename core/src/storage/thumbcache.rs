@@ -45,30 +45,91 @@ impl ThumbSize {
 /// Returns `(width, height, rgba8_data)` for a thumbnail of `path`.
 ///
 /// Loads from cache if a valid entry exists, otherwise generates and stores one.
+/// Synchronous: the generator runs on the calling thread. For PDFs prefer
+/// the worker's `RenderThumb` job (via `lookup`/`store`), so pdfium stays
+/// on the worker thread.
 pub fn get_or_create(path: &Path, size: ThumbSize) -> Result<(u32, u32, Vec<u8>), StorageError> {
+    let cache_root = dirs::cache_dir()
+        .ok_or_else(|| StorageError::Thumb("Cache directory not found".to_string()))?;
+    get_or_create_at(&cache_root, path, size)
+}
+
+/// `get_or_create` with an explicit cache root (tests, alternative data roots).
+pub fn get_or_create_at(
+    cache_root: &Path,
+    path: &Path,
+    size: ThumbSize,
+) -> Result<(u32, u32, Vec<u8>), StorageError> {
+    if let Some(thumb) = lookup_at(cache_root, path, size)? {
+        return Ok(thumb);
+    }
+
+    let thumb = generate(path, &size)?;
+    let _ = store_at(cache_root, path, size, &thumb);
+    Ok(thumb)
+}
+
+/// Look up a cached thumbnail without generating one.
+///
+/// Returns `None` when no valid cache entry exists. Fast and cheap:
+/// safe to call on the UI thread before delegating generation to the worker.
+pub fn lookup(path: &Path, size: ThumbSize) -> Result<Option<(u32, u32, Vec<u8>)>, StorageError> {
+    let cache_root = dirs::cache_dir()
+        .ok_or_else(|| StorageError::Thumb("Cache directory not found".to_string()))?;
+    lookup_at(&cache_root, path, size)
+}
+
+/// `lookup` with an explicit cache root.
+pub fn lookup_at(
+    cache_root: &Path,
+    path: &Path,
+    size: ThumbSize,
+) -> Result<Option<(u32, u32, Vec<u8>)>, StorageError> {
     let uri = file_uri(path);
     let hash = format!("{:x}", md5::compute(uri.as_bytes()));
-    let cache_path = cache_dir(&size)?.join(format!("{}.png", hash));
+    let cache_path = cache_dir_at(cache_root, &size)?.join(format!("{}.png", hash));
     let mtime = file_mtime(path)?;
 
     if cache_path.exists()
         && let Ok(thumb) = load_if_valid(&cache_path, &uri, mtime)
     {
-        return Ok(thumb);
+        return Ok(Some(thumb));
     }
+    Ok(None)
+}
 
-    let thumb = generate(path, &size)?;
-    let _ = save(&cache_path, &thumb, &uri, mtime);
-    Ok(thumb)
+/// Store a generated thumbnail in the cache.
+///
+/// Writes PNG metadata (`Thumb::URI`, `Thumb::MTime`) for validation.
+/// Called by the worker after rendering a thumbnail.
+pub fn store(
+    path: &Path,
+    size: ThumbSize,
+    thumb: &(u32, u32, Vec<u8>),
+) -> Result<(), StorageError> {
+    let cache_root = dirs::cache_dir()
+        .ok_or_else(|| StorageError::Thumb("Cache directory not found".to_string()))?;
+    store_at(&cache_root, path, size, thumb)
+}
+
+/// `store` with an explicit cache root.
+pub fn store_at(
+    cache_root: &Path,
+    path: &Path,
+    size: ThumbSize,
+    thumb: &(u32, u32, Vec<u8>),
+) -> Result<(), StorageError> {
+    let uri = file_uri(path);
+    let hash = format!("{:x}", md5::compute(uri.as_bytes()));
+    let cache_path = cache_dir_at(cache_root, &size)?.join(format!("{}.png", hash));
+    let mtime = file_mtime(path)?;
+    save(&cache_path, thumb, &uri, mtime)
 }
 
 // ── Helpers ──
 
-fn cache_dir(size: &ThumbSize) -> Result<PathBuf, StorageError> {
-    let dir = dirs::cache_dir()
-        .ok_or_else(|| StorageError::Thumb("Cache directory not found".to_string()))?
-        .join("thumbnails")
-        .join(size.subdir());
+fn cache_dir_at(cache_root: &Path, size: &ThumbSize) -> Result<PathBuf, StorageError> {
+    let dir = cache_root.join("thumbnails").join(size.subdir());
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }

@@ -121,6 +121,15 @@ fn read_first_bytes(path: &Path) -> Result<Vec<u8>, StorageError> {
     Ok(buffer)
 }
 
+/// Whether the file is a supported document format.
+///
+/// Uses magic-byte detection with an extension fallback, so this is more
+/// reliable than checking the extension alone.
+pub fn supported(path: &Path) -> Result<bool, StorageError> {
+    let first_bytes = read_first_bytes(path)?;
+    Ok(detect_format(path, &first_bytes) != Format::Unknown)
+}
+
 /// Load document metadata from a file path.
 ///
 /// Detects the document format, extracts format-specific metadata, and

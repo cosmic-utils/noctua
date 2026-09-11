@@ -3,6 +3,7 @@
 //
 // Central storage module for file I/O operations and error handling.
 
+pub mod browser;
 pub mod document;
 pub mod error;
 pub mod portable;
