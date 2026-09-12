@@ -59,3 +59,32 @@ fn missing_directory_is_an_error() {
     assert!(storage::browser::list_documents(&missing).is_err());
     common::remove_dir(&dir);
 }
+
+#[test]
+fn display_name_uses_last_component() {
+    let dir = common::temp_dir("browser-name");
+    let file = dir.join("photo.jpg");
+    std::fs::write(&file, b"x").unwrap();
+
+    assert_eq!(storage::browser::display_name(&file), "photo.jpg");
+    assert_eq!(
+        storage::browser::display_name(&dir),
+        dir.file_name().unwrap().to_string_lossy()
+    );
+    common::remove_dir(&dir);
+}
+
+#[test]
+fn detects_pdf_by_magic_bytes() {
+    let dir = common::temp_dir("browser-ispdf");
+    // A fake PDF header is enough: detection is content-based, not extension-based.
+    std::fs::write(dir.join("fake.pdf"), b"%PDF-1.7 fake content").unwrap();
+    std::fs::write(dir.join("doc.txt"), b"%PDF-1.7").unwrap();
+    common::make_png(&dir, "img.png", 32, 32);
+
+    assert!(storage::document::is_pdf(&dir.join("fake.pdf")).unwrap());
+    // The .txt file also carries the PDF magic bytes — detection trusts content.
+    assert!(storage::document::is_pdf(&dir.join("doc.txt")).unwrap());
+    assert!(!storage::document::is_pdf(&dir.join("img.png")).unwrap());
+    common::remove_dir(&dir);
+}

@@ -6,7 +6,7 @@
 // through this worker. Visible pages have priority over thumbnails.
 
 use std::collections::BinaryHeap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -32,6 +32,16 @@ pub enum Job {
     Op(Command),
     /// Render a page of an arbitrary PDF file at the given zoom.
     RenderFilePage { path: PathBuf, page: u32, zoom: f32 },
+    /// Render the given 1-based pages of a PDF file as thumbnails. The
+    /// document is opened once and closed again — the shared open
+    /// document stays untouched.
+    RenderPageThumbs {
+        path: PathBuf,
+        pages: Vec<u32>,
+        zoom: f32,
+    },
+    /// Count the pages of an arbitrary PDF file.
+    FilePageCount { path: PathBuf },
     /// Render the first page of a PDF file as a thumbnail and store it
     /// in the freedesktop thumbnail cache.
     RenderThumb { path: PathBuf, size: ThumbSize },
@@ -48,9 +58,16 @@ pub enum JobResult {
         height: u32,
         rgba_data: Vec<u8>,
     },
+    /// Rendered thumbnails as (page, width, height, rgba).
+    RenderedThumbs(Vec<PageThumb>),
+    /// Page count of a PDF file.
+    PageCount(u32),
     /// A failed job.
     Error(String),
 }
+
+/// A rendered page thumbnail: (page, width, height, rgba).
+pub type PageThumb = (u32, u32, u32, Vec<u8>);
 
 struct QueuedJob {
     seq: u64,
@@ -174,6 +191,68 @@ impl SharedWorker {
     pub fn dirty(&self) -> bool {
         self.inner.dirty.lock().map(|d| *d).unwrap_or(false)
     }
+
+    /// Thumbnail for a file: freedesktop cache first; on a miss, PDFs
+    /// are rendered on the worker thread, raster/SVG in place.
+    pub fn thumbnail(&self, path: &Path, size: ThumbSize) -> Option<(u32, u32, Vec<u8>)> {
+        if let Ok(Some(thumb)) = crate::storage::thumbcache::lookup(path, size) {
+            return Some(thumb);
+        }
+        if crate::storage::document::is_pdf(path).unwrap_or(false) {
+            match self.execute(
+                Priority::Low,
+                Job::RenderThumb {
+                    path: path.to_path_buf(),
+                    size,
+                },
+            ) {
+                JobResult::Rendered {
+                    width,
+                    height,
+                    rgba_data,
+                } => Some((width, height, rgba_data)),
+                _ => None,
+            }
+        } else {
+            crate::storage::thumbcache::get_or_create(path, size).ok()
+        }
+    }
+
+    /// Render a page of an arbitrary PDF file on the worker thread.
+    pub fn render_page(&self, path: &Path, page: u32, zoom: f32) -> Option<(u32, u32, Vec<u8>)> {
+        match self.execute(
+            Priority::VisiblePage,
+            Job::RenderFilePage {
+                path: path.to_path_buf(),
+                page,
+                zoom,
+            },
+        ) {
+            JobResult::Rendered {
+                width,
+                height,
+                rgba_data,
+            } => Some((width, height, rgba_data)),
+            _ => None,
+        }
+    }
+
+    /// Render several pages of a PDF file as thumbnails. The document is
+    /// opened once on the worker; failed pages are skipped. Returns
+    /// (page, width, height, rgba) tuples.
+    pub fn page_thumbs(&self, path: &Path, pages: &[u32], zoom: f32) -> Option<Vec<PageThumb>> {
+        match self.execute(
+            Priority::Low,
+            Job::RenderPageThumbs {
+                path: path.to_path_buf(),
+                pages: pages.to_vec(),
+                zoom,
+            },
+        ) {
+            JobResult::RenderedThumbs(thumbs) => Some(thumbs),
+            _ => None,
+        }
+    }
 }
 
 fn run(receiver: Receiver<QueuedJob>) {
@@ -213,6 +292,8 @@ fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
     let result = match job.job {
         Job::Op(command) => JobResult::Op(manager.execute(command)),
         Job::RenderFilePage { path, page, zoom } => render_file_page(&path, page, zoom),
+        Job::RenderPageThumbs { path, pages, zoom } => render_page_thumbs(&path, &pages, zoom),
+        Job::FilePageCount { path } => file_page_count(&path),
         Job::RenderThumb { path, size } => render_thumb(&path, size),
     };
     let _ = job.reply.send(result);
@@ -238,6 +319,50 @@ fn render_file_page(path: &std::path::Path, page: u32, zoom: f32) -> JobResult {
             },
             CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
             _ => JobResult::Error("unexpected render result".to_string()),
+        },
+        CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
+        _ => JobResult::Error("unexpected open result".to_string()),
+    }
+}
+
+/// Render several pages of an arbitrary PDF file as thumbnails. Opens
+/// the file once, renders every requested page, closes it again — the
+/// shared open document stays untouched. Failed pages are skipped.
+fn render_page_thumbs(path: &Path, pages: &[u32], zoom: f32) -> JobResult {
+    let mut scratch = PdfOpsManager::new();
+    match scratch.execute(Command::Open {
+        path: path.to_path_buf(),
+    }) {
+        CommandResult::Ok => {
+            let mut thumbs = Vec::new();
+            for page in pages {
+                if let CommandResult::Rendered {
+                    width,
+                    height,
+                    rgba_data,
+                } = scratch.execute(Command::RenderPage { page: *page, zoom })
+                {
+                    thumbs.push((*page, width, height, rgba_data));
+                }
+            }
+            JobResult::RenderedThumbs(thumbs)
+        }
+        CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
+        _ => JobResult::Error("unexpected open result".to_string()),
+    }
+}
+
+/// Count the pages of an arbitrary PDF file. Opens the file, counts,
+/// closes it again — the shared open document stays untouched.
+fn file_page_count(path: &Path) -> JobResult {
+    let mut scratch = PdfOpsManager::new();
+    match scratch.execute(Command::Open {
+        path: path.to_path_buf(),
+    }) {
+        CommandResult::Ok => match scratch.execute(Command::PageCount) {
+            CommandResult::PageCount(count) => JobResult::PageCount(count),
+            CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
+            _ => JobResult::Error("unexpected page count result".to_string()),
         },
         CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
         _ => JobResult::Error("unexpected open result".to_string()),

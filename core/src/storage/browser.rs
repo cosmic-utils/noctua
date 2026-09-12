@@ -51,3 +51,11 @@ pub fn list_documents(dir: &Path) -> Result<Vec<BrowserEntry>, StorageError> {
     entries.sort_by_key(|e| e.name.to_lowercase());
     Ok(entries)
 }
+
+/// Display name for a path: its last component. Used for tab titles and
+/// nav labels; UIs may override it with a custom name.
+pub fn display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}

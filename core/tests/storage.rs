@@ -57,3 +57,10 @@ fn unknown_format_is_unknown() {
     assert!(matches!(info.kind, Kind::Unknown));
     common::remove_dir(&dir);
 }
+
+#[test]
+fn formats_file_sizes() {
+    assert_eq!(storage::document::format_size(500), "500 B");
+    assert_eq!(storage::document::format_size(2048), "2.0 KB");
+    assert_eq!(storage::document::format_size(3 * 1024 * 1024), "3.0 MB");
+}

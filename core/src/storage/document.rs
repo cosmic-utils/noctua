@@ -38,6 +38,20 @@ pub fn metadata(path: &Path) -> Result<FileMetadata, StorageError> {
     })
 }
 
+/// Human-readable file size (B, KB, MB).
+pub fn format_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+
+    if bytes as f64 >= MB {
+        format!("{:.1} MB", bytes as f64 / MB)
+    } else if bytes as f64 >= KB {
+        format!("{:.1} KB", bytes as f64 / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 /// Detected file format based on extension and magic bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Format {
@@ -128,6 +142,17 @@ fn read_first_bytes(path: &Path) -> Result<Vec<u8>, StorageError> {
 pub fn supported(path: &Path) -> Result<bool, StorageError> {
     let first_bytes = read_first_bytes(path)?;
     Ok(detect_format(path, &first_bytes) != Format::Unknown)
+}
+
+/// Whether the file is a PDF document.
+///
+/// Uses the same magic-byte detection with extension fallback as
+/// `supported`. The UI uses this to decide which render path applies:
+/// PDFs must go through the pdfium worker, everything else can be
+/// rendered in place.
+pub fn is_pdf(path: &Path) -> Result<bool, StorageError> {
+    let first_bytes = read_first_bytes(path)?;
+    Ok(detect_format(path, &first_bytes) == Format::Pdf)
 }
 
 /// Load document metadata from a file path.

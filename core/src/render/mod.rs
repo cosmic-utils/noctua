@@ -8,6 +8,7 @@ use crate::document::PageInfo;
 use crate::storage::StorageError;
 #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
 use std::marker::PhantomData;
+use std::path::Path;
 
 #[cfg(feature = "pdfium-render")]
 pub mod worker;
@@ -18,9 +19,11 @@ pub mod worker;
 /// It is intentionally not serializable — it lives only in RAM.
 #[derive(Debug)]
 pub enum LoadedContent<'a> {
-    /// Single raster image (PNG, JPEG, WebP, etc.).
+    /// Single raster image (PNG, JPEG, WebP, etc.), already decoded
+    /// to straight RGBA. `load` decodes exactly once; rendering reuses
+    /// these pixels instead of decoding the file again.
     Raster {
-        data: Vec<u8>,
+        rgba_data: Vec<u8>,
         width: u32,
         height: u32,
     },
@@ -39,6 +42,60 @@ pub enum LoadedContent<'a> {
     /// Placeholder variant that carries the lifetime when no render features are active.
     #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
     _Phantom { _marker: PhantomData<&'a ()> },
+}
+
+/// Load a document from disk for rendering.
+///
+/// Supports raster images and SVG. PDFs cannot be loaded this way:
+/// pdfium is not thread-safe, so PDF rendering must go through the
+/// worker (`render::worker`).
+pub fn load(path: &Path) -> Result<LoadedContent<'static>, RenderError> {
+    #[cfg(feature = "resvg")]
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    #[cfg(feature = "resvg")]
+    if ext == "svg" {
+        return load_svg(path);
+    }
+
+    load_raster(path)
+}
+
+/// Read a raster image into memory, decode it once and return the
+/// RGBA pixels plus dimensions.
+fn load_raster(path: &Path) -> Result<LoadedContent<'static>, RenderError> {
+    use image::GenericImageView;
+
+    let data = std::fs::read(path).map_err(|e| RenderError::Storage(e.into()))?;
+    let img = image::load_from_memory(&data)
+        .map_err(|e| RenderError::Other(format!("Failed to decode raster: {e}")))?;
+    let (width, height) = img.dimensions();
+    let rgba_data = img.to_rgba8().into_raw();
+    Ok(LoadedContent::Raster {
+        rgba_data,
+        width,
+        height,
+    })
+}
+
+/// Parse an SVG file into a resvg tree for rendering.
+#[cfg(feature = "resvg")]
+fn load_svg(path: &Path) -> Result<LoadedContent<'static>, RenderError> {
+    use resvg::usvg;
+
+    let data = std::fs::read(path).map_err(|e| RenderError::Storage(e.into()))?;
+    let tree = usvg::Tree::from_data(&data, &usvg::Options::default())
+        .map_err(|e| RenderError::Other(format!("Failed to parse SVG: {e}")))?;
+    let size = tree.size();
+    Ok(LoadedContent::Svg {
+        tree,
+        width: size.width(),
+        height: size.height(),
+    })
 }
 
 /// RGBA pixel buffer produced by the render engine.
@@ -78,10 +135,10 @@ pub fn render_page(
 
     match content {
         LoadedContent::Raster {
-            data,
+            rgba_data,
             width,
             height,
-        } => render_raster(data, *width, *height, zoom),
+        } => render_raster(rgba_data, *width, *height, zoom),
 
         #[cfg(feature = "resvg")]
         LoadedContent::Svg {
@@ -96,6 +153,15 @@ pub fn render_page(
         #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
         _ => render_placeholder(800, 600, zoom),
     }
+}
+
+/// Load a raster or SVG file from disk and render it at the given zoom.
+///
+/// PDFs are rejected: pdfium is not thread-safe, so PDF pages must be
+/// rendered through the worker (`render::worker`).
+pub fn render_path(path: &Path, zoom: f32) -> Result<RenderedPage, RenderError> {
+    let content = load(path)?;
+    render_page(&content, 1, zoom)
 }
 
 /// Render a single page with a rotation in degrees (0, 90, 180, 270).
@@ -168,28 +234,27 @@ pub fn page_infos(content: &LoadedContent) -> Vec<PageInfo> {
 // ── Raster Rendering ──
 
 fn render_raster(
-    data: &[u8],
+    rgba_data: &[u8],
     width: u32,
     height: u32,
     zoom: f32,
 ) -> Result<RenderedPage, RenderError> {
     use image::imageops::FilterType;
 
-    let img = image::load_from_memory(data)
-        .map_err(|e| RenderError::Other(format!("Failed to decode raster: {e}")))?;
-
     if (zoom - 1.0).abs() < f32::EPSILON {
-        let rgba = img.to_rgba8();
+        // No scaling: reuse the decoded pixels without another pass.
         return Ok(RenderedPage {
             width,
             height,
-            rgba_data: rgba.into_raw(),
+            rgba_data: rgba_data.to_vec(),
         });
     }
 
+    let img = image::RgbaImage::from_raw(width, height, rgba_data.to_vec())
+        .ok_or_else(|| RenderError::Other("Failed to construct image buffer".to_string()))?;
     let w = ((width as f32) * zoom).round() as u32;
     let h = ((height as f32) * zoom).round() as u32;
-    let scaled = img.resize(w, h, FilterType::Triangle);
+    let scaled = image::DynamicImage::ImageRgba8(img).resize(w, h, FilterType::Triangle);
     let rgba = scaled.to_rgba8();
 
     Ok(RenderedPage {
