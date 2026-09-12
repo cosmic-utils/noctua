@@ -11,3 +11,8 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Noctua – a document viewer for the COSMIC™ desktop"
 repository = "https://codeberg.org/wfx/noctua"
+
+# Dependencies get optimized even in dev builds; image decoding in
+# unoptimized debug mode is roughly 10x slower and stalls the UI.
+[profile.dev.package."*"]
+opt-level = 2

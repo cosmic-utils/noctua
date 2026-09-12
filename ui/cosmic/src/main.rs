@@ -1,30 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// src/main.rs
+// ui/cosmic/src/main.rs
+//
+// Application entry point.
 
 mod app;
-mod config;
 mod i18n;
 
 use clap::Parser;
+use cosmic::app::Settings;
 use std::path::PathBuf;
 
-use cosmic::app::Settings;
-
+/// Noctua – a document viewer for the COSMIC desktop.
 #[derive(Parser, Debug)]
 #[command(name = "noctua", about = "A document viewer for the COSMIC desktop")]
-struct Args {
-    /// Open a document (raster, vector, portable)
-    #[arg(short = 'f', long = "open-document", value_name = "PATH")]
-    document: Option<PathBuf>,
-
-    /// Open a directory and display all images
-    #[arg(short = 'd', long = "open-directory", value_name = "PATH")]
-    directory: Option<PathBuf>,
-
-    /// Open a workspace file (.ws.ron)
-    #[arg(short = 'w', long = "open-workspace", value_name = "PATH")]
-    workspace: Option<PathBuf>,
-
+pub struct Args {
+    /// Open a folder or document on startup (skips session restore).
+    #[arg(value_name = "PATH")]
+    pub path: Option<PathBuf>,
 }
 
 fn main() -> cosmic::iced::Result {
@@ -34,11 +26,8 @@ fn main() -> cosmic::iced::Result {
     // Enable localizations to be applied.
     i18n::init(&requested_languages);
 
-    let _args = Args::parse();
-
-
-    let flags = ();
+    let args = Args::parse();
 
     // Start the application.
-    cosmic::app::run::<app::AppModel>(Settings::default(), flags)
+    cosmic::app::run::<app::AppModel>(Settings::default(), args)
 }
