@@ -5,6 +5,10 @@
 
 mod app;
 mod i18n;
+mod message;
+mod model;
+mod update;
+mod view;
 
 use clap::Parser;
 use cosmic::app::Settings;
