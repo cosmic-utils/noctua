@@ -26,6 +26,7 @@ resvg = { version = "0.45", optional = true }
 dirs = "5.0"
 md5 = "0.7"
 png = "0.17"
+tracing = "0.1"
 
 [dev-dependencies]
 filetime = "0.2"

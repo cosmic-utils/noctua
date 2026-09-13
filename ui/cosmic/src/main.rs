@@ -26,6 +26,17 @@ fn main() -> cosmic::iced::Result {
     // Enable localizations to be applied.
     i18n::init(&requested_languages);
 
+    // Structured logging; filter at runtime via RUST_LOG. Spans log their
+    // duration on close, which makes phase timings directly visible.
+    tracing_subscriber::fmt()
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("noctua_cosmic=info,noctua_core=info")
+            }),
+        )
+        .init();
+
     let args = Args::parse();
 
     // Start the application.

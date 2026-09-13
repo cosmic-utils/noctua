@@ -26,6 +26,7 @@ pub enum Priority {
 }
 
 /// A job for the pdfium worker.
+#[derive(Debug)]
 pub enum Job {
     /// Execute a PDF editing command on the shared document.
     Op(Command),
@@ -288,6 +289,9 @@ fn run(receiver: Receiver<QueuedJob>) {
 }
 
 fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
+    // The span carries the job description and its duration; the worker
+    // is a single thread, so its timeline shows up directly in traces.
+    let _span = tracing::debug_span!("worker_job", ?job.job, priority = ?job.priority).entered();
     let result = match job.job {
         Job::Op(command) => JobResult::Op(manager.execute(command)),
         Job::RenderFilePage { path, page, zoom } => render_file_page(&path, page, zoom),
