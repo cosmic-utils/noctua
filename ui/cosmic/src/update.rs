@@ -187,7 +187,7 @@ impl AppModel {
         }
         if let Some(offset_y) = scroll {
             tasks.push(
-                scroll_to(
+                scroll_to::<Message>(
                     cosmic::widget::Id::new(PREVIEW_SCROLL_ID),
                     AbsoluteOffset {
                         x: None,
@@ -291,7 +291,7 @@ impl AppModel {
             None => cosmic::task::batch(vec![
                 self.request_preview_pages(&path, 1..=count.min(2), self.zoom, true),
                 self.request_preview_pages(&path, 1..=count.min(12), THUMB_ZOOM, false),
-                scroll_to(
+                scroll_to::<Message>(
                     cosmic::widget::Id::new(PREVIEW_SCROLL_ID),
                     AbsoluteOffset {
                         x: None,
@@ -344,6 +344,7 @@ impl AppModel {
 
         let worker = self.worker.clone();
         let worker_path = path.clone();
+        let result_path = path;
         let priority = if full {
             Priority::VisiblePage
         } else {
@@ -358,7 +359,7 @@ impl AppModel {
             .flatten()
             .unwrap_or_default();
             Message::PreviewPagesRendered {
-                path: worker_path,
+                path: result_path,
                 zoom,
                 pages,
             }
@@ -1115,7 +1116,7 @@ impl AppModel {
                     preview.requested = visible;
                     visible
                 };
-                self.request_preview_window(&path, visible)
+                return self.request_preview_window(&path, visible);
             }
 
             Message::StripScrolled {

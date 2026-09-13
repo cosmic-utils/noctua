@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use cosmic::app::context_drawer;
 use cosmic::widget::about::About;
 use cosmic::widget::segmented_button::SingleSelectModel;
-use cosmic::widget::{self, icon, menu};
+use cosmic::widget::{self, menu};
 use cosmic::{iced, prelude::*};
 
 use noctua_core::render::worker::SharedWorker;

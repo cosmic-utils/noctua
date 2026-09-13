@@ -39,11 +39,7 @@ pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
     } else {
         let mut row = widget::row::with_capacity(2).spacing(space.space_xxs);
         if app.show_nav_panel {
-            row = row.push(
-                strip_view(app)
-                    .width(Length::Fixed(168.0))
-                    .height(Length::Fill),
-            );
+            row = row.push(strip_view(app));
         }
         row = row.push(content_view(app));
         column = column.push(row.height(Length::Fill));
@@ -98,18 +94,26 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
         column = column.push(widget::mouse_area(tile).on_press(Message::StripActivated(index)));
     }
 
-    widget::scrollable(column)
+    let strip_scroll = widget::scrollable(column)
         .id(widget::Id::new(STRIP_SCROLL_ID))
         .on_scroll(|viewport| Message::StripScrolled {
             tab,
             offset_y: viewport.absolute_offset().y,
-            viewport_height: viewport.bounds.height,
-        })
+            viewport_height: viewport.bounds().height,
+        });
+
+    // The strip panel: fixed-width, scrollable thumbnail column.
+    widget::container(strip_scroll)
+        .width(Length::Fixed(168.0))
+        .height(Length::Fill)
         .into()
 }
 
 /// The continuous multi-page preview of a PDF inside a folder tab.
-fn preview_view(app: &AppModel, preview: &DocumentPreview) -> Element<'_, Message> {
+fn preview_view<'a>(
+    app: &'a AppModel,
+    preview: &'a DocumentPreview,
+) -> Element<'a, Message> {
     let space = cosmic::theme::spacing();
 
     let mut column = widget::column::with_capacity(preview.pages.len())
@@ -124,7 +128,10 @@ fn preview_view(app: &AppModel, preview: &DocumentPreview) -> Element<'_, Messag
             .unwrap_or((600.0, 800.0));
         let box_height = height * preview.zoom;
         let page: Element<'_, Message> = match slot {
-            PageSlot::Empty => widget::space(Length::Fill, Length::Fixed(box_height)).into(),
+            PageSlot::Empty => widget::space()
+                .width(Length::Fill)
+                .height(Length::Fixed(box_height))
+                .into(),
             PageSlot::Thumb { handle } | PageSlot::Full { handle } => widget::container(
                 widget::Image::new(handle.clone()).content_fit(ContentFit::ScaleDown),
             )
@@ -141,7 +148,7 @@ fn preview_view(app: &AppModel, preview: &DocumentPreview) -> Element<'_, Messag
         .on_scroll(|viewport| Message::PreviewScrolled {
             path: preview.path.clone(),
             offset_y: viewport.absolute_offset().y,
-            viewport_height: viewport.bounds.height,
+            viewport_height: viewport.bounds().height,
         });
 
     widget::mouse_area(scrollable)
@@ -309,7 +316,8 @@ fn position_label(app: &AppModel) -> String {
 
     match app.tabs.get(&tab) {
         Some(TabContent::Document { .. }) => {
-            format!("{} / {total}", fl!("page-num", num = position + 1))
+            let page = (position + 1) as u32;
+            format!("{} / {total}", fl!("page-num", num = page))
         }
         _ => format!("{} / {total}", position + 1),
     }
