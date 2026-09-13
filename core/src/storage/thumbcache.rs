@@ -45,9 +45,9 @@ impl ThumbSize {
 /// Returns `(width, height, rgba8_data)` for a thumbnail of `path`.
 ///
 /// Loads from cache if a valid entry exists, otherwise generates and stores one.
-/// Synchronous: the generator runs on the calling thread. For PDFs prefer
-/// the worker's `RenderThumb` job (via `lookup`/`store`), so pdfium stays
-/// on the worker thread.
+/// Synchronous: the generator runs on the calling thread. PDFs are rejected:
+/// they must be rendered on the pdfium worker (pdfium is not thread-safe);
+/// use the worker's `RenderThumb` job with `lookup`/`store` instead.
 pub fn get_or_create(path: &Path, size: ThumbSize) -> Result<(u32, u32, Vec<u8>), StorageError> {
     let cache_root = dirs::cache_dir()
         .ok_or_else(|| StorageError::Thumb("Cache directory not found".to_string()))?;
@@ -62,6 +62,14 @@ pub fn get_or_create_at(
 ) -> Result<(u32, u32, Vec<u8>), StorageError> {
     if let Some(thumb) = lookup_at(cache_root, path, size)? {
         return Ok(thumb);
+    }
+
+    // pdfium is not thread-safe; PDF thumbnails must go through the
+    // render worker, so refuse to generate them here.
+    if super::document::is_pdf(path)? {
+        return Err(StorageError::Thumb(
+            "PDF thumbnails must be rendered via the render worker".to_string(),
+        ));
     }
 
     let thumb = generate(path, &size)?;
@@ -230,7 +238,7 @@ fn save(
 // ── Generation ──
 
 fn generate(path: &Path, size: &ThumbSize) -> Result<(u32, u32, Vec<u8>), StorageError> {
-    #[cfg(any(feature = "resvg", feature = "pdfium-render"))]
+    #[cfg(feature = "resvg")]
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -240,11 +248,6 @@ fn generate(path: &Path, size: &ThumbSize) -> Result<(u32, u32, Vec<u8>), Storag
     #[cfg(feature = "resvg")]
     if ext == "svg" {
         return generate_svg(path, size);
-    }
-
-    #[cfg(feature = "pdfium-render")]
-    if ext == "pdf" {
-        return generate_pdf(path, size);
     }
 
     generate_raster(path, size)
@@ -320,42 +323,4 @@ fn generate_svg(path: &Path, size: &ThumbSize) -> Result<(u32, u32, Vec<u8>), St
         .collect();
 
     Ok((w, h, data))
-}
-
-/// Render the first page of a PDF as a thumbnail using pdfium-render.
-#[cfg(feature = "pdfium-render")]
-fn generate_pdf(path: &Path, size: &ThumbSize) -> Result<(u32, u32, Vec<u8>), StorageError> {
-    use pdfium_render::prelude::*;
-
-    // The single shared pdfium instance; binding pdfium twice hangs.
-    let pdfium = crate::pdfium_ops::pdfium();
-
-    let document = pdfium
-        .load_pdf_from_file(path, None)
-        .map_err(|e| StorageError::Thumb(format!("Failed to open PDF: {e}")))?;
-
-    let page = document
-        .pages()
-        .get(0)
-        .map_err(|e| StorageError::Thumb(format!("Failed to get first PDF page: {e}")))?;
-
-    let page_w = page.width().value;
-    let page_h = page.height().value;
-    let max = size.max_px() as f32;
-    let scale = (max / page_w).min(max / page_h);
-
-    let target_w = ((page_w * scale).ceil() as i32).max(1);
-    let target_h = ((page_h * scale).ceil() as i32).max(1);
-
-    let config = PdfRenderConfig::new()
-        .set_target_width(target_w)
-        .set_maximum_height(target_h);
-
-    let bitmap = page
-        .render_with_config(&config)
-        .map_err(|e| StorageError::Thumb(format!("Failed to render PDF page: {e}")))?;
-
-    let image = bitmap.as_image();
-    let rgba = image.to_rgba8();
-    Ok((rgba.width(), rgba.height(), rgba.into_raw()))
 }

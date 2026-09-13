@@ -7,10 +7,9 @@
 
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use crate::pdfium_ops::{Command, CommandResult, PdfOpsManager};
 use crate::storage::thumbcache::ThumbSize;
@@ -416,31 +415,5 @@ fn render_thumb(path: &std::path::Path, size: ThumbSize) -> JobResult {
         }
         CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
         _ => JobResult::Error("unexpected open result".to_string()),
-    }
-}
-
-/// Block until the worker has processed all queued jobs. Helper for tests.
-pub fn drain(worker: &Worker, timeout: Duration) -> bool {
-    let (reply, result) = mpsc::channel();
-    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1 << 60);
-    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let queued = QueuedJob {
-        seq,
-        priority: Priority::Low,
-        job: Job::Op(Command::PageCount),
-        reply,
-    };
-    match &worker.sender {
-        Some(sender) => {
-            if sender.send(queued).is_err() {
-                return false;
-            }
-        }
-        None => return false,
-    }
-    match result.recv_timeout(timeout) {
-        Ok(_) => true,
-        Err(RecvTimeoutError::Timeout) => false,
-        Err(RecvTimeoutError::Disconnected) => false,
     }
 }

@@ -55,6 +55,20 @@ fn get_or_create_generates_and_reuses_cache() {
 }
 
 #[test]
+fn get_or_create_rejects_pdfs() {
+    let dir = common::temp_dir("thumb-pdf");
+    let cache = dir.join("cache");
+    // A fake PDF header is enough: the refusal is content-based.
+    std::fs::write(dir.join("fake.pdf"), b"%PDF-1.7 fake content").unwrap();
+
+    // PDF thumbnails must be rendered on the pdfium worker thread.
+    assert!(
+        thumbcache::get_or_create_at(&cache, &dir.join("fake.pdf"), ThumbSize::Normal).is_err()
+    );
+    common::remove_dir(&dir);
+}
+
+#[test]
 fn changed_source_invalidates_cache_entry() {
     let dir = common::temp_dir("thumb-stale");
     let cache = dir.join("cache");
