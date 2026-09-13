@@ -108,6 +108,10 @@ impl PdfOpsManager {
                 Ok(n) => CommandResult::PageCount(n),
                 Err(e) => CommandResult::Error(e),
             },
+            Command::PageSizes => match self.page_sizes() {
+                Ok(sizes) => CommandResult::PageSizes(sizes),
+                Err(e) => CommandResult::Error(e),
+            },
             Command::RenderPage { page, zoom } => match self.render_page(page, zoom) {
                 Ok((width, height, rgba_data)) => CommandResult::Rendered {
                     width,
@@ -145,6 +149,14 @@ impl PdfOpsManager {
 
     fn page_count(&self) -> Result<u32, PdfOpsError> {
         Ok(self.require_document()?.pages().len() as u32)
+    }
+
+    fn page_sizes(&self) -> Result<Vec<(f32, f32)>, PdfOpsError> {
+        self.require_document()?
+            .pages()
+            .iter()
+            .map(|page| Ok((page.width().value, page.height().value)))
+            .collect()
     }
 
     fn save(&mut self) -> Result<(), PdfOpsError> {

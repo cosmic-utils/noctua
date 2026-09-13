@@ -80,6 +80,9 @@ pub enum Command {
     /// Number of pages in the open document.
     PageCount,
 
+    /// Width and height of every page in points, in page order.
+    PageSizes,
+
     /// Render a 1-based page at the given zoom factor, returning RGBA pixels.
     RenderPage { page: u32, zoom: f32 },
 }
@@ -91,6 +94,8 @@ pub enum CommandResult {
     Ok,
     /// Number of pages in the open document.
     PageCount(u32),
+    /// Width and height of every page in points, in page order.
+    PageSizes(Vec<(f32, f32)>),
     /// A rendered page as RGBA pixels.
     Rendered {
         width: u32,

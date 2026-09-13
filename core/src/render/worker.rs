@@ -42,6 +42,8 @@ pub enum Job {
     },
     /// Count the pages of an arbitrary PDF file.
     FilePageCount { path: PathBuf },
+    /// Width and height of every page of an arbitrary PDF file, in points.
+    FilePageSizes { path: PathBuf },
     /// Render the first page of a PDF file as a thumbnail and store it
     /// in the freedesktop thumbnail cache.
     RenderThumb { path: PathBuf, size: ThumbSize },
@@ -62,6 +64,8 @@ pub enum JobResult {
     RenderedThumbs(Vec<PageThumb>),
     /// Page count of a PDF file.
     PageCount(u32),
+    /// Width and height of every page in points, in page order.
+    PageSizes(Vec<(f32, f32)>),
     /// A failed job.
     Error(String),
 }
@@ -237,12 +241,18 @@ impl SharedWorker {
         }
     }
 
-    /// Render several pages of a PDF file as thumbnails. The document is
-    /// opened once on the worker; failed pages are skipped. Returns
-    /// (page, width, height, rgba) tuples.
-    pub fn page_thumbs(&self, path: &Path, pages: &[u32], zoom: f32) -> Option<Vec<PageThumb>> {
+    /// Render several pages of a PDF file with a single document open.
+    /// The document is opened once on the worker; failed pages are
+    /// skipped. Returns (page, width, height, rgba) tuples.
+    pub fn render_pages(
+        &self,
+        path: &Path,
+        pages: &[u32],
+        zoom: f32,
+        priority: Priority,
+    ) -> Option<Vec<PageThumb>> {
         match self.execute(
-            Priority::Low,
+            priority,
             Job::RenderPageThumbs {
                 path: path.to_path_buf(),
                 pages: pages.to_vec(),
@@ -250,6 +260,24 @@ impl SharedWorker {
             },
         ) {
             JobResult::RenderedThumbs(thumbs) => Some(thumbs),
+            _ => None,
+        }
+    }
+
+    /// Render several pages of a PDF file as thumbnails (low priority).
+    pub fn page_thumbs(&self, path: &Path, pages: &[u32], zoom: f32) -> Option<Vec<PageThumb>> {
+        self.render_pages(path, pages, zoom, Priority::Low)
+    }
+
+    /// Width and height of every page of a PDF file, in points.
+    pub fn page_sizes(&self, path: &Path) -> Option<Vec<(f32, f32)>> {
+        match self.execute(
+            Priority::VisiblePage,
+            Job::FilePageSizes {
+                path: path.to_path_buf(),
+            },
+        ) {
+            JobResult::PageSizes(sizes) => Some(sizes),
             _ => None,
         }
     }
@@ -297,6 +325,7 @@ fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
         Job::RenderFilePage { path, page, zoom } => render_file_page(&path, page, zoom),
         Job::RenderPageThumbs { path, pages, zoom } => render_page_thumbs(&path, &pages, zoom),
         Job::FilePageCount { path } => file_page_count(&path),
+        Job::FilePageSizes { path } => file_page_sizes(&path),
         Job::RenderThumb { path, size } => render_thumb(&path, size),
     };
     let _ = job.reply.send(result);
@@ -366,6 +395,24 @@ fn file_page_count(path: &Path) -> JobResult {
             CommandResult::PageCount(count) => JobResult::PageCount(count),
             CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
             _ => JobResult::Error("unexpected page count result".to_string()),
+        },
+        CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
+        _ => JobResult::Error("unexpected open result".to_string()),
+    }
+}
+
+/// Read the size of every page of an arbitrary PDF file, in points.
+/// Opens the file, reads, closes it again — the shared open document
+/// stays untouched.
+fn file_page_sizes(path: &Path) -> JobResult {
+    let mut scratch = PdfOpsManager::new();
+    match scratch.execute(Command::Open {
+        path: path.to_path_buf(),
+    }) {
+        CommandResult::Ok => match scratch.execute(Command::PageSizes) {
+            CommandResult::PageSizes(sizes) => JobResult::PageSizes(sizes),
+            CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
+            _ => JobResult::Error("unexpected page sizes result".to_string()),
         },
         CommandResult::Error(e) => JobResult::Error(format!("{e:?}")),
         _ => JobResult::Error("unexpected open result".to_string()),
