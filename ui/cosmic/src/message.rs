@@ -6,11 +6,11 @@
 use std::path::PathBuf;
 
 use cosmic::widget::menu;
-use cosmic::widget::nav_bar;
 use cosmic::widget::segmented_button::Entity;
+
 use noctua_core::storage::browser::BrowserEntry;
 
-use crate::model::ThumbResult;
+use crate::model::Rgba;
 
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
@@ -21,11 +21,11 @@ pub enum Message {
     TabCloseRequested(Entity),
     /// Close the active tab.
     CloseTab,
-    /// An entry in the nav bar was activated.
-    NavActivated(nav_bar::Id),
-    /// Move to the previous nav entry.
+    /// An entry of the thumbnail strip was activated (0-based index).
+    StripActivated(usize),
+    /// Move to the previous strip entry.
     PrevEntry,
-    /// Move to the next nav entry.
+    /// Move to the next strip entry.
     NextEntry,
     /// The Open Folder menu entry was activated.
     OpenFolder,
@@ -41,8 +41,40 @@ pub enum Message {
         tab: Entity,
         pages: Option<u32>,
     },
-    /// Thumbnails for nav entries were generated.
-    ThumbsReady(Vec<ThumbResult>),
+    /// Thumbnails for strip entries arrived. Guarded by the tab entity.
+    StripThumbsReady {
+        tab: Entity,
+        thumbs: Vec<(usize, Option<Rgba>)>,
+    },
+    /// Page sizes of a preview candidate arrived; one page means the PDF
+    /// is displayed as a single image, more pages build the preview.
+    PreviewSizesKnown {
+        path: PathBuf,
+        sizes: Option<Vec<(f32, f32)>>,
+    },
+    /// Rendered preview pages arrived as (page, width, height, rgba).
+    /// `zoom` separates full renders from thumbnail placeholders.
+    PreviewPagesRendered {
+        path: PathBuf,
+        zoom: f32,
+        pages: Vec<(u32, u32, u32, Vec<u8>)>,
+    },
+    /// The preview was scrolled; carries absolute content offset and the
+    /// viewport height to compute the visible page window.
+    PreviewScrolled {
+        path: PathBuf,
+        offset_y: f32,
+        viewport_height: f32,
+    },
+    /// The thumbnail strip was scrolled; carries the absolute offset and
+    /// the viewport height to compute the visible tile range.
+    StripScrolled {
+        tab: Entity,
+        offset_y: f32,
+        viewport_height: f32,
+    },
+    /// Double click on the preview: open the PDF in a document tab.
+    PreviewDoubleClicked { path: PathBuf },
     /// A raster or SVG file was rendered for the content area.
     FileRendered {
         path: PathBuf,

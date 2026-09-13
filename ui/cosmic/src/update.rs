@@ -9,10 +9,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cosmic::iced::keyboard::Key;
-use cosmic::widget::icon;
+use cosmic::iced::widget::scrollable::{scroll_to, AbsoluteOffset};
 use cosmic::widget::menu;
 use cosmic::widget::menu::key_bind::Modifier;
-use cosmic::widget::nav_bar;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::{iced, prelude::*};
 
@@ -25,9 +24,13 @@ use noctua_core::storage::thumbcache::ThumbSize;
 use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{
-    AppModel, CurrentTarget, CurrentImage, NavEntry, TabContent, ThumbRequest, ThumbResult,
-    INITIAL_THUMBS, PAGE_THUMB_ZOOM, SESSION_NAME, ZOOM_STEP,
+    AppModel, CurrentImage, CurrentTarget, DocumentPreview, NavEntry, PageSlot, Rgba, StripEntry,
+    TabContent, TabUiState, PREVIEW_FULL_CACHE, PREVIEW_SCROLL_ID, SESSION_NAME,
+    STRIP_INITIAL_THUMBS, THUMB_ZOOM, ZOOM_STEP,
 };
+
+/// Estimated strip tile height including spacing, for lazy thumbnails.
+const STRIP_TILE: f32 = 150.0;
 
 impl AppModel {
     /// Register the menu key bindings.
@@ -87,114 +90,409 @@ impl AppModel {
         self.tabs.contains_key(&entity).then_some(entity)
     }
 
-    /// Rebuild the nav bar for the active tab and request thumbnails.
-    /// Returns the thumbnail tasks to run in the background.
-    fn rebuild_nav(&mut self) -> Vec<iced::Task<cosmic::Action<Message>>> {
-        let mut nav = nav_bar::Model::default();
-        let mut thumb_requests: Vec<ThumbRequest> = Vec::new();
-
-        if let Some(entity) = self.active_tab() {
-            match &self.tabs[&entity] {
-                TabContent::Folder { entries, .. } => {
-                    for (index, entry) in entries.iter().enumerate() {
-                        let target = NavEntry::File {
+    /// Rebuild the thumbnail strip of a tab. The selection survives when
+    /// it still points into the new strip; the preview survives only when
+    /// it still matches the selected entry.
+    fn rebuild_strip(&mut self, tab: Entity) {
+        let entries: Vec<(NavEntry, String)> = match &self.tabs[&tab] {
+            TabContent::Folder { entries, .. } => entries
+                .iter()
+                .map(|entry| {
+                    (
+                        NavEntry::File {
                             path: entry.path.clone(),
-                        };
-                        let id = nav.insert().text(entry.name.clone()).data(target).id();
-                        if index < INITIAL_THUMBS {
-                            thumb_requests.push(ThumbRequest::File {
-                                entity: id,
-                                path: entry.path.clone(),
-                            });
-                        }
-                    }
-                }
-                TabContent::Document { path, pages } => {
-                    for page in 1..=*pages {
-                        let target = NavEntry::Page {
+                        },
+                        entry.name.clone(),
+                    )
+                })
+                .collect(),
+            TabContent::Document { path, pages } => (1..=*pages)
+                .map(|page| {
+                    (
+                        NavEntry::Page {
                             path: path.clone(),
                             page,
-                        };
-                        let id = nav
-                            .insert()
-                            .text(fl!("page-num", num = page))
-                            .data(target)
-                            .id();
-                        if (page as usize) <= INITIAL_THUMBS {
-                            thumb_requests.push(ThumbRequest::Page {
-                                entity: id,
-                                path: path.clone(),
-                                page,
-                            });
-                        }
-                    }
-                }
-            }
-        }
+                        },
+                        fl!("page-num", num = page),
+                    )
+                })
+                .collect(),
+        };
 
-        self.nav_model = nav;
+        let previous = self.tab_ui.remove(&tab);
+        let selected = previous
+            .as_ref()
+            .and_then(|state| state.selected)
+            .filter(|index| *index < entries.len())
+            .or((!entries.is_empty()).then_some(0));
+        let preview = previous.and_then(|state| state.preview).filter(|preview| {
+            matches!(
+                selected.and_then(|index| entries.get(index)),
+                Some((NavEntry::File { path }, _)) if path == &preview.path
+            )
+        });
 
-        if thumb_requests.is_empty() {
-            Vec::new()
-        } else {
-            vec![self.thumbs_task(thumb_requests)]
-        }
+        let strip = entries
+            .into_iter()
+            .map(|(target, name)| StripEntry {
+                target,
+                name,
+                thumb: None,
+            })
+            .collect();
+        self.tab_ui.insert(tab, TabUiState {
+            strip,
+            selected,
+            preview,
+        });
     }
 
-    /// Select the first usable nav entry and render it. PDFs are skipped:
-    /// diving in is an explicit user action.
+    /// Activate the current tab: restore its selection, render it and
+    /// restore the preview scroll offset. New tabs select their first entry.
     fn activate_tab(&mut self) -> iced::Task<cosmic::Action<Message>> {
         self.current_target = None;
         self.current_image = None;
         self.current_size = None;
-        self.current_position = None;
 
-        let mut tasks = self.rebuild_nav();
+        let Some(tab) = self.active_tab() else {
+            return iced::Task::none();
+        };
 
-        if let Some(first) = self.nav_model.entity_at(0) {
-            self.nav_model.activate(first);
-            self.current_position = Some(1);
-            let entry = self.nav_model.data::<NavEntry>(first).cloned();
-            let dives = matches!(
-                &entry,
-                Some(NavEntry::File { path }) if storage::document::is_pdf(path).unwrap_or(false)
+        // Tabs that received their content while inactive build their
+        // strip on first activation.
+        let has_content = match self.tabs.get(&tab) {
+            Some(TabContent::Folder { entries, .. }) => !entries.is_empty(),
+            Some(TabContent::Document { pages, .. }) => *pages > 0,
+            None => false,
+        };
+        if has_content && self.tab_ui.get(&tab).is_none_or(|state| state.strip.is_empty()) {
+            self.rebuild_strip(tab);
+        }
+
+        let target = self.tab_ui.get(&tab).and_then(|state| {
+            state
+                .selected
+                .and_then(|index| state.strip.get(index))
+                .map(|entry| entry.target.clone())
+        });
+        let scroll = self
+            .tab_ui
+            .get(&tab)
+            .and_then(|state| state.preview.as_ref())
+            .map(|preview| preview.scroll);
+
+        let mut tasks: Vec<iced::Task<cosmic::Action<Message>>> = Vec::new();
+        if let Some(target) = target {
+            tasks.push(self.activate_target(target));
+        }
+        if let Some(offset_y) = scroll {
+            tasks.push(
+                scroll_to(
+                    cosmic::widget::Id::new(PREVIEW_SCROLL_ID),
+                    AbsoluteOffset {
+                        x: None,
+                        y: Some(offset_y),
+                    },
+                )
+                .map(cosmic::Action::from),
             );
-            if !dives && let Some(entry) = entry {
-                tasks.push(self.activate_target(entry));
-            }
         }
+        tasks.push(self.request_strip_thumbs(tab, 0..STRIP_INITIAL_THUMBS));
 
-        if tasks.is_empty() {
-            iced::Task::none()
-        } else {
-            cosmic::task::batch(tasks)
-        }
+        cosmic::task::batch(tasks)
     }
 
-    /// Show or render the given nav entry.
+    /// Show or render the given strip entry.
     fn activate_target(&mut self, entry: NavEntry) -> iced::Task<cosmic::Action<Message>> {
         match entry {
             NavEntry::File { path } => {
-                if storage::document::is_pdf(&path).unwrap_or(false) {
-                    return self.dive_into(path);
-                }
-                self.current_target = Some(CurrentTarget::File { path: path.clone() });
+                self.current_image = None;
                 self.current_size = storage::document::metadata(&path)
                     .ok()
                     .map(|meta| meta.size_bytes);
-                self.render_file_task(path)
+                if storage::document::is_pdf(&path).unwrap_or(false) {
+                    self.start_preview(path)
+                } else {
+                    self.current_target = Some(CurrentTarget::File { path: path.clone() });
+                    self.render_file_task(path)
+                }
             }
             NavEntry::Page { path, page } => {
+                self.current_image = None;
+                self.current_size = storage::document::metadata(&path)
+                    .ok()
+                    .map(|meta| meta.size_bytes);
                 self.current_target = Some(CurrentTarget::Page {
                     path: path.clone(),
                     page,
                 });
-                self.current_size = storage::document::metadata(&path)
-                    .ok()
-                    .map(|meta| meta.size_bytes);
                 self.render_page_task(path, page)
             }
         }
+    }
+
+    /// Start the inline preview for a PDF: ask the worker for the page
+    /// sizes; one page is shown as a single image, more pages build the
+    /// continuous scroll preview.
+    fn start_preview(&mut self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
+        self.current_target = Some(CurrentTarget::File { path: path.clone() });
+        let worker = self.worker.clone();
+        let worker_path = path.clone();
+        cosmic::task::future(async move {
+            let sizes = tokio::task::spawn_blocking(move || worker.page_sizes(&worker_path))
+                .await
+                .ok()
+                .flatten();
+            Message::PreviewSizesKnown { path, sizes }
+        })
+    }
+
+    /// Build the preview once the page sizes are known and start the
+    /// first render passes. A preview for the same path with the same
+    /// page count is reused, so re-selecting an entry keeps its scroll
+    /// position and rendered pages.
+    fn build_preview(
+        &mut self,
+        path: PathBuf,
+        sizes: Vec<(f32, f32)>,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let Some(tab) = self.active_tab() else {
+            return iced::Task::none();
+        };
+        let count = sizes.len() as u32;
+        let visible = {
+            let Some(state) = self.tab_ui.get_mut(&tab) else {
+                return iced::Task::none();
+            };
+            if let Some(existing) = state.preview.as_mut()
+                && existing.path == path
+                && existing.page_sizes.len() == sizes.len()
+            {
+                existing.page_sizes = sizes;
+                Some(Self::preview_visible_range(existing))
+            } else {
+                let pages = (0..sizes.len()).map(|_| PageSlot::Empty).collect();
+                state.preview = Some(DocumentPreview {
+                    path: path.clone(),
+                    page_sizes: sizes,
+                    pages,
+                    zoom: self.zoom,
+                    scroll: 0.0,
+                    viewport_height: 800.0,
+                    full_order: Vec::new(),
+                    requested: None,
+                });
+                None
+            }
+        };
+
+        match visible {
+            Some(visible) => self.request_preview_window(&path, visible),
+            None => cosmic::task::batch(vec![
+                self.request_preview_pages(&path, 1..=count.min(2), self.zoom, true),
+                self.request_preview_pages(&path, 1..=count.min(12), THUMB_ZOOM, false),
+                scroll_to(
+                    cosmic::widget::Id::new(PREVIEW_SCROLL_ID),
+                    AbsoluteOffset {
+                        x: None,
+                        y: Some(0.0),
+                    },
+                )
+                .map(cosmic::Action::from),
+            ]),
+        }
+    }
+
+    /// Request preview pages in the given 1-based range. `full` selects
+    /// full resolution (visible window) over thumbnails (placeholder).
+    /// Pages that already have a matching render are skipped.
+    fn request_preview_pages(
+        &self,
+        path: &PathBuf,
+        range: std::ops::RangeInclusive<u32>,
+        zoom: f32,
+        full: bool,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let mut wanted: Vec<u32> = Vec::new();
+        if let Some(tab) = self.active_tab()
+            && let Some(state) = self.tab_ui.get(&tab)
+            && let Some(preview) = state.preview.as_ref()
+            && preview.path == *path
+        {
+            for page in range {
+                let index = page as usize - 1;
+                if index >= preview.pages.len() {
+                    continue;
+                }
+                let already = if full {
+                    matches!(preview.pages[index], PageSlot::Full { .. })
+                } else {
+                    matches!(
+                        preview.pages[index],
+                        PageSlot::Thumb { .. } | PageSlot::Full { .. }
+                    )
+                };
+                if !already {
+                    wanted.push(page);
+                }
+            }
+        }
+
+        if wanted.is_empty() {
+            return iced::Task::none();
+        }
+
+        let worker = self.worker.clone();
+        let worker_path = path.clone();
+        let priority = if full {
+            Priority::VisiblePage
+        } else {
+            Priority::Low
+        };
+        cosmic::task::future(async move {
+            let pages = tokio::task::spawn_blocking(move || {
+                worker.render_pages(&worker_path, &wanted, zoom, priority)
+            })
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+            Message::PreviewPagesRendered {
+                path: worker_path,
+                zoom,
+                pages,
+            }
+        })
+    }
+
+    /// The 1-based page range currently visible in the preview.
+    fn preview_visible_range(preview: &DocumentPreview) -> Option<(u32, u32)> {
+        let mut visible: Option<(u32, u32)> = None;
+        let mut y = 0.0f32;
+        for (index, (_, height)) in preview.page_sizes.iter().enumerate() {
+            let bottom = y + height * preview.zoom;
+            if bottom >= preview.scroll && y <= preview.scroll + preview.viewport_height {
+                let page = index as u32 + 1;
+                visible = Some(match visible {
+                    Some((first, last)) => (first.min(page), last.max(page)),
+                    None => (page, page),
+                });
+            }
+            y = bottom;
+        }
+        visible
+    }
+
+    /// Re-render the preview window around the given visible range.
+    fn request_preview_window(
+        &self,
+        path: &PathBuf,
+        visible: Option<(u32, u32)>,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let Some((first, last)) = visible else {
+            return iced::Task::none();
+        };
+        let Some(count) = self.preview_pages(path) else {
+            return iced::Task::none();
+        };
+        let Some(zoom) = self.preview_zoom(path) else {
+            return iced::Task::none();
+        };
+        let thumb_first = first.saturating_sub(2).max(1);
+        let thumb_last = (last + 2).min(count);
+        cosmic::task::batch(vec![
+            self.request_preview_pages(path, first..=last, zoom, true),
+            self.request_preview_pages(path, thumb_first..=thumb_last, THUMB_ZOOM, false),
+        ])
+    }
+
+    fn preview_pages(&self, path: &PathBuf) -> Option<u32> {
+        let tab = self.active_tab()?;
+        let state = self.tab_ui.get(&tab)?;
+        let preview = state.preview.as_ref()?;
+        (preview.path == *path).then(|| preview.pages.len() as u32)
+    }
+
+    fn preview_zoom(&self, path: &PathBuf) -> Option<f32> {
+        let tab = self.active_tab()?;
+        let state = self.tab_ui.get(&tab)?;
+        let preview = state.preview.as_ref()?;
+        (preview.path == *path).then_some(preview.zoom)
+    }
+
+    /// Request thumbnails for strip entries in the given index range that
+    /// do not have one yet. File thumbnails come from the freedesktop
+    /// cache; page thumbnails are batch-rendered per PDF.
+    fn request_strip_thumbs(
+        &self,
+        tab: Entity,
+        range: std::ops::Range<usize>,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let mut wanted: Vec<(usize, NavEntry)> = Vec::new();
+        if let Some(state) = self.tab_ui.get(&tab) {
+            for index in range {
+                if let Some(entry) = state.strip.get(index)
+                    && entry.thumb.is_none()
+                {
+                    wanted.push((index, entry.target.clone()));
+                }
+            }
+        }
+        if wanted.is_empty() {
+            return iced::Task::none();
+        }
+
+        let worker = self.worker.clone();
+        cosmic::task::future(async move {
+            let thumbs = tokio::task::spawn_blocking(move || {
+                let mut results: Vec<(usize, Option<Rgba>)> = Vec::new();
+                let mut page_requests: Vec<(usize, PathBuf, u32)> = Vec::new();
+
+                for (index, target) in wanted {
+                    match target {
+                        NavEntry::File { path } => {
+                            results.push((index, worker.thumbnail(&path, ThumbSize::Normal)));
+                        }
+                        NavEntry::Page { path, page } => {
+                            page_requests.push((index, path, page));
+                        }
+                    }
+                }
+
+                let mut by_path: Vec<(PathBuf, Vec<(usize, u32)>)> = Vec::new();
+                for (index, path, page) in page_requests {
+                    match by_path.iter_mut().find(|(p, _)| *p == path) {
+                        Some((_, pages)) => pages.push((index, page)),
+                        None => by_path.push((path, vec![(index, page)])),
+                    }
+                }
+                for (path, pages) in by_path {
+                    let page_numbers: Vec<u32> = pages.iter().map(|(_, page)| *page).collect();
+                    match worker.page_thumbs(&path, &page_numbers, THUMB_ZOOM) {
+                        Some(thumbs) => {
+                            for (index, page) in pages {
+                                let rgba = thumbs
+                                    .iter()
+                                    .find(|(p, ..)| *p == page)
+                                    .map(|(_, w, h, data)| (*w, *h, data.clone()));
+                                results.push((index, rgba));
+                            }
+                        }
+                        None => {
+                            for (index, _) in pages {
+                                results.push((index, None));
+                            }
+                        }
+                    }
+                }
+
+                results
+            })
+            .await
+            .ok()
+            .unwrap_or_default();
+            Message::StripThumbsReady { tab, thumbs }
+        })
     }
 
     /// Open a document tab for the given PDF and count its pages on the worker.
@@ -208,6 +506,7 @@ impl AppModel {
                 pages: 0,
             },
         );
+        self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
         self.tab_model.activate(tab);
         let activate = self.activate_tab();
 
@@ -226,60 +525,6 @@ impl AppModel {
         });
 
         cosmic::task::batch(vec![activate, count])
-    }
-
-    /// Generate all requested thumbnails serially on a background thread
-    /// and return them as one message. Page thumbnails are grouped per
-    /// PDF so the worker opens each document only once.
-    fn thumbs_task(&self, requests: Vec<ThumbRequest>) -> iced::Task<cosmic::Action<Message>> {
-        let worker = self.worker.clone();
-        cosmic::task::future(async move {
-            let thumbs = tokio::task::spawn_blocking(move || {
-                let mut results: Vec<ThumbResult> = Vec::new();
-                let mut pages_by_path: Vec<(PathBuf, Vec<(nav_bar::Id, u32)>)> = Vec::new();
-
-                for request in requests {
-                    match request {
-                        ThumbRequest::File { entity, path } => {
-                            let thumb = worker.thumbnail(&path, ThumbSize::Normal);
-                            results.push((entity, thumb));
-                        }
-                        ThumbRequest::Page { entity, path, page } => {
-                            match pages_by_path.iter_mut().find(|(p, _)| p == &path) {
-                                Some((_, pages)) => pages.push((entity, page)),
-                                None => pages_by_path.push((path, vec![(entity, page)])),
-                            }
-                        }
-                    }
-                }
-
-                for (path, pages) in pages_by_path {
-                    let page_numbers: Vec<u32> = pages.iter().map(|(_, page)| *page).collect();
-                    match worker.page_thumbs(&path, &page_numbers, PAGE_THUMB_ZOOM) {
-                        Some(thumbs) => {
-                            for (entity, page) in pages {
-                                let rgba = thumbs
-                                    .iter()
-                                    .find(|(p, ..)| *p == page)
-                                    .map(|(_, w, h, data)| (*w, *h, data.clone()));
-                                results.push((entity, rgba));
-                            }
-                        }
-                        None => {
-                            for (entity, _) in pages {
-                                results.push((entity, None));
-                            }
-                        }
-                    }
-                }
-
-                results
-            })
-            .await
-            .ok()
-            .unwrap_or_default();
-            Message::ThumbsReady(thumbs)
-        })
     }
 
     /// Render a raster or SVG file into the content area.
@@ -320,10 +565,38 @@ impl AppModel {
     }
 
     /// Re-render the current target at the current zoom.
-    fn render_current(&self) -> iced::Task<cosmic::Action<Message>> {
-        match &self.current_target {
-            Some(CurrentTarget::File { path }) => self.render_file_task(path.clone()),
-            Some(CurrentTarget::Page { path, page }) => self.render_page_task(path.clone(), *page),
+    fn render_current(&mut self) -> iced::Task<cosmic::Action<Message>> {
+        match self.current_target.clone() {
+            Some(CurrentTarget::File { path }) if storage::document::is_pdf(&path).unwrap_or(false) => {
+                // Zoom change on a preview: clear full pages, keep the
+                // thumbnails and re-render the visible window.
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let visible = {
+                    let Some(state) = self.tab_ui.get_mut(&tab) else {
+                        return iced::Task::none();
+                    };
+                    let Some(preview) = state.preview.as_mut() else {
+                        return iced::Task::none();
+                    };
+                    if preview.path != path {
+                        return iced::Task::none();
+                    }
+                    preview.zoom = self.zoom;
+                    preview.full_order.clear();
+                    preview.requested = None;
+                    for slot in preview.pages.iter_mut() {
+                        if matches!(slot, PageSlot::Full { .. }) {
+                            *slot = PageSlot::Empty;
+                        }
+                    }
+                    Self::preview_visible_range(preview)
+                };
+                self.request_preview_window(&path, visible)
+            }
+            Some(CurrentTarget::File { path }) => self.render_file_task(path),
+            Some(CurrentTarget::Page { path, page }) => self.render_page_task(path, page),
             None => iced::Task::none(),
         }
     }
@@ -360,6 +633,7 @@ impl AppModel {
                 entries: Vec::new(),
             },
         );
+        self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
         self.tab_model.activate(tab);
         let activate = self.activate_tab();
 
@@ -426,6 +700,7 @@ impl AppModel {
                         entries: Vec::new(),
                     },
                 );
+                self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
                 let dir = path.clone();
                 let list_dir = dir.clone();
                 tasks.push(cosmic::task::future(async move {
@@ -450,6 +725,7 @@ impl AppModel {
                         pages: 0,
                     },
                 );
+                self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
                 let worker = self.worker.clone();
                 let dir = path.clone();
                 tasks.push(cosmic::task::future(async move {
@@ -486,41 +762,12 @@ impl AppModel {
         }
     }
 
-    /// Find the nav entry for a file path and show it.
-    fn select_nav_by_path(&mut self, path: &PathBuf) -> iced::Task<cosmic::Action<Message>> {
-        let mut found: Option<(Entity, NavEntry)> = None;
-        for position in 0..self.nav_model.len() {
-            if let Some(entity) = self.nav_model.entity_at(position as u16)
-                && let Some(entry) = self.nav_model.data::<NavEntry>(entity)
-                && matches!(entry, NavEntry::File { path: p } if p == path)
-            {
-                found = Some((entity, entry.clone()));
-                break;
-            }
-        }
-
-        if let Some((entity, entry)) = found {
-            self.nav_model.activate(entity);
-            self.current_position = Some(
-                (0..self.nav_model.len())
-                    .find_map(|position| {
-                        self.nav_model
-                            .entity_at(position as u16)
-                            .filter(|candidate| *candidate == entity)
-                            .map(|_| position + 1)
-                    })
-                    .unwrap_or(1),
-            );
-            return self.activate_target(entry);
-        }
-        iced::Task::none()
-    }
-
     /// Close a tab; activates a neighbor when the active tab was closed.
     fn close_tab(&mut self, tab: Entity) -> iced::Task<cosmic::Action<Message>> {
         let was_active = self.active_tab() == Some(tab);
         self.tab_model.remove(tab);
         self.tabs.remove(&tab);
+        self.tab_ui.remove(&tab);
 
         if !was_active {
             return iced::Task::none();
@@ -626,45 +873,69 @@ impl AppModel {
                 }
             }
 
-            Message::NavActivated(id) => {
-                self.nav_model.activate(id);
-                for position in 0..self.nav_model.len() {
-                    if let Some(entity) = self.nav_model.entity_at(position as u16)
-                        && entity == id
-                    {
-                        self.current_position = Some(position + 1);
-                        break;
-                    }
+            Message::StripActivated(index) => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let Some(target) = self
+                    .tab_ui
+                    .get(&tab)
+                    .and_then(|state| state.strip.get(index))
+                    .map(|entry| entry.target.clone())
+                else {
+                    return iced::Task::none();
+                };
+                if let Some(state) = self.tab_ui.get_mut(&tab) {
+                    state.selected = Some(index);
                 }
-                if let Some(entry) = self.nav_model.data::<NavEntry>(id).cloned() {
-                    return self.activate_target(entry);
-                }
+                return self.activate_target(target);
             }
 
             Message::PrevEntry => {
-                let position = self.current_position.unwrap_or(0);
-                if position >= 2
-                    && let Some(prev) = self.nav_model.entity_at(position as u16 - 2)
-                {
-                    self.nav_model.activate(prev);
-                    self.current_position = Some(position - 1);
-                    if let Some(entry) = self.nav_model.data::<NavEntry>(prev).cloned() {
-                        return self.activate_target(entry);
-                    }
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let Some(selected) = self
+                    .tab_ui
+                    .get(&tab)
+                    .and_then(|state| state.selected)
+                    .filter(|selected| *selected >= 1)
+                else {
+                    return iced::Task::none();
+                };
+                let Some(target) = self
+                    .tab_ui
+                    .get(&tab)
+                    .and_then(|state| state.strip.get(selected - 1))
+                    .map(|entry| entry.target.clone())
+                else {
+                    return iced::Task::none();
+                };
+                if let Some(state) = self.tab_ui.get_mut(&tab) {
+                    state.selected = Some(selected - 1);
                 }
+                return self.activate_target(target);
             }
 
             Message::NextEntry => {
-                let position = self.current_position.unwrap_or(0);
-                if position >= 1
-                    && let Some(next) = self.nav_model.entity_at(position as u16)
-                {
-                    self.nav_model.activate(next);
-                    self.current_position = Some(position + 1);
-                    if let Some(entry) = self.nav_model.data::<NavEntry>(next).cloned() {
-                        return self.activate_target(entry);
-                    }
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let Some(selected) = self.tab_ui.get(&tab).and_then(|state| state.selected) else {
+                    return iced::Task::none();
+                };
+                let Some(target) = self
+                    .tab_ui
+                    .get(&tab)
+                    .and_then(|state| state.strip.get(selected + 1))
+                    .map(|entry| entry.target.clone())
+                else {
+                    return iced::Task::none();
+                };
+                if let Some(state) = self.tab_ui.get_mut(&tab) {
+                    state.selected = Some(selected + 1);
                 }
+                return self.activate_target(target);
             }
 
             Message::OpenFolder => {
@@ -689,12 +960,15 @@ impl AppModel {
                             .insert(tab, TabContent::Folder { path: dir, entries });
                         let active = self.active_tab() == Some(tab);
                         if active {
-                            let pending = self.pending_select.take();
-                            let command = self.activate_tab();
-                            let select = pending
-                                .map(|path| self.select_nav_by_path(&path))
-                                .unwrap_or_else(iced::Task::none);
-                            return cosmic::task::batch(vec![command, select]);
+                            self.rebuild_strip(tab);
+                            if let Some(path) = self.pending_select.take()
+                                && let Some(state) = self.tab_ui.get_mut(&tab)
+                            {
+                                state.selected = state.strip.iter().position(|entry| {
+                                    matches!(&entry.target, NavEntry::File { path: p } if p == &path)
+                                });
+                            }
+                            return self.activate_tab();
                         }
                     }
                     (Some(_), Err(e)) => {
@@ -714,6 +988,7 @@ impl AppModel {
                         },
                     );
                     if self.active_tab() == Some(tab) {
+                        self.rebuild_strip(tab);
                         return self.activate_tab();
                     }
                 }
@@ -723,12 +998,155 @@ impl AppModel {
                 _ => {}
             },
 
-            Message::ThumbsReady(thumbs) => {
-                for (entity, rgba) in thumbs {
-                    if let Some((width, height, rgba)) = rgba {
-                        self.nav_model
-                            .icon_set(entity, icon::from_raster_pixels(width, height, rgba).icon());
+            Message::StripThumbsReady { tab, thumbs } => {
+                if let Some(state) = self.tab_ui.get_mut(&tab) {
+                    for (index, rgba) in thumbs {
+                        if let Some(entry) = state.strip.get_mut(index)
+                            && let Some((width, height, rgba)) = rgba
+                        {
+                            entry.thumb = Some(cosmic::widget::image::Handle::from_rgba(
+                                width, height, rgba,
+                            ));
+                        }
                     }
+                }
+            }
+
+            Message::PreviewSizesKnown { path, sizes } => {
+                // Only for the target currently shown.
+                if self.current_target != Some(CurrentTarget::File { path: path.clone() }) {
+                    return iced::Task::none();
+                }
+                match sizes {
+                    Some(sizes) if sizes.len() <= 1 => {
+                        // Single-page PDF: display as one image.
+                        self.current_target = Some(CurrentTarget::Page {
+                            path: path.clone(),
+                            page: 1,
+                        });
+                        return self.render_page_task(path, 1);
+                    }
+                    Some(sizes) => {
+                        return self.build_preview(path, sizes);
+                    }
+                    None => {
+                        tracing::error!("failed to read page sizes of {path:?}");
+                    }
+                }
+            }
+
+            Message::PreviewPagesRendered { path, zoom, pages } => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let Some(state) = self.tab_ui.get_mut(&tab) else {
+                    return iced::Task::none();
+                };
+                let Some(preview) = state.preview.as_mut() else {
+                    return iced::Task::none();
+                };
+                if preview.path != path {
+                    return iced::Task::none();
+                }
+
+                let is_thumb = (zoom - THUMB_ZOOM).abs() < f32::EPSILON;
+                let is_full = !is_thumb && (zoom - preview.zoom).abs() < f32::EPSILON;
+                if !is_thumb && !is_full {
+                    // Renders that raced with a zoom change are dropped.
+                    return iced::Task::none();
+                }
+
+                for (page, width, height, rgba) in pages {
+                    let index = page as usize - 1;
+                    if index >= preview.pages.len() {
+                        continue;
+                    }
+                    let handle = cosmic::widget::image::Handle::from_rgba(width, height, rgba);
+                    if is_thumb {
+                        if matches!(preview.pages[index], PageSlot::Empty) {
+                            preview.pages[index] = PageSlot::Thumb { handle };
+                        }
+                    } else {
+                        preview.pages[index] = PageSlot::Full { handle };
+                        if !preview.full_order.contains(&page) {
+                            preview.full_order.push(page);
+                        }
+                    }
+                }
+
+                // LRU cap: drop the oldest full pages back to placeholders.
+                while preview.full_order.len() > PREVIEW_FULL_CACHE {
+                    let oldest = preview.full_order.remove(0);
+                    if let Some(slot) = preview.pages.get_mut(oldest as usize - 1) {
+                        *slot = PageSlot::Empty;
+                    }
+                }
+
+                // The follow-up frame picks up the freshly uploaded textures.
+                return Self::repaint_task();
+            }
+
+            Message::PreviewScrolled {
+                path,
+                offset_y,
+                viewport_height,
+            } => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let visible = {
+                    let Some(state) = self.tab_ui.get_mut(&tab) else {
+                        return iced::Task::none();
+                    };
+                    let Some(preview) = state.preview.as_mut() else {
+                        return iced::Task::none();
+                    };
+                    if preview.path != path {
+                        return iced::Task::none();
+                    }
+                    preview.scroll = offset_y;
+                    preview.viewport_height = viewport_height;
+                    let visible = Self::preview_visible_range(preview);
+                    // Re-request only when the visible window changed; plain
+                    // scroll ticks within one window must stay quiet.
+                    if preview.requested == visible {
+                        return iced::Task::none();
+                    }
+                    preview.requested = visible;
+                    visible
+                };
+                self.request_preview_window(&path, visible)
+            }
+
+            Message::StripScrolled {
+                tab,
+                offset_y,
+                viewport_height,
+            } => {
+                let Some(state) = self.tab_ui.get(&tab) else {
+                    return iced::Task::none();
+                };
+                if state.strip.is_empty() {
+                    return iced::Task::none();
+                }
+                let first = (offset_y / STRIP_TILE).floor() as usize;
+                let last = ((offset_y + viewport_height) / STRIP_TILE).ceil() as usize + 2;
+                return self.request_strip_thumbs(tab, first..last.min(state.strip.len()));
+            }
+
+            Message::PreviewDoubleClicked { path } => {
+                let in_folder_tab = self.active_tab().is_some_and(|tab| {
+                    matches!(self.tabs.get(&tab), Some(TabContent::Folder { .. }))
+                });
+                let dives = matches!(
+                    &self.current_target,
+                    Some(CurrentTarget::File { path: p }) if p == &path
+                ) || matches!(
+                    &self.current_target,
+                    Some(CurrentTarget::Page { path: p, page: 1 }) if p == &path
+                );
+                if in_folder_tab && dives && storage::document::is_pdf(&path).unwrap_or(false) {
+                    return self.dive_into(path);
                 }
             }
 

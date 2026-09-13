@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use cosmic::widget;
 use cosmic::widget::about::About;
 use cosmic::widget::menu;
-use cosmic::widget::nav_bar;
 use cosmic::widget::segmented_button::{Entity, SingleSelectModel};
 
 use noctua_core::render::worker::SharedWorker;
@@ -20,23 +19,26 @@ use crate::message::MenuAction;
 /// Session file used for automatic save and restore.
 pub(crate) const SESSION_NAME: &str = "default";
 
-/// How many nav entries receive thumbnails up front; the rest stay
-/// text-only until the nav bar becomes viewport-aware. Kept small:
-/// thumbnails decode full images, which is expensive even in the
-/// background.
-pub(crate) const INITIAL_THUMBS: usize = 8;
-
 /// Zoom factor applied per zoom step.
 pub(crate) const ZOOM_STEP: f32 = 1.25;
 
-/// Render scale for page thumbnails in the document tab nav bar.
-pub(crate) const PAGE_THUMB_ZOOM: f32 = 0.2;
+/// Render scale for page thumbnails (strip and preview placeholders).
+pub(crate) const THUMB_ZOOM: f32 = 0.2;
+
+/// Strip entries that receive thumbnails when a tab becomes active; the
+/// rest are rendered lazily while scrolling.
+pub(crate) const STRIP_INITIAL_THUMBS: usize = 8;
+
+/// How many full-resolution preview pages are kept at once; older pages
+/// fall back to their thumbnails.
+pub(crate) const PREVIEW_FULL_CACHE: usize = 12;
+
+/// Stable widget ids; restoring scroll offsets needs them.
+pub(crate) const PREVIEW_SCROLL_ID: &str = "preview-scroll";
+pub(crate) const STRIP_SCROLL_ID: &str = "strip-scroll";
 
 /// RGBA pixels: (width, height, data).
 pub(crate) type Rgba = (u32, u32, Vec<u8>);
-
-/// A thumbnail result for one nav entry.
-pub(crate) type ThumbResult = (nav_bar::Id, Option<Rgba>);
 
 /// Content of one browser tab.
 pub(crate) enum TabContent {
@@ -59,25 +61,20 @@ impl TabContent {
     }
 }
 
-/// What a nav bar entry points to.
-#[derive(Debug, Clone)]
+/// What a strip entry points to.
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum NavEntry {
-    /// A file in a folder tab. PDFs dive into a new tab when clicked.
+    /// A file in a folder tab. PDFs show an inline preview.
     File { path: PathBuf },
     /// A page of the document tab (1-based).
     Page { path: PathBuf, page: u32 },
 }
 
-/// What kind of thumbnail a nav entry needs.
-pub(crate) enum ThumbRequest {
-    /// A file thumbnail (freedesktop cache; worker for PDFs).
-    File { entity: nav_bar::Id, path: PathBuf },
-    /// A page thumbnail of a document tab.
-    Page {
-        entity: nav_bar::Id,
-        path: PathBuf,
-        page: u32,
-    },
+/// One entry of the thumbnail strip of a tab.
+pub(crate) struct StripEntry {
+    pub(crate) target: NavEntry,
+    pub(crate) name: String,
+    pub(crate) thumb: Option<widget::image::Handle>,
 }
 
 /// The entry currently shown in the content area.
@@ -94,6 +91,54 @@ pub(crate) struct CurrentImage {
     pub(crate) handle: widget::image::Handle,
 }
 
+/// One page of the continuous PDF preview.
+pub(crate) enum PageSlot {
+    /// Sizing placeholder; no pixels yet.
+    Empty,
+    /// Low-resolution placeholder from the thumbnail pass.
+    Thumb { handle: widget::image::Handle },
+    /// Full-resolution render.
+    Full { handle: widget::image::Handle },
+}
+
+/// Continuous preview of a multi-page PDF inside a folder tab.
+pub(crate) struct DocumentPreview {
+    pub(crate) path: PathBuf,
+    /// Native page sizes in pixels at zoom 1.0 (points ≈ px at 72 dpi).
+    pub(crate) page_sizes: Vec<(f32, f32)>,
+    pub(crate) pages: Vec<PageSlot>,
+    /// Zoom the full pages were rendered at.
+    pub(crate) zoom: f32,
+    /// Content scroll offset in logical pixels, restored on tab switch.
+    pub(crate) scroll: f32,
+    /// Height of the visible viewport, for the visible-window calculation.
+    pub(crate) viewport_height: f32,
+    /// Insertion order of full pages, oldest first, for the LRU cap.
+    pub(crate) full_order: Vec<u32>,
+    /// Last requested full-render window; scroll events re-request only
+    /// when the visible window actually changes.
+    pub(crate) requested: Option<(u32, u32)>,
+}
+
+/// Volatile per-tab UI state: strip entries, selection and the preview.
+/// Survives tab switches but is not persisted in the session.
+pub(crate) struct TabUiState {
+    pub(crate) strip: Vec<StripEntry>,
+    pub(crate) selected: Option<usize>,
+    pub(crate) preview: Option<DocumentPreview>,
+}
+
+impl TabUiState {
+    pub(crate) fn new(strip: Vec<StripEntry>) -> Self {
+        let selected = (!strip.is_empty()).then_some(0);
+        Self {
+            strip,
+            selected,
+            preview: None,
+        }
+    }
+}
+
 /// The application model stores app-specific state used to describe its interface and
 /// drive its logic.
 pub struct AppModel {
@@ -107,11 +152,11 @@ pub struct AppModel {
     pub(crate) tab_model: SingleSelectModel,
     /// Contents of each open tab.
     pub(crate) tabs: HashMap<Entity, TabContent>,
-    /// Nav bar entries of the active tab.
-    pub(crate) nav_model: nav_bar::Model,
-    /// Entry currently shown in the content area.
+    /// UI state per tab: thumbnail strip, selection and preview.
+    pub(crate) tab_ui: HashMap<Entity, TabUiState>,
+    /// Entry currently shown in the content area (active tab).
     pub(crate) current_target: Option<CurrentTarget>,
-    /// Rendered content for the current target.
+    /// Rendered single-page content for the current target.
     pub(crate) current_image: Option<CurrentImage>,
     /// Current zoom factor (1.0 = 100%).
     pub(crate) zoom: f32,
@@ -121,8 +166,6 @@ pub struct AppModel {
     pub(crate) worker: SharedWorker,
     /// File size of the current target, for the status bar.
     pub(crate) current_size: Option<u64>,
-    /// 1-based position of the active nav entry (status bar).
-    pub(crate) current_position: Option<usize>,
     /// When a start argument is a file, its nav entry is selected
     /// after the parent folder has been listed.
     pub(crate) pending_select: Option<PathBuf>,

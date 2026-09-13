@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use cosmic::app::context_drawer;
 use cosmic::widget::about::About;
 use cosmic::widget::segmented_button::SingleSelectModel;
-use cosmic::widget::{self, menu, nav_bar};
+use cosmic::widget::{self, icon, menu};
 use cosmic::{iced, prelude::*};
 
 use noctua_core::render::worker::SharedWorker;
@@ -61,14 +61,13 @@ impl cosmic::Application for AppModel {
             key_binds: AppModel::key_binds(),
             tab_model: SingleSelectModel::default(),
             tabs: HashMap::new(),
-            nav_model: nav_bar::Model::default(),
+            tab_ui: HashMap::new(),
             current_target: None,
             current_image: None,
             zoom: 1.0,
             show_nav_panel: true,
             worker: SharedWorker::spawn(),
             current_size: None,
-            current_position: None,
             pending_select: None,
             start_error: None,
         };
