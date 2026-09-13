@@ -1,0 +1,10 @@
+[package]
+name = "noctua-core-test-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+image = "0.25"
+pdfium-render = { version = "0.8", features = ["sync"] }

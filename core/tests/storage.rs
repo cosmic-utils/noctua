@@ -3,7 +3,7 @@
 //
 // Integration tests for document format detection and metadata.
 
-mod common;
+use noctua_core_test_common as common;
 
 use noctua_core::document::Kind;
 use noctua_core::storage;

@@ -55,6 +55,9 @@ pub enum Kind {
 }
 
 /// Metadata about a single document, extracted from the file itself.
+///
+/// The UI currently shows only the file size; the richer fields are the
+/// tested basis for the planned status bar metadata display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentInfo {
     pub file_size_bytes: u64,

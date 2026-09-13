@@ -3,7 +3,7 @@
 //
 // Integration tests for session storage (uses an explicit data root).
 
-mod common;
+use noctua_core_test_common as common;
 
 use noctua_core::session::Session;
 use noctua_core::storage::session as storage;

@@ -4,7 +4,7 @@
 // Integration tests for PDF operations: bind, insert, delete, move,
 // rotate, annotations, save, reload.
 
-mod common;
+use noctua_core_test_common as common;
 
 use noctua_core::pdfium_ops::model::palette;
 use noctua_core::pdfium_ops::{BindSource, Command, CommandResult, PdfOpsManager};

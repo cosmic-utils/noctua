@@ -3,7 +3,7 @@
 //
 // Integration tests for the pdfium worker.
 
-mod common;
+use noctua_core_test_common as common;
 
 use noctua_core::render::worker::{Job, JobResult, Priority, SharedWorker, Worker};
 use noctua_core::storage::thumbcache::ThumbSize;

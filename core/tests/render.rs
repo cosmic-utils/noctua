@@ -3,7 +3,7 @@
 //
 // Integration tests for the UI-independent render engine (raster/SVG).
 
-mod common;
+use noctua_core_test_common as common;
 
 use noctua_core::render;
 
@@ -51,5 +51,18 @@ fn renders_path_directly() {
     let page = render::render_path(&png, 1.0).unwrap();
     assert_eq!(page.width, 100);
     assert_eq!(page.height, 50);
+    common::remove_dir(&dir);
+}
+
+#[test]
+fn rotates_rendered_page() {
+    let dir = common::temp_dir("render-rotate");
+    let png = common::make_png(&dir, "img.png", 64, 32);
+
+    let content = render::load(&png).unwrap();
+    let page = render::render_page_rotated(&content, 1, 1.0, 90, false, false).unwrap();
+    assert_eq!(page.width, 32);
+    assert_eq!(page.height, 64);
+    assert_eq!(page.rgba_data.len(), 32 * 64 * 4);
     common::remove_dir(&dir);
 }

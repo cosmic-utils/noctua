@@ -53,7 +53,8 @@ pub fn load_pdf_metadata(path: &Path) -> Result<(Portable, u32), StorageError> {
         // Check if any page has a text layer
         let has_text_layer = document.pages().iter().any(|page| page.text().is_ok());
 
-        // TODO: Check for JavaScript (pdfium-render may not expose this directly)
+        // pdfium-render does not expose JavaScript detection; stays false
+        // until an API for it becomes available.
         let has_javascript = false;
 
         let portable = Portable {

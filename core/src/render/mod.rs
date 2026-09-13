@@ -166,7 +166,8 @@ pub fn render_path(path: &Path, zoom: f32) -> Result<RenderedPage, RenderError> 
 
 /// Render a single page with a rotation in degrees (0, 90, 180, 270).
 ///
-/// Rotation is applied to the RGBA output after rendering.
+/// Rotation is applied to the RGBA output after rendering. Backs the
+/// planned View > Rotate menu entries.
 pub fn render_page_rotated(
     content: &LoadedContent,
     page: u32,

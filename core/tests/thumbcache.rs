@@ -3,7 +3,7 @@
 //
 // Integration tests for the freedesktop thumbnail cache.
 
-mod common;
+use noctua_core_test_common as common;
 
 use noctua_core::storage::thumbcache::{self, ThumbSize};
 

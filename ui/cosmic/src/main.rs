@@ -20,14 +20,9 @@ pub struct Args {
 }
 
 fn main() -> cosmic::iced::Result {
-    // Get the system's preferred languages.
-    let requested_languages = i18n_embed::DesktopLanguageRequester::requested_languages();
-
-    // Enable localizations to be applied.
-    i18n::init(&requested_languages);
-
     // Structured logging; filter at runtime via RUST_LOG. Spans log their
     // duration on close, which makes phase timings directly visible.
+    // Must run first so early errors (i18n) are captured as well.
     tracing_subscriber::fmt()
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_env_filter(
@@ -36,6 +31,12 @@ fn main() -> cosmic::iced::Result {
             }),
         )
         .init();
+
+    // Get the system's preferred languages.
+    let requested_languages = i18n_embed::DesktopLanguageRequester::requested_languages();
+
+    // Enable localizations to be applied.
+    i18n::init(&requested_languages);
 
     let args = Args::parse();
 

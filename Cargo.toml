@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "core",
+    "core/tests/common",
     "ui/cosmic"
 ]
 resolver = "2"

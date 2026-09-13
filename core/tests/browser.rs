@@ -3,7 +3,7 @@
 //
 // Integration tests for browser mode folder listing.
 
-mod common;
+use noctua_core_test_common as common;
 
 use noctua_core::storage;
 

@@ -666,7 +666,7 @@ impl AppModel {
                 }));
             } else {
                 // Browser tabs hold folders or PDFs; anything else is stale.
-                eprintln!("restore: skipping non-document path {path:?}");
+                tracing::warn!("restore: skipping non-document path {path:?}");
             }
 
             if index == session.active_tab {
@@ -762,10 +762,11 @@ impl AppModel {
     fn save_session(&mut self) {
         let session = self.build_session();
         if let Err(e) = storage::session::save(SESSION_NAME, &session) {
-            eprintln!("failed to save session: {e}");
+            tracing::error!("failed to save session: {e}");
         }
+
         if let Err(e) = storage::session::set_last(SESSION_NAME) {
-            eprintln!("failed to mark last session: {e}");
+            tracing::error!("failed to mark last session: {e}");
         }
     }
 
@@ -1177,7 +1178,7 @@ impl cosmic::Application for AppModel {
                         }
                     }
                     (Some(_), Err(e)) => {
-                        eprintln!("failed to list folder: {e}");
+                        tracing::error!("failed to list folder: {e}");
                     }
                     (None, _) => {}
                 }
@@ -1197,7 +1198,7 @@ impl cosmic::Application for AppModel {
                     }
                 }
                 (_, None) => {
-                    eprintln!("failed to count pages of document tab");
+                    tracing::error!("failed to count pages of document tab");
                 }
                 _ => {}
             },
@@ -1273,7 +1274,7 @@ impl cosmic::Application for AppModel {
             Message::LaunchUrl(url) => match open::that_detached(&url) {
                 Ok(()) => {}
                 Err(err) => {
-                    eprintln!("failed to open {url:?}: {err}");
+                    tracing::error!("failed to open {url:?}: {err}");
                 }
             },
 

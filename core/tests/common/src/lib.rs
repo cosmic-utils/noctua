@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// core/tests/common/mod.rs
+// core/tests/common/src/lib.rs
 //
 // Shared test helpers: temp directories and generated test documents.
-
-#![allow(dead_code)] // Helpers are used selectively per test file.
+// A small library so each test binary links only what it uses; public
+// items of a library are never flagged as dead code, which keeps the
+// test suite free of `allow(dead_code)`.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -94,20 +95,6 @@ pub fn make_pdf(
             .expect("create text object");
     }
 
-    document.save_to_file(&path).expect("save pdf");
-    path
-}
-
-/// An empty document with a single empty page.
-pub fn make_blank_pdf(pdfium: &pdfium_render::prelude::Pdfium, dir: &Path, name: &str) -> PathBuf {
-    use pdfium_render::prelude::*;
-
-    let path = dir.join(name);
-    let mut document = pdfium.create_new_pdf().expect("create pdf");
-    document
-        .pages_mut()
-        .create_page_at_end(PdfPagePaperSize::a4())
-        .expect("create page");
     document.save_to_file(&path).expect("save pdf");
     path
 }
