@@ -137,6 +137,9 @@ pub struct AppModel {
     /// When a start argument is a file, its nav entry is selected
     /// after the parent folder has been listed.
     pending_select: Option<PathBuf>,
+    /// Path of a start argument that could not be opened; shown in the
+    /// empty view instead of the folder hint.
+    start_error: Option<String>,
 }
 
 /// Messages emitted by the application and its widgets.
@@ -173,12 +176,14 @@ pub enum Message {
     /// A raster or SVG file was rendered for the content area.
     FileRendered {
         path: PathBuf,
+        zoom: f32,
         rgba: Option<(u32, u32, Vec<u8>)>,
     },
     /// A PDF page was rendered for the content area.
     PageRendered {
         path: PathBuf,
         page: u32,
+        zoom: f32,
         rgba: Option<(u32, u32, Vec<u8>)>,
     },
     ZoomIn,
@@ -486,7 +491,7 @@ impl AppModel {
             .await
             .ok()
             .flatten();
-            Message::FileRendered { path, rgba }
+            Message::FileRendered { path, zoom, rgba }
         })
     }
 
@@ -501,7 +506,12 @@ impl AppModel {
                     .await
                     .ok()
                     .flatten();
-            Message::PageRendered { path, page, rgba }
+            Message::PageRendered {
+                path,
+                page,
+                zoom,
+                rgba,
+            }
         })
     }
 
@@ -560,6 +570,13 @@ impl AppModel {
     /// Open a tab for a start path: folders list, PDFs dive, other files
     /// open their parent folder with the file pre-selected.
     fn open_start_path(&mut self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
+        // A missing path is a user error; surface it instead of opening
+        // the parent folder silently.
+        if !path.exists() {
+            self.start_error = Some(path.display().to_string());
+            return iced::Task::none();
+        }
+
         if path.is_dir() {
             return self.open_folder(path);
         }
@@ -568,9 +585,14 @@ impl AppModel {
             return self.dive_into(path);
         }
 
-        if let Some(parent) = path.parent().map(PathBuf::from) {
-            self.pending_select = Some(path);
-            return self.open_folder(parent);
+        match path.parent().map(PathBuf::from) {
+            Some(parent) if !parent.as_os_str().is_empty() => {
+                self.pending_select = Some(path);
+                return self.open_folder(parent);
+            }
+            _ => {
+                self.start_error = Some(path.display().to_string());
+            }
         }
 
         iced::Task::none()
@@ -691,11 +713,7 @@ impl AppModel {
             return iced::Task::none();
         }
 
-        if let Some(first) = self
-            .nav_model
-            .entity_at(0)
-            .or_else(|| self.tab_model.entity_at(0))
-        {
+        if let Some(first) = self.tab_model.entity_at(0) {
             self.tab_model.activate(first);
         }
         self.activate_tab()
@@ -779,12 +797,15 @@ impl AppModel {
 
         if self.tabs.is_empty() {
             return widget::container(
-                widget::text::body(fl!("open-folder-hint"))
-                    .size(18)
-                    .apply(widget::container)
-                    .width(Length::Fill)
-                    .align_x(Horizontal::Center)
-                    .align_y(Vertical::Center),
+                widget::text::body(match &self.start_error {
+                    Some(path) => fl!("start-error", path = path),
+                    None => fl!("open-folder-hint"),
+                })
+                .size(18)
+                .apply(widget::container)
+                .width(Length::Fill)
+                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center),
             )
             .width(Length::Fill)
             .height(Length::Fill)
@@ -939,6 +960,7 @@ impl cosmic::Application for AppModel {
             current_size: None,
             current_position: None,
             pending_select: None,
+            start_error: None,
         };
 
         let mut command = iced::Task::none();
@@ -1176,14 +1198,25 @@ impl cosmic::Application for AppModel {
                 }
             }
 
-            Message::FileRendered { path, rgba } => {
-                if self.current_target == Some(CurrentTarget::File { path }) {
+            Message::FileRendered { path, zoom, rgba } => {
+                // Ignore renders that raced with a zoom change.
+                if self.current_target == Some(CurrentTarget::File { path })
+                    && (self.zoom - zoom).abs() < f32::EPSILON
+                {
                     self.apply_image(rgba);
                 }
             }
 
-            Message::PageRendered { path, page, rgba } => {
-                if self.current_target == Some(CurrentTarget::Page { path, page }) {
+            Message::PageRendered {
+                path,
+                page,
+                zoom,
+                rgba,
+            } => {
+                // Ignore renders that raced with a zoom change.
+                if self.current_target == Some(CurrentTarget::Page { path, page })
+                    && (self.zoom - zoom).abs() < f32::EPSILON
+                {
                     self.apply_image(rgba);
                 }
             }

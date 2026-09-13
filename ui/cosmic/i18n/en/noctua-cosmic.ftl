@@ -13,4 +13,5 @@ zoom-100 = Zoom 1:1
 show-nav-panel = Show Nav Panel
 page-num = Page { $num }
 open-folder-hint = Open a folder to browse documents
+start-error = Could not open: { $path }
 select-hint = Select a document or page
