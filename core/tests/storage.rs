@@ -59,6 +59,30 @@ fn unknown_format_is_unknown() {
 }
 
 #[test]
+fn detects_javascript_in_pdf() {
+    let dir = common::temp_dir("js-detect");
+    let pdf = dir.join("scripted.pdf");
+    std::fs::write(
+        &pdf,
+        b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /OpenAction << /S /JavaScript /JS (app.alert(1)) >> >>\nendobj\n",
+    )
+    .unwrap();
+
+    assert!(storage::portable::contains_javascript(&pdf).unwrap());
+    common::remove_dir(&dir);
+}
+
+#[test]
+fn pdf_without_javascript_is_clean() {
+    let dir = common::temp_dir("js-clean");
+    let pdf = dir.join("plain.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n").unwrap();
+
+    assert!(!storage::portable::contains_javascript(&pdf).unwrap());
+    common::remove_dir(&dir);
+}
+
+#[test]
 fn formats_file_sizes() {
     assert_eq!(storage::document::format_size(500), "500 B");
     assert_eq!(storage::document::format_size(2048), "2.0 KB");

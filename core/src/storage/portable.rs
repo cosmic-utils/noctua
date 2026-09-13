@@ -53,9 +53,8 @@ pub fn load_pdf_metadata(path: &Path) -> Result<(Portable, u32), StorageError> {
         // Check if any page has a text layer
         let has_text_layer = document.pages().iter().any(|page| page.text().is_ok());
 
-        // pdfium-render does not expose JavaScript detection; stays false
-        // until an API for it becomes available.
-        let has_javascript = false;
+        // Never executed by Noctua; detected only to warn the user.
+        let has_javascript = contains_javascript(path)?;
 
         let portable = Portable {
             format: "PDF".to_string(),
@@ -72,6 +71,44 @@ pub fn load_pdf_metadata(path: &Path) -> Result<(Portable, u32), StorageError> {
     {
         load_pdf_metadata_basic(path)
     }
+}
+
+/// Detect JavaScript constructs in a PDF file.
+///
+/// PDFs carry JavaScript in action dictionaries (`/JS` entries), the
+/// document name tree (`/JavaScript`) and additional actions (`/AA`).
+/// Noctua never executes JavaScript; the flag only drives a warning in
+/// the UI. The raw byte scan misses scripts inside compressed object
+/// streams — a documented limitation, not a bug.
+pub fn contains_javascript(path: &Path) -> Result<bool, StorageError> {
+    use std::io::Read;
+
+    // Longest needle bounds the overlap that may span chunk borders.
+    const OVERLAP: usize = 12;
+    const CHUNK: usize = 64 * 1024;
+    const NEEDLES: [&[u8]; 2] = [b"/JavaScript", b"/JS"];
+
+    let mut file = std::fs::File::open(path)?;
+    let mut buffer = vec![0u8; CHUNK + OVERLAP];
+    let mut filled = 0usize;
+
+    loop {
+        let read = file.read(&mut buffer[filled..])?;
+        if read == 0 {
+            break;
+        }
+        let total = filled + read;
+        if NEEDLES
+            .iter()
+            .any(|needle| buffer[..total].windows(needle.len()).any(|w| w == *needle))
+        {
+            return Ok(true);
+        }
+        filled = total.min(OVERLAP);
+        buffer.copy_within(total - filled..total, 0);
+    }
+
+    Ok(false)
 }
 
 /// Minimal PDF metadata extraction without external dependencies.
@@ -117,7 +154,7 @@ pub fn load_pdf_metadata_basic(path: &Path) -> Result<(Portable, u32), StorageEr
         version,
         is_encrypted: false,   // Cannot detect without proper parser
         has_text_layer: false, // Unknown
-        has_javascript: false, // Unknown
+        has_javascript: contains_javascript(path)?,
     };
 
     Ok((portable, page_count))

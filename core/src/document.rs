@@ -31,6 +31,7 @@ pub struct Portable {
     pub version: String,
     pub is_encrypted: bool,
     pub has_text_layer: bool,
+    /// Detected by structural scan; never executed by Noctua.
     pub has_javascript: bool,
 }
 
