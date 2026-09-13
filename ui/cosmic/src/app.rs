@@ -186,6 +186,10 @@ pub enum Message {
         zoom: f32,
         rgba: Option<(u32, u32, Vec<u8>)>,
     },
+    /// Scheduled shortly after an image was applied: iced's wgpu backend
+    /// uploads textures larger than 2 MB on a background thread and skips
+    /// them in the current frame, so the follow-up frame shows the image.
+    RepaintTick,
     ZoomIn,
     ZoomOut,
     Zoom100,
@@ -522,6 +526,15 @@ impl AppModel {
             Some(CurrentTarget::Page { path, page }) => self.render_page_task(path.clone(), *page),
             None => iced::Task::none(),
         }
+    }
+
+    /// Emit [`Message::RepaintTick`] after a short delay so the image just
+    /// applied gets a follow-up frame (see the variant's doc comment).
+    fn repaint_task() -> iced::Task<cosmic::Action<Message>> {
+        cosmic::task::future(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            Message::RepaintTick
+        })
     }
 
     /// Open the system folder dialog.
@@ -1203,7 +1216,11 @@ impl cosmic::Application for AppModel {
                 if self.current_target == Some(CurrentTarget::File { path })
                     && (self.zoom - zoom).abs() < f32::EPSILON
                 {
+                    let has_pixels = rgba.is_some();
                     self.apply_image(rgba);
+                    if has_pixels {
+                        return Self::repaint_task();
+                    }
                 }
             }
 
@@ -1217,8 +1234,17 @@ impl cosmic::Application for AppModel {
                 if self.current_target == Some(CurrentTarget::Page { path, page })
                     && (self.zoom - zoom).abs() < f32::EPSILON
                 {
+                    let has_pixels = rgba.is_some();
                     self.apply_image(rgba);
+                    if has_pixels {
+                        return Self::repaint_task();
+                    }
                 }
+            }
+
+            Message::RepaintTick => {
+                // The frame triggered by this message picks up the texture
+                // uploaded by iced's image worker. State is already current.
             }
 
             Message::ZoomIn => {
