@@ -45,5 +45,5 @@ fn main() -> cosmic::iced::Result {
     let args = Args::parse();
 
     // Start the application.
-    cosmic::app::run::<app::AppModel>(Settings::default(), args)
+    cosmic::app::run::<model::AppModel>(Settings::default(), args)
 }
