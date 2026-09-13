@@ -96,7 +96,7 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
 
     let strip_scroll = widget::scrollable(column)
         .id(widget::Id::new(STRIP_SCROLL_ID))
-        .on_scroll(|viewport| Message::StripScrolled {
+        .on_scroll(move |viewport| Message::StripScrolled {
             tab,
             offset_y: viewport.absolute_offset().y,
             viewport_height: viewport.bounds().height,
@@ -110,10 +110,7 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
 }
 
 /// The continuous multi-page preview of a PDF inside a folder tab.
-fn preview_view<'a>(
-    app: &'a AppModel,
-    preview: &'a DocumentPreview,
-) -> Element<'a, Message> {
+fn preview_view<'a>(preview: &'a DocumentPreview) -> Element<'a, Message> {
     let space = cosmic::theme::spacing();
 
     let mut column = widget::column::with_capacity(preview.pages.len())
@@ -185,7 +182,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
         && let Some(preview) = state.preview.as_ref()
         && matches!(&app.current_target, Some(CurrentTarget::File { path }) if path == &preview.path)
     {
-        return preview_view(app, preview);
+        return preview_view(preview);
     }
 
     match &app.current_image {

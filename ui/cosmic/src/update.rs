@@ -344,7 +344,7 @@ impl AppModel {
 
         let worker = self.worker.clone();
         let worker_path = path.clone();
-        let result_path = path;
+        let result_path = (*path).clone();
         let priority = if full {
             Priority::VisiblePage
         } else {
