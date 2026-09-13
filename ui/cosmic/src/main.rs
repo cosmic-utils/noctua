@@ -42,6 +42,13 @@ fn main() -> cosmic::iced::Result {
     // Enable localizations to be applied.
     i18n::init(&requested_languages);
 
+    // Fail fast with a clear hint instead of dead PDF features.
+    if noctua_core::pdfium_ops::try_pdfium().is_none() {
+        tracing::warn!(
+            "libpdfium.so not found: PDF rendering and previews are disabled (check LD_LIBRARY_PATH)"
+        );
+    }
+
     let args = Args::parse();
 
     // Start the application.

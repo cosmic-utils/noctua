@@ -320,14 +320,21 @@ fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
     // The span carries the job description and its duration; the worker
     // is a single thread, so its timeline shows up directly in traces.
     let _span = tracing::debug_span!("worker_job", ?job.job, priority = ?job.priority).entered();
-    let result = match job.job {
+    // A panicking job must not kill the worker: the shared Pdfium binding
+    // panics when libpdfium.so is missing, and a dead worker would make
+    // every later job fail silently.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job.job {
         Job::Op(command) => JobResult::Op(manager.execute(command)),
         Job::RenderFilePage { path, page, zoom } => render_file_page(&path, page, zoom),
         Job::RenderPageThumbs { path, pages, zoom } => render_page_thumbs(&path, &pages, zoom),
         Job::FilePageCount { path } => file_page_count(&path),
         Job::FilePageSizes { path } => file_page_sizes(&path),
         Job::RenderThumb { path, size } => render_thumb(&path, size),
-    };
+    }))
+    .unwrap_or_else(|_| {
+        tracing::warn!("worker job panicked; check libpdfium availability");
+        JobResult::Error("worker job panicked".to_string())
+    });
     let _ = job.reply.send(result);
 }
 
