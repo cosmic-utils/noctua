@@ -70,7 +70,6 @@ impl cosmic::Application for AppModel {
             current_size: None,
             pending_select: None,
             start_error: None,
-            last_preview_press: None,
         };
 
         let mut command = iced::Task::none();

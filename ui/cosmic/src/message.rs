@@ -73,12 +73,8 @@ pub enum Message {
         offset_y: f32,
         viewport_height: f32,
     },
-    /// Press on the preview content. Double clicks are detected in the
-    /// update handler with a generous window; iced's built-in detection
-    /// is too strict (300 ms, 6 px) for a document viewer.
-    PreviewPressed {
-        path: PathBuf,
-    },
+    /// Double click on the preview: open the PDF in a document tab.
+    PreviewDoubleClicked { path: PathBuf },
     /// A raster or SVG file was rendered for the content area.
     FileRendered {
         path: PathBuf,
