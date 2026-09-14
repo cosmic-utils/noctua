@@ -172,9 +172,10 @@ fn load_if_valid(
 ) -> Result<(u32, u32, Vec<u8>), StorageError> {
     let file = std::fs::File::open(path)?;
     let mut decoder = png::Decoder::new(file);
-    // Foreign thumbnailers (cosmic-files, nautilus, …) store grayscale
-    // or palette PNGs; expand to RGB/RGBA 8-bit so the returned buffer
-    // always has one byte per channel.
+    // Foreign thumbnailers (cosmic-files, nautilus, …) may store palette
+    // or sub-8-bit grayscale PNGs. EXPAND normalizes those, but leaves
+    // 8-bit grayscale untouched; the match below expands every remaining
+    // color type to straight RGBA.
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder
         .read_info()
@@ -214,8 +215,22 @@ fn load_if_valid(
         png::ColorType::Rgba => buf[..frame.buffer_size()].to_vec(),
         png::ColorType::Rgb => {
             let mut out = Vec::with_capacity(frame.buffer_size() / 3 * 4);
-            for pixel in buf[..frame.buffer_size()].chunks(3) {
+            for pixel in buf[..frame.buffer_size()].as_chunks::<3>().0 {
                 out.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+            out
+        }
+        png::ColorType::Grayscale => {
+            let mut out = Vec::with_capacity(frame.buffer_size() * 4);
+            for &gray in &buf[..frame.buffer_size()] {
+                out.extend_from_slice(&[gray, gray, gray, 255]);
+            }
+            out
+        }
+        png::ColorType::GrayscaleAlpha => {
+            let mut out = Vec::with_capacity(frame.buffer_size() / 2 * 4);
+            for pixel in buf[..frame.buffer_size()].as_chunks::<2>().0 {
+                out.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
             }
             out
         }
