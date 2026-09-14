@@ -532,15 +532,9 @@ impl PdfOpsManager {
             .get((page - 1) as PdfPageIndex)
             .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
 
-        let page_w = pdf_page.width().value;
-        let page_h = pdf_page.height().value;
-
-        let target_w = ((page_w * zoom).ceil() as i32).max(1);
-        let target_h = ((page_h * zoom).ceil() as i32).max(1);
-
-        let config = PdfRenderConfig::new()
-            .set_target_width(target_w)
-            .set_maximum_height(target_h);
+        // scale_page_by_factor expresses the zoom directly and lets
+        // pdfium handle the points-to-pixels conversion.
+        let config = PdfRenderConfig::new().scale_page_by_factor(zoom);
 
         let bitmap = pdf_page.render_with_config(&config).map_err(pdfium_err)?;
         let image = bitmap.as_image();
