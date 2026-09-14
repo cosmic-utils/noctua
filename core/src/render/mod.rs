@@ -2,9 +2,8 @@
 // core/src/render/mod.rs
 //
 // UI-independent render engine.
-// Takes a LoadedContent + page + zoom, returns pure RGBA pixels.
+// Loads a document and renders it to pure RGBA pixels.
 
-use crate::document::PageInfo;
 use crate::storage::StorageError;
 use std::path::Path;
 
@@ -32,9 +31,6 @@ pub enum LoadedContent {
         width: f32,
         height: f32,
     },
-    /// Placeholder variant so the enum stays non-empty without any render feature.
-    #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
-    _Phantom,
 }
 
 /// Load a document from disk for rendering.
@@ -132,9 +128,6 @@ pub fn render_page(content: &LoadedContent, zoom: f32) -> Result<RenderedPage, R
             width,
             height,
         } => render_svg(tree.as_ref(), *width, *height, zoom),
-
-        #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
-        _ => render_placeholder(800, 600, zoom),
     }
 }
 
@@ -172,34 +165,6 @@ pub fn render_page_rotated(
     }
 
     Ok(page)
-}
-
-/// Get page layout info for a loaded document.
-///
-/// For raster/SVG this returns a single page. For PDF it returns all pages.
-pub fn page_infos(content: &LoadedContent) -> Vec<PageInfo> {
-    match content {
-        LoadedContent::Raster { width, height, .. } => {
-            vec![PageInfo {
-                width_pt: *width as f32,
-                height_pt: *height as f32,
-            }]
-        }
-
-        #[cfg(feature = "resvg")]
-        LoadedContent::Svg { width, height, .. } => {
-            vec![PageInfo {
-                width_pt: *width,
-                height_pt: *height,
-            }]
-        }
-
-        #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
-        _ => vec![PageInfo {
-            width_pt: 800.0,
-            height_pt: 600.0,
-        }],
-    }
 }
 
 // ── Raster Rendering ──
@@ -282,24 +247,6 @@ fn render_svg(
         })
         .collect();
 
-    Ok(RenderedPage {
-        width: w,
-        height: h,
-        rgba_data: data,
-    })
-}
-
-// ── Placeholder (no backend available) ──
-
-#[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
-fn render_placeholder(w: u32, _h: u32, zoom: f32) -> Result<RenderedPage, RenderError> {
-    let w = ((w as f32) * zoom).round() as u32;
-    let h = 60u32; // Fixed height signals "unsupported" to the consumer
-    let bg = [40u8, 42, 54, 255]; // Dark background
-    let mut data = Vec::with_capacity((w * h * 4) as usize);
-    for _ in 0..(w * h) {
-        data.extend_from_slice(&bg);
-    }
     Ok(RenderedPage {
         width: w,
         height: h,

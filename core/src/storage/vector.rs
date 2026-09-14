@@ -158,25 +158,3 @@ fn parse_svg_length(length_str: &str) -> Result<f32, StorageError> {
         _ => Ok(value),                          // Unknown unit, assume pixels
     }
 }
-
-/// Quick check if a file is likely an SVG based on its content.
-///
-/// Reads the first few bytes to check for SVG or XML declaration.
-pub fn is_likely_svg(path: &Path) -> Result<bool, StorageError> {
-    let mut file = fs::File::open(path)?;
-    let mut buffer = [0u8; 256];
-    let bytes_read = file.read(&mut buffer)?;
-    let content = &buffer[..bytes_read];
-
-    // Convert to string for pattern matching
-    let content_str = std::str::from_utf8(content).unwrap_or("");
-
-    // Check for SVG or XML declaration in the first part of the file
-    Ok(content_str.trim_start().starts_with("<?xml")
-        || content_str.trim_start().starts_with("<svg")
-        || content_str.contains("xmlns=\"http://www.w3.org/2000/svg\"")
-        || content_str.contains("xmlns='http://www.w3.org/2000/svg'"))
-}
-
-// Need to import Read trait for is_likely_svg
-use std::io::Read;
