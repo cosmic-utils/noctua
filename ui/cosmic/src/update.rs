@@ -1153,6 +1153,7 @@ impl AppModel {
             }
 
             Message::PreviewDoubleClicked { path } => {
+                tracing::debug!("preview double-click received: {path:?}");
                 let in_folder_tab = self.active_tab().is_some_and(|tab| {
                     matches!(self.tabs.get(&tab), Some(TabContent::Folder { .. }))
                 });
