@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::*;
 
-use super::bindings::pdfium;
+use super::bindings::pdfium_or_err;
 use super::command::{Command, CommandResult};
 use super::error::PdfOpsError;
 use super::model::{AnnotationColor, BindSource};
@@ -130,7 +130,7 @@ impl PdfOpsManager {
     }
 
     fn open(&mut self, path: &Path) -> Result<(), PdfOpsError> {
-        let document = pdfium()
+        let document = pdfium_or_err()?
             .load_pdf_from_file(path, None)
             .map_err(pdfium_err)?;
         self.document = Some(document);
@@ -140,7 +140,7 @@ impl PdfOpsManager {
     }
 
     fn new_document(&mut self) -> Result<(), PdfOpsError> {
-        let document = pdfium().create_new_pdf().map_err(pdfium_err)?;
+        let document = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
         self.document = Some(document);
         self.path = None;
         self.dirty = true;
@@ -197,7 +197,7 @@ impl PdfOpsManager {
             }
         }
 
-        let mut document = pdfium().create_new_pdf().map_err(pdfium_err)?;
+        let mut document = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
 
         for source in &sources {
             match crate::storage::document::load(&source.path)
@@ -205,7 +205,7 @@ impl PdfOpsManager {
                 .kind
             {
                 crate::document::Kind::Portable(_) => {
-                    let src_doc = pdfium()
+                    let src_doc = pdfium_or_err()?
                         .load_pdf_from_file(&source.path, None)
                         .map_err(pdfium_err)?;
                     match &source.pages {
@@ -251,7 +251,7 @@ impl PdfOpsManager {
             .kind
         {
             crate::document::Kind::Portable(_) => {
-                let src_doc = pdfium()
+                let src_doc = pdfium_or_err()?
                     .load_pdf_from_file(&source.path, None)
                     .map_err(pdfium_err)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
@@ -267,7 +267,7 @@ impl PdfOpsManager {
                 // Raster pages are inserted by binding into a scratch document
                 // and importing the resulting page. Simple approach: bind into
                 // a fresh document, then import its single page.
-                let mut scratch = pdfium().create_new_pdf().map_err(pdfium_err)?;
+                let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
                 embed_raster_page(&mut scratch, &source.path)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
                 document
@@ -276,7 +276,7 @@ impl PdfOpsManager {
                     .map_err(pdfium_err)?;
             }
             crate::document::Kind::Vector(_) => {
-                let mut scratch = pdfium().create_new_pdf().map_err(pdfium_err)?;
+                let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
                 embed_vector_page(&mut scratch, &source.path)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
                 document
@@ -329,7 +329,7 @@ impl PdfOpsManager {
         let to_idx = (to - 1) as PdfPageIndex;
 
         // 1. Copy the source page into a scratch document.
-        let mut scratch = pdfium().create_new_pdf().map_err(pdfium_err)?;
+        let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
         {
             let document = self.require_document()?;
             if from_idx >= document.pages().len() {
