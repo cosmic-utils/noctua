@@ -42,12 +42,12 @@ pub fn load_pdf_metadata(path: &Path) -> Result<(Portable, u32), StorageError> {
             PdfDocumentVersion::Unset => "unknown".into(),
         };
 
-        // PdfSecurityHandlerRevision is not publicly exported; use Debug formatting
-        // to check if the document has any security ("Unprotected" means no encryption).
+        // Any security handler revision other than Unprotected means the
+        // document is encrypted.
         let is_encrypted = document
             .permissions()
             .security_handler_revision()
-            .map(|rev| !format!("{:?}", rev).contains("Unprotected"))
+            .map(|revision| revision != PdfSecurityHandlerRevision::Unprotected)
             .unwrap_or(false);
 
         // Check if any page has a text layer
