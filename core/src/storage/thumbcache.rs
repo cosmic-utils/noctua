@@ -199,6 +199,12 @@ fn load_if_valid(
         .next_frame(&mut buf)
         .map_err(|e| StorageError::Thumb(format!("PNG frame error: {e}")))?;
 
+    // A cache entry without pixel data is corrupt; reject it so the
+    // caller regenerates the thumbnail.
+    if frame.width == 0 || frame.height == 0 || frame.buffer_size() == 0 {
+        return Err(StorageError::Thumb("Empty thumbnail frame".to_string()));
+    }
+
     Ok((
         frame.width,
         frame.height,
@@ -263,7 +269,10 @@ fn generate_raster(path: &Path, size: &ThumbSize) -> Result<(u32, u32, Vec<u8>),
     let scale = calculate_fit_scale(iw as f64, ih as f64, max as f64, max as f64);
     let w = ((iw as f64) * scale) as u32;
     let h = ((ih as f64) * scale) as u32;
-    let thumb = img.resize(w, h, FilterType::Triangle);
+    // resize_exact, not resize: resize re-fits the aspect ratio and can
+    // return different dimensions, which would not match the header the
+    // PNG encoder writes — producing a cache entry without pixel data.
+    let thumb = img.resize_exact(w, h, FilterType::Triangle);
     let data = thumb.to_rgba8().into_raw();
     Ok((w, h, data))
 }

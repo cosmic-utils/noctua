@@ -69,6 +69,27 @@ fn get_or_create_rejects_pdfs() {
 }
 
 #[test]
+fn large_non_square_image_roundtrips_exactly() {
+    let dir = common::temp_dir("thumb-large");
+    let cache = dir.join("cache");
+    // Non-square: the computed target (128 x 51) differs from what an
+    // aspect-preserving resize would produce, which used to write cache
+    // entries without pixel data.
+    let img = common::make_png(&dir, "img.png", 300, 120);
+
+    let first = thumbcache::get_or_create_at(&cache, &img, ThumbSize::Normal).unwrap();
+    assert_eq!((first.0, first.1), (128, 51));
+    assert_eq!(first.2.len(), 128 * 51 * 4);
+
+    // The cache file itself must reload to the same pixels.
+    let cached = thumbcache::lookup_at(&cache, &img, ThumbSize::Normal)
+        .unwrap()
+        .expect("cache entry must be a valid PNG");
+    assert_eq!(cached, first);
+    common::remove_dir(&dir);
+}
+
+#[test]
 fn changed_source_invalidates_cache_entry() {
     let dir = common::temp_dir("thumb-stale");
     let cache = dir.join("cache");
