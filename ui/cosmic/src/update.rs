@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cosmic::iced::keyboard::Key;
-use cosmic::iced::widget::scrollable::{scroll_to, AbsoluteOffset};
+use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 use cosmic::widget::menu;
 use cosmic::widget::menu::key_bind::Modifier;
 use cosmic::widget::segmented_button::Entity;
@@ -24,9 +24,9 @@ use noctua_core::storage::thumbcache::ThumbSize;
 use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{
-    AppModel, CurrentImage, CurrentTarget, DocumentPreview, NavEntry, PageSlot, Rgba, StripEntry,
-    TabContent, TabUiState, PREVIEW_FULL_CACHE, PREVIEW_SCROLL_ID, SESSION_NAME,
-    STRIP_INITIAL_THUMBS, THUMB_ZOOM, ZOOM_STEP,
+    AppModel, CurrentImage, CurrentTarget, DocumentPreview, NavEntry, PREVIEW_FULL_CACHE,
+    PREVIEW_SCROLL_ID, PageSlot, Rgba, SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM,
+    TabContent, TabUiState, ZOOM_STEP,
 };
 
 /// Estimated strip tile height including spacing, for lazy thumbnails.
@@ -140,11 +140,14 @@ impl AppModel {
                 thumb: None,
             })
             .collect();
-        self.tab_ui.insert(tab, TabUiState {
-            strip,
-            selected,
-            preview,
-        });
+        self.tab_ui.insert(
+            tab,
+            TabUiState {
+                strip,
+                selected,
+                preview,
+            },
+        );
     }
 
     /// Activate the current tab: restore its selection, render it and
@@ -165,7 +168,12 @@ impl AppModel {
             Some(TabContent::Document { pages, .. }) => *pages > 0,
             None => false,
         };
-        if has_content && self.tab_ui.get(&tab).is_none_or(|state| state.strip.is_empty()) {
+        if has_content
+            && self
+                .tab_ui
+                .get(&tab)
+                .is_none_or(|state| state.strip.is_empty())
+        {
             self.rebuild_strip(tab);
         }
 
@@ -452,7 +460,11 @@ impl AppModel {
                 for (index, target) in wanted {
                     match target {
                         NavEntry::File { path } => {
-                            results.push((index, worker.thumbnail(&path, ThumbSize::Normal)));
+                            let thumb = worker.thumbnail(&path, ThumbSize::Normal);
+                            if thumb.is_none() {
+                                tracing::warn!("thumbnail generation failed for {path:?}");
+                            }
+                            results.push((index, thumb));
                         }
                         NavEntry::Page { path, page } => {
                             page_requests.push((index, path, page));
@@ -568,7 +580,9 @@ impl AppModel {
     /// Re-render the current target at the current zoom.
     fn render_current(&mut self) -> iced::Task<cosmic::Action<Message>> {
         match self.current_target.clone() {
-            Some(CurrentTarget::File { path }) if storage::document::is_pdf(&path).unwrap_or(false) => {
+            Some(CurrentTarget::File { path })
+                if storage::document::is_pdf(&path).unwrap_or(false) =>
+            {
                 // Zoom change on a preview: clear full pages, keep the
                 // thumbnails and re-render the visible window.
                 let Some(tab) = self.active_tab() else {
@@ -687,7 +701,10 @@ impl AppModel {
     }
 
     /// Open the tabs of a restored session.
-    pub(crate) fn restore_session(&mut self, session: Session) -> iced::Task<cosmic::Action<Message>> {
+    pub(crate) fn restore_session(
+        &mut self,
+        session: Session,
+    ) -> iced::Task<cosmic::Action<Message>> {
         let mut tasks: Vec<iced::Task<cosmic::Action<Message>>> = Vec::new();
 
         for (index, path) in session.browser_tabs.into_iter().enumerate() {
