@@ -41,6 +41,19 @@ impl AnnotationColor {
     }
 }
 
+/// PDF properties read from a file via pdfium.
+#[derive(Debug, Clone)]
+pub struct PdfMetadata {
+    /// PDF specification version as a display string ("1.7", "2.0", …).
+    pub version: String,
+    /// Whether the document uses a security handler (i.e. is encrypted).
+    pub is_encrypted: bool,
+    /// Whether at least one page exposes a text layer.
+    pub has_text_layer: bool,
+    /// Number of pages in the document.
+    pub page_count: u32,
+}
+
 /// Common annotation colors used by the annotation mode.
 pub mod palette {
     use super::AnnotationColor;

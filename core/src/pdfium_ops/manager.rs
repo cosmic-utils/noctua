@@ -12,7 +12,7 @@ use pdfium_render::prelude::*;
 use super::bindings::pdfium_or_err;
 use super::command::{Command, CommandResult};
 use super::error::PdfOpsError;
-use super::model::{AnnotationColor, BindSource};
+use super::model::{AnnotationColor, BindSource, PdfMetadata};
 
 fn pdfium_err(e: PdfiumError) -> PdfOpsError {
     PdfOpsError::Pdfium(format!("{e:?}"))
@@ -569,6 +569,40 @@ impl PdfOpsManager {
         let rgba = image.to_rgba8();
         Ok((rgba.width(), rgba.height(), rgba.into_raw()))
     }
+}
+
+/// Read PDF metadata (version, encryption, text layer, page count) via
+/// pdfium without keeping the document open. pdfium access belongs here,
+/// not in the storage layer.
+pub fn read_pdf_metadata(path: &Path) -> Result<PdfMetadata, PdfOpsError> {
+    let document = pdfium_or_err()?
+        .load_pdf_from_file(path, None)
+        .map_err(pdfium_err)?;
+
+    let version = match document.version() {
+        PdfDocumentVersion::Pdf1_0 => "1.0".to_string(),
+        PdfDocumentVersion::Pdf1_1 => "1.1".to_string(),
+        PdfDocumentVersion::Pdf1_2 => "1.2".to_string(),
+        PdfDocumentVersion::Pdf1_3 => "1.3".to_string(),
+        PdfDocumentVersion::Pdf1_4 => "1.4".to_string(),
+        PdfDocumentVersion::Pdf1_5 => "1.5".to_string(),
+        PdfDocumentVersion::Pdf1_6 => "1.6".to_string(),
+        PdfDocumentVersion::Pdf1_7 => "1.7".to_string(),
+        PdfDocumentVersion::Pdf2_0 => "2.0".to_string(),
+        PdfDocumentVersion::Other(v) => format!("{}.{}", v / 10, v % 10),
+        PdfDocumentVersion::Unset => "unknown".to_string(),
+    };
+
+    Ok(PdfMetadata {
+        version,
+        is_encrypted: document
+            .permissions()
+            .security_handler_revision()
+            .map(|revision| revision != PdfSecurityHandlerRevision::Unprotected)
+            .unwrap_or(false),
+        has_text_layer: document.pages().iter().any(|page| page.text().is_ok()),
+        page_count: document.pages().len() as u32,
+    })
 }
 
 /// Embed a raster image as a full-page image in the given document.
