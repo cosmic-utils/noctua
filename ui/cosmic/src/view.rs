@@ -5,16 +5,16 @@
 
 use cosmic::iced::alignment::{Horizontal, Vertical};
 use cosmic::iced::{Alignment, ContentFit, Length};
-use cosmic::widget::{self, icon, tab_bar};
 use cosmic::prelude::*;
+use cosmic::widget::{self, icon, tab_bar};
 
 use noctua_core::storage;
 
 use crate::fl;
 use crate::message::Message;
 use crate::model::{
-    AppModel, CurrentTarget, DocumentPreview, PageSlot, TabContent, PREVIEW_SCROLL_ID,
-    STRIP_SCROLL_ID,
+    AppModel, CurrentTarget, DocumentPreview, PREVIEW_SCROLL_ID, PageSlot, STRIP_SCROLL_ID,
+    TabContent,
 };
 
 /// Strip tile size in logical pixels.
@@ -149,7 +149,7 @@ fn preview_view<'a>(preview: &'a DocumentPreview) -> Element<'a, Message> {
         });
 
     widget::mouse_area(scrollable)
-        .on_double_click(Message::PreviewDoubleClicked {
+        .on_press(Message::PreviewPressed {
             path: preview.path.clone(),
         })
         .into()
@@ -217,20 +217,18 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
 
             // In a folder tab, a double click on a single-page PDF dives
             // into a document tab, mirroring the preview behavior.
-            let in_folder_tab = app.active_tab().is_some_and(|tab| {
-                matches!(app.tabs.get(&tab), Some(TabContent::Folder { .. }))
-            });
+            let in_folder_tab = app
+                .active_tab()
+                .is_some_and(|tab| matches!(app.tabs.get(&tab), Some(TabContent::Folder { .. })));
             let dive = in_folder_tab
                 && matches!(
                     &app.current_target,
                     Some(CurrentTarget::Page { path, page: 1 })
                         if storage::document::is_pdf(path).unwrap_or(false)
                 );
-            if dive
-                && let Some(CurrentTarget::Page { path, .. }) = &app.current_target
-            {
+            if dive && let Some(CurrentTarget::Page { path, .. }) = &app.current_target {
                 return widget::mouse_area(content)
-                    .on_double_click(Message::PreviewDoubleClicked { path: path.clone() })
+                    .on_press(Message::PreviewPressed { path: path.clone() })
                     .into();
             }
             content
@@ -262,8 +260,7 @@ fn status_bar(app: &AppModel) -> Element<'_, Message> {
                 .on_press(Message::PrevEntry),
         )
         .push(
-            widget::button::icon(icon::from_name("go-next-symbolic"))
-                .on_press(Message::NextEntry),
+            widget::button::icon(icon::from_name("go-next-symbolic")).on_press(Message::NextEntry),
         );
 
     let position = position_label(app);

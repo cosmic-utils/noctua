@@ -172,4 +172,6 @@ pub struct AppModel {
     /// Path of a start argument that could not be opened; shown in the
     /// empty view instead of the folder hint.
     pub(crate) start_error: Option<String>,
+    /// Last press on a preview, for double-click detection (500 ms window).
+    pub(crate) last_preview_press: Option<(PathBuf, std::time::Instant)>,
 }

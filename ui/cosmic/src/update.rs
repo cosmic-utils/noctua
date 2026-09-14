@@ -1152,7 +1152,23 @@ impl AppModel {
                 return self.request_strip_thumbs(tab, first..last.min(state.strip.len()));
             }
 
-            Message::PreviewDoubleClicked { path } => {
+            Message::PreviewPressed { path } => {
+                // Double-click detection with a generous window; iced's
+                // built-in one (300 ms, 6 px) rejects too many users.
+                let now = std::time::Instant::now();
+                let is_double = self
+                    .last_preview_press
+                    .as_ref()
+                    .is_some_and(|(pressed, at)| {
+                        *pressed == path
+                            && now.duration_since(*at) <= std::time::Duration::from_millis(500)
+                    });
+                self.last_preview_press = Some((path.clone(), now));
+                if !is_double {
+                    return iced::Task::none();
+                }
+                self.last_preview_press = None;
+
                 let in_folder_tab = self.active_tab().is_some_and(|tab| {
                     matches!(self.tabs.get(&tab), Some(TabContent::Folder { .. }))
                 });
