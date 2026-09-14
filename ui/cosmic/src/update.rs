@@ -419,7 +419,7 @@ impl AppModel {
         let tab = self.active_tab()?;
         let state = self.tab_ui.get(&tab)?;
         let preview = state.preview.as_ref()?;
-        (preview.path == *path).then(|| preview.pages.len() as u32)
+        (preview.path == *path).then_some(preview.pages.len() as u32)
     }
 
     fn preview_zoom(&self, path: &PathBuf) -> Option<f32> {
@@ -1152,19 +1152,22 @@ impl AppModel {
                 return self.request_strip_thumbs(tab, first..last.min(state.strip.len()));
             }
 
-            Message::PreviewDoubleClicked { path } => {
-                tracing::debug!("preview double-click received: {path:?}");
-                let in_folder_tab = self.active_tab().is_some_and(|tab| {
-                    matches!(self.tabs.get(&tab), Some(TabContent::Folder { .. }))
-                });
-                let dives = matches!(
-                    &self.current_target,
-                    Some(CurrentTarget::File { path: p }) if p == &path
-                ) || matches!(
-                    &self.current_target,
-                    Some(CurrentTarget::Page { path: p, page: 1 }) if p == &path
-                );
-                if in_folder_tab && dives && storage::document::is_pdf(&path).unwrap_or(false) {
+            Message::StripDoubleClicked(index) => {
+                // Opening is only defined for PDFs: dive into a document tab.
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let Some(target) = self
+                    .tab_ui
+                    .get(&tab)
+                    .and_then(|state| state.strip.get(index))
+                    .map(|entry| entry.target.clone())
+                else {
+                    return iced::Task::none();
+                };
+                if let NavEntry::File { path } = target
+                    && storage::document::is_pdf(&path).unwrap_or(false)
+                {
                     return self.dive_into(path);
                 }
             }

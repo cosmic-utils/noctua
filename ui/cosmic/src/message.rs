@@ -23,6 +23,9 @@ pub enum Message {
     CloseTab,
     /// An entry of the thumbnail strip was activated (0-based index).
     StripActivated(usize),
+    /// An entry of the thumbnail strip was double-clicked: open it.
+    /// PDFs dive into a document tab.
+    StripDoubleClicked(usize),
     /// Move to the previous strip entry.
     PrevEntry,
     /// Move to the next strip entry.
@@ -73,8 +76,6 @@ pub enum Message {
         offset_y: f32,
         viewport_height: f32,
     },
-    /// Double click on the preview: open the PDF in a document tab.
-    PreviewDoubleClicked { path: PathBuf },
     /// A raster or SVG file was rendered for the content area.
     FileRendered {
         path: PathBuf,
