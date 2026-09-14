@@ -171,7 +171,11 @@ fn load_if_valid(
     expected_mtime: u64,
 ) -> Result<(u32, u32, Vec<u8>), StorageError> {
     let file = std::fs::File::open(path)?;
-    let decoder = png::Decoder::new(file);
+    let mut decoder = png::Decoder::new(file);
+    // Foreign thumbnailers (cosmic-files, nautilus, …) store grayscale
+    // or palette PNGs; expand to RGB/RGBA 8-bit so the returned buffer
+    // always has one byte per channel.
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder
         .read_info()
         .map_err(|e| StorageError::Thumb(format!("PNG decode error: {e}")))?;
@@ -205,11 +209,24 @@ fn load_if_valid(
         return Err(StorageError::Thumb("Empty thumbnail frame".to_string()));
     }
 
-    Ok((
-        frame.width,
-        frame.height,
-        buf[..frame.buffer_size()].to_vec(),
-    ))
+    // Normalize to RGBA: the consumer treats the buffer as RGBA8.
+    let rgba = match frame.color_type {
+        png::ColorType::Rgba => buf[..frame.buffer_size()].to_vec(),
+        png::ColorType::Rgb => {
+            let mut out = Vec::with_capacity(frame.buffer_size() / 3 * 4);
+            for pixel in buf[..frame.buffer_size()].chunks(3) {
+                out.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+            out
+        }
+        other => {
+            return Err(StorageError::Thumb(format!(
+                "Unsupported thumbnail color type: {other:?}"
+            )));
+        }
+    };
+
+    Ok((frame.width, frame.height, rgba))
 }
 
 fn save(

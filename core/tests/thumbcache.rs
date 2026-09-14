@@ -90,6 +90,49 @@ fn large_non_square_image_roundtrips_exactly() {
 }
 
 #[test]
+fn loads_foreign_grayscale_entry_as_rgba() {
+    let dir = common::temp_dir("thumb-foreign");
+    let cache = dir.join("cache");
+    let img = common::make_png(&dir, "img.png", 32, 16);
+
+    // Simulate a foreign thumbnailer (cosmic-files, nautilus, …): a
+    // grayscale PNG with the spec metadata. The loader must expand it
+    // to RGBA, or the UI would read the wrong buffer size.
+    let uri = format!("file://{}", img.display());
+    let mtime = std::fs::metadata(&img)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let hash = format!("{:x}", md5::compute(uri.as_bytes()));
+    let cache_dir = cache.join("thumbnails").join("normal");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    let file = std::fs::File::create(cache_dir.join(format!("{hash}.png"))).unwrap();
+    let mut encoder = png::Encoder::new(file, 32, 16);
+    encoder.set_color(png::ColorType::Grayscale);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .add_text_chunk("Thumb::URI".to_string(), uri)
+        .unwrap();
+    encoder
+        .add_text_chunk("Thumb::MTime".to_string(), mtime.to_string())
+        .unwrap();
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&[128u8; 32 * 16]).unwrap();
+    drop(writer);
+
+    let loaded = thumbcache::lookup_at(&cache, &img, ThumbSize::Normal)
+        .unwrap()
+        .expect("foreign entry must load");
+    assert_eq!((loaded.0, loaded.1), (32, 16));
+    assert_eq!(loaded.2.len(), 32 * 16 * 4);
+    assert_eq!(&loaded.2[0..4], &[128, 128, 128, 255]);
+    common::remove_dir(&dir);
+}
+
+#[test]
 fn changed_source_invalidates_cache_entry() {
     let dir = common::temp_dir("thumb-stale");
     let cache = dir.join("cache");

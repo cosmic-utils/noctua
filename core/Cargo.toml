@@ -27,8 +27,10 @@ tracing = "0.1"
 [dev-dependencies]
 filetime = "0.2"
 image = "0.25"
+md5 = "0.7"
 noctua-core-test-common = { path = "tests/common" }
 pdfium-render = { version = "0.8", features = ["sync"] }
+png = "0.17"
 
 [features]
 default = ["pdfium-render", "resvg"]
