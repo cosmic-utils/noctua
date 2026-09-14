@@ -253,9 +253,12 @@ fn render_raster(
 
     let img = image::RgbaImage::from_raw(width, height, rgba_data.to_vec())
         .ok_or_else(|| RenderError::Other("Failed to construct image buffer".to_string()))?;
-    let w = ((width as f32) * zoom).round() as u32;
-    let h = ((height as f32) * zoom).round() as u32;
-    let scaled = image::DynamicImage::ImageRgba8(img).resize(w, h, FilterType::Triangle);
+    let w = (((width as f32) * zoom).round() as u32).max(1);
+    let h = (((height as f32) * zoom).round() as u32).max(1);
+    // resize_exact, not resize: resize re-fits the aspect ratio and can
+    // return dimensions other than the ones reported to the caller, so the
+    // declared size would no longer match the pixel buffer.
+    let scaled = image::DynamicImage::ImageRgba8(img).resize_exact(w, h, FilterType::Triangle);
     let rgba = scaled.to_rgba8();
 
     Ok(RenderedPage {

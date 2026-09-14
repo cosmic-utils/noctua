@@ -21,6 +21,21 @@ fn loads_raster_and_renders_at_zoom() {
 }
 
 #[test]
+fn scaled_raster_dimensions_match_buffer() {
+    // 2 × 3 at 0.75 reports 2 × 2; an aspect-preserving resize would return
+    // a smaller buffer, leaving the declared size and the pixels out of sync.
+    let dir = common::temp_dir("render-raster-odd-zoom");
+    let png = common::make_png(&dir, "img.png", 2, 3);
+
+    let content = render::load(&png).unwrap();
+    let page = render::render_page(&content, 1, 0.75).unwrap();
+    assert_eq!(page.width, 2);
+    assert_eq!(page.height, 2);
+    assert_eq!(page.rgba_data.len(), 2 * 2 * 4);
+    common::remove_dir(&dir);
+}
+
+#[test]
 fn loads_svg_and_renders() {
     let dir = common::temp_dir("render-svg");
     let svg = common::make_svg(&dir, "plan.svg");
