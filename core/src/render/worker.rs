@@ -7,8 +7,8 @@
 
 use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use crate::pdfium_ops::{Command, CommandResult, PdfOpsManager};
@@ -156,8 +156,7 @@ impl Worker {
     }
 }
 
-/// Convenience wrapper shared by UIs: a Worker handle plus a manager lock
-/// so the current open-document state stays queryable without a pdfium call.
+/// Convenience wrapper shared by UIs: a cloneable handle to the worker.
 #[derive(Clone)]
 pub struct SharedWorker {
     inner: Arc<WorkerShared>,
@@ -165,7 +164,6 @@ pub struct SharedWorker {
 
 struct WorkerShared {
     worker: Worker,
-    dirty: Mutex<bool>,
 }
 
 impl SharedWorker {
@@ -174,26 +172,13 @@ impl SharedWorker {
         Self {
             inner: Arc::new(WorkerShared {
                 worker: Worker::spawn(),
-                dirty: Mutex::new(false),
             }),
         }
     }
 
     /// Submit a job and block until the result arrives.
     pub fn execute(&self, priority: Priority, job: Job) -> JobResult {
-        if matches!(
-            job,
-            Job::Op(Command::Save) | Job::Op(Command::SaveAs { .. })
-        ) && let Ok(mut dirty) = self.inner.dirty.lock()
-        {
-            *dirty = false;
-        }
         self.inner.worker.execute(priority, job)
-    }
-
-    /// Whether the open document has unsaved changes.
-    pub fn dirty(&self) -> bool {
-        self.inner.dirty.lock().map(|d| *d).unwrap_or(false)
     }
 
     /// Thumbnail for a file: freedesktop cache first; on a miss, PDFs
