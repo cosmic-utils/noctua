@@ -33,7 +33,7 @@ impl ThumbSize {
         }
     }
 
-    fn max_px(&self) -> u32 {
+    pub(crate) fn max_px(&self) -> u32 {
         match self {
             ThumbSize::Normal => 128,
             ThumbSize::Large => 256,
@@ -143,7 +143,36 @@ fn cache_dir_at(cache_root: &Path, size: &ThumbSize) -> Result<PathBuf, StorageE
 }
 
 fn file_uri(path: &Path) -> String {
-    format!("file://{}", path.display())
+    let mut uri = String::from("file://");
+    for byte in path_bytes(path) {
+        if is_uri_path_char(byte) {
+            uri.push(byte as char);
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
+}
+
+/// Raw bytes of a path. On Unix this is lossless; elsewhere the lossy UTF-8
+/// representation is used (Linux/COSMIC is the target).
+fn path_bytes(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        path.to_string_lossy().as_bytes().to_vec()
+    }
+}
+
+/// Bytes left unescaped in a file-URI path: RFC 3986 unreserved characters
+/// plus the sub-delimiters (and `:`/`@`/`/`) GLib leaves in path segments.
+fn is_uri_path_char(byte: u8) -> bool {
+    const UNRESERVED: &[u8] = b"-._~!$&'()*+,;=:@/";
+    byte.is_ascii_alphanumeric() || UNRESERVED.contains(&byte)
 }
 
 fn file_mtime(path: &Path) -> Result<u64, StorageError> {
@@ -364,4 +393,27 @@ fn generate_svg(path: &Path, size: &ThumbSize) -> Result<(u32, u32, Vec<u8>), St
         .collect();
 
     Ok((w, h, data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_uri;
+    use std::path::Path;
+
+    #[test]
+    fn file_uri_is_minimally_encoded() {
+        assert_eq!(
+            file_uri(Path::new("/home/joe/photos/me.png")),
+            "file:///home/joe/photos/me.png"
+        );
+        assert_eq!(
+            file_uri(Path::new("/home/joe/My Pictures/img.png")),
+            "file:///home/joe/My%20Pictures/img.png"
+        );
+        // Non-ASCII bytes are UTF-8 percent-encoded.
+        assert_eq!(
+            file_uri(Path::new("/home/joe/Büro/ü.png")),
+            "file:///home/joe/B%C3%BCro/%C3%BC.png"
+        );
+    }
 }

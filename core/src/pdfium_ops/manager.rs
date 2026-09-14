@@ -120,6 +120,16 @@ impl PdfOpsManager {
                 },
                 Err(e) => CommandResult::Error(e),
             },
+            Command::RenderThumbnail { page, max_px } => {
+                match self.render_thumbnail(page, max_px) {
+                    Ok((width, height, rgba_data)) => CommandResult::Rendered {
+                        width,
+                        height,
+                        rgba_data,
+                    },
+                    Err(e) => CommandResult::Error(e),
+                }
+            }
         }
     }
 
@@ -536,6 +546,24 @@ impl PdfOpsManager {
         // pdfium handle the points-to-pixels conversion.
         let config = PdfRenderConfig::new().scale_page_by_factor(zoom);
 
+        let bitmap = pdf_page.render_with_config(&config).map_err(pdfium_err)?;
+        let image = bitmap.as_image();
+        let rgba = image.to_rgba8();
+        Ok((rgba.width(), rgba.height(), rgba.into_raw()))
+    }
+
+    /// Render a page as a thumbnail that fits inside `max_px` × `max_px`.
+    fn render_thumbnail(&self, page: u32, max_px: u32) -> Result<(u32, u32, Vec<u8>), PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        let document = self.require_document()?;
+        let pdf_page = document
+            .pages()
+            .get((page - 1) as PdfPageIndex)
+            .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
+
+        let config = PdfRenderConfig::new().thumbnail(max_px as i32);
         let bitmap = pdf_page.render_with_config(&config).map_err(pdfium_err)?;
         let image = bitmap.as_image();
         let rgba = image.to_rgba8();

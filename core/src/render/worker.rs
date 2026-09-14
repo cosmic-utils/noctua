@@ -447,9 +447,9 @@ fn render_thumb(path: &std::path::Path, size: ThumbSize) -> JobResult {
         path: path.to_path_buf(),
     }) {
         CommandResult::Ok => {
-            let result = scratch.execute(Command::RenderPage {
+            let result = scratch.execute(Command::RenderThumbnail {
                 page: 1,
-                zoom: 0.25, // first page at reduced size; the cache entry is the source of truth
+                max_px: size.max_px(),
             });
             match result {
                 CommandResult::Rendered {

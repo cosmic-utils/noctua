@@ -391,6 +391,39 @@ fn render_page_returns_pixels() {
 }
 
 #[test]
+fn render_thumbnail_fits_size_box() {
+    let Some(pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("render-thumb");
+    let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(
+        mgr.execute(Command::Open { path: doc }),
+        CommandResult::Ok
+    ));
+    match mgr.execute(Command::RenderThumbnail {
+        page: 1,
+        max_px: 128,
+    }) {
+        CommandResult::Rendered {
+            width,
+            height,
+            rgba_data,
+        } => {
+            assert!(width > 0 && width <= 128, "width {width}");
+            assert!(height > 0 && height <= 128, "height {height}");
+            assert_eq!(rgba_data.len(), (width * height * 4) as usize);
+        }
+        other => panic!("expected Rendered, got {other:?}"),
+    }
+    common::remove_dir(&dir);
+}
+
+#[test]
 fn operations_without_open_document_fail() {
     let mut mgr = PdfOpsManager::new();
     assert!(matches!(

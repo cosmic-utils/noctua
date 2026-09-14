@@ -85,6 +85,10 @@ pub enum Command {
 
     /// Render a 1-based page at the given zoom factor, returning RGBA pixels.
     RenderPage { page: u32, zoom: f32 },
+
+    /// Render a 1-based page as a thumbnail that fits within `max_px` ×
+    /// `max_px`, returning RGBA pixels.
+    RenderThumbnail { page: u32, max_px: u32 },
 }
 
 /// Result of executing a command.
