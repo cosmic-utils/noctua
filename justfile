@@ -58,8 +58,9 @@ check-json: (check '--message-format=json')
 
 # Directory (or colon-separated directories) containing libpdfium.so,
 # e.g. a pdfium component build output or /usr/local/lib. Used to set
-# LD_LIBRARY_PATH when running the app and tests.
-pdfium-lib-dir := env('PDFIUM_LIB_DIR', '/usr/local/lib')
+# LD_LIBRARY_PATH when running the app and tests. Falls back to the
+# shell's LD_LIBRARY_PATH when PDFIUM_LIB_DIR is not set.
+pdfium-lib-dir := env('PDFIUM_LIB_DIR', env_var_or_default('LD_LIBRARY_PATH', '/usr/local/lib'))
 
 # Run the application for testing purposes
 run *args:
