@@ -6,8 +6,6 @@
 
 use crate::document::PageInfo;
 use crate::storage::StorageError;
-#[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
-use std::marker::PhantomData;
 use std::path::Path;
 
 #[cfg(feature = "pdfium-render")]
@@ -18,7 +16,7 @@ pub mod worker;
 /// The render engine consumes this to produce RGBA pixels.
 /// It is intentionally not serializable — it lives only in RAM.
 #[derive(Debug)]
-pub enum LoadedContent<'a> {
+pub enum LoadedContent {
     /// Single raster image (PNG, JPEG, WebP, etc.), already decoded
     /// to straight RGBA. `load` decodes exactly once; rendering reuses
     /// these pixels instead of decoding the file again.
@@ -30,18 +28,13 @@ pub enum LoadedContent<'a> {
     /// SVG document parsed into a resvg tree.
     #[cfg(feature = "resvg")]
     Svg {
-        tree: resvg::usvg::Tree,
+        tree: Box<resvg::usvg::Tree>,
         width: f32,
         height: f32,
     },
-    /// PDF document loaded via pdfium.
-    #[cfg(feature = "pdfium-render")]
-    Pdf {
-        document: pdfium_render::prelude::PdfDocument<'a>,
-    },
-    /// Placeholder variant that carries the lifetime when no render features are active.
+    /// Placeholder variant so the enum stays non-empty without any render feature.
     #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
-    _Phantom { _marker: PhantomData<&'a ()> },
+    _Phantom,
 }
 
 /// Load a document from disk for rendering.
@@ -49,7 +42,7 @@ pub enum LoadedContent<'a> {
 /// Supports raster images and SVG. PDFs cannot be loaded this way:
 /// pdfium is not thread-safe, so PDF rendering must go through the
 /// worker (`render::worker`).
-pub fn load(path: &Path) -> Result<LoadedContent<'static>, RenderError> {
+pub fn load(path: &Path) -> Result<LoadedContent, RenderError> {
     #[cfg(feature = "resvg")]
     let ext = path
         .extension()
@@ -67,7 +60,7 @@ pub fn load(path: &Path) -> Result<LoadedContent<'static>, RenderError> {
 
 /// Read a raster image into memory, decode it once and return the
 /// RGBA pixels plus dimensions.
-fn load_raster(path: &Path) -> Result<LoadedContent<'static>, RenderError> {
+fn load_raster(path: &Path) -> Result<LoadedContent, RenderError> {
     use image::GenericImageView;
 
     let data = std::fs::read(path).map_err(|e| RenderError::Storage(e.into()))?;
@@ -84,7 +77,7 @@ fn load_raster(path: &Path) -> Result<LoadedContent<'static>, RenderError> {
 
 /// Parse an SVG file into a resvg tree for rendering.
 #[cfg(feature = "resvg")]
-fn load_svg(path: &Path) -> Result<LoadedContent<'static>, RenderError> {
+fn load_svg(path: &Path) -> Result<LoadedContent, RenderError> {
     use resvg::usvg;
 
     let data = std::fs::read(path).map_err(|e| RenderError::Storage(e.into()))?;
@@ -92,7 +85,7 @@ fn load_svg(path: &Path) -> Result<LoadedContent<'static>, RenderError> {
         .map_err(|e| RenderError::Other(format!("Failed to parse SVG: {e}")))?;
     let size = tree.size();
     Ok(LoadedContent::Svg {
-        tree,
+        tree: Box::new(tree),
         width: size.width(),
         height: size.height(),
     })
@@ -122,17 +115,10 @@ pub enum RenderError {
     Other(String),
 }
 
-/// Render a single page of a document at the given zoom factor.
+/// Render a raster or SVG document at the given zoom factor.
 ///
-/// `page` is 1-based. For raster and SVG documents, `page` must be 1.
 /// `zoom` is the scale factor where 1.0 = 100%.
-pub fn render_page(
-    content: &LoadedContent,
-    page: u32,
-    zoom: f32,
-) -> Result<RenderedPage, RenderError> {
-    let _ = page; // Used only in pdfium-render path; silences warning otherwise.
-
+pub fn render_page(content: &LoadedContent, zoom: f32) -> Result<RenderedPage, RenderError> {
     match content {
         LoadedContent::Raster {
             rgba_data,
@@ -145,10 +131,7 @@ pub fn render_page(
             tree,
             width,
             height,
-        } => render_svg(tree, *width, *height, zoom),
-
-        #[cfg(feature = "pdfium-render")]
-        LoadedContent::Pdf { document } => render_pdf(document, page, zoom),
+        } => render_svg(tree.as_ref(), *width, *height, zoom),
 
         #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
         _ => render_placeholder(800, 600, zoom),
@@ -161,7 +144,7 @@ pub fn render_page(
 /// rendered through the worker (`render::worker`).
 pub fn render_path(path: &Path, zoom: f32) -> Result<RenderedPage, RenderError> {
     let content = load(path)?;
-    render_page(&content, 1, zoom)
+    render_page(&content, zoom)
 }
 
 /// Render a single page with a rotation in degrees (0, 90, 180, 270).
@@ -170,13 +153,12 @@ pub fn render_path(path: &Path, zoom: f32) -> Result<RenderedPage, RenderError> 
 /// planned View > Rotate menu entries.
 pub fn render_page_rotated(
     content: &LoadedContent,
-    page: u32,
     zoom: f32,
     rotation_degrees: u16,
     flip_h: bool,
     flip_v: bool,
 ) -> Result<RenderedPage, RenderError> {
-    let mut page = render_page(content, page, zoom)?;
+    let mut page = render_page(content, zoom)?;
 
     let deg = rotation_degrees % 360;
     if deg != 0 {
@@ -210,18 +192,6 @@ pub fn page_infos(content: &LoadedContent) -> Vec<PageInfo> {
                 width_pt: *width,
                 height_pt: *height,
             }]
-        }
-
-        #[cfg(feature = "pdfium-render")]
-        LoadedContent::Pdf { document } => {
-            let pages = document.pages();
-            (0..pages.len())
-                .filter_map(|i| pages.get(i).ok())
-                .map(|p| PageInfo {
-                    width_pt: p.width().value,
-                    height_pt: p.height().value,
-                })
-                .collect()
         }
 
         #[cfg(not(any(feature = "resvg", feature = "pdfium-render")))]
@@ -316,45 +286,6 @@ fn render_svg(
         width: w,
         height: h,
         rgba_data: data,
-    })
-}
-
-// ── PDF Rendering ──
-
-#[cfg(feature = "pdfium-render")]
-fn render_pdf(
-    document: &pdfium_render::prelude::PdfDocument,
-    page: u32,
-    zoom: f32,
-) -> Result<RenderedPage, RenderError> {
-    use pdfium_render::prelude::*;
-
-    let pdf_page = document
-        .pages()
-        .get((page - 1) as u16)
-        .map_err(|e| RenderError::Other(format!("Failed to get PDF page {page}: {e}")))?;
-
-    let page_w = pdf_page.width().value;
-    let page_h = pdf_page.height().value;
-
-    let target_w = ((page_w * zoom).ceil() as i32).max(1);
-    let target_h = ((page_h * zoom).ceil() as i32).max(1);
-
-    let config = PdfRenderConfig::new()
-        .set_target_width(target_w)
-        .set_maximum_height(target_h);
-
-    let bitmap = pdf_page
-        .render_with_config(&config)
-        .map_err(|e| RenderError::Other(format!("Failed to render PDF page: {e}")))?;
-
-    let image = bitmap.as_image();
-    let rgba = image.to_rgba8();
-
-    Ok(RenderedPage {
-        width: rgba.width(),
-        height: rgba.height(),
-        rgba_data: rgba.into_raw(),
     })
 }
 

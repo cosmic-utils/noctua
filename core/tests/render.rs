@@ -13,7 +13,7 @@ fn loads_raster_and_renders_at_zoom() {
     let png = common::make_png(&dir, "img.png", 64, 32);
 
     let content = render::load(&png).unwrap();
-    let page = render::render_page(&content, 1, 2.0).unwrap();
+    let page = render::render_page(&content, 2.0).unwrap();
     assert_eq!(page.width, 128);
     assert_eq!(page.height, 64);
     assert_eq!(page.rgba_data.len(), 128 * 64 * 4);
@@ -28,7 +28,7 @@ fn scaled_raster_dimensions_match_buffer() {
     let png = common::make_png(&dir, "img.png", 2, 3);
 
     let content = render::load(&png).unwrap();
-    let page = render::render_page(&content, 1, 0.75).unwrap();
+    let page = render::render_page(&content, 0.75).unwrap();
     assert_eq!(page.width, 2);
     assert_eq!(page.height, 2);
     assert_eq!(page.rgba_data.len(), 2 * 2 * 4);
@@ -41,7 +41,7 @@ fn loads_svg_and_renders() {
     let svg = common::make_svg(&dir, "plan.svg");
 
     let content = render::load(&svg).unwrap();
-    let page = render::render_page(&content, 1, 1.0).unwrap();
+    let page = render::render_page(&content, 1.0).unwrap();
     assert_eq!(page.width, 200);
     assert_eq!(page.height, 100);
     assert_eq!(page.rgba_data.len(), 200 * 100 * 4);
@@ -75,7 +75,7 @@ fn rotates_rendered_page() {
     let png = common::make_png(&dir, "img.png", 64, 32);
 
     let content = render::load(&png).unwrap();
-    let page = render::render_page_rotated(&content, 1, 1.0, 90, false, false).unwrap();
+    let page = render::render_page_rotated(&content, 1.0, 90, false, false).unwrap();
     assert_eq!(page.width, 32);
     assert_eq!(page.height, 64);
     assert_eq!(page.rgba_data.len(), 32 * 64 * 4);
