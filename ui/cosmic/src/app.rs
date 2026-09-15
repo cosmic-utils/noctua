@@ -20,7 +20,8 @@ use crate::message::{MenuAction, Message};
 use crate::model::AppModel;
 
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
-const APP_ICON: &[u8] = include_bytes!("../resources/icons/hicolor/scalable/apps/icon.svg");
+const APP_ICON: &[u8] =
+    include_bytes!("../resources/icons/hicolor/scalable/apps/org.codeberg.wfx.Noctua.svg");
 
 /// Create a COSMIC application from the app model.
 impl cosmic::Application for AppModel {
@@ -34,7 +35,7 @@ impl cosmic::Application for AppModel {
     type Message = Message;
 
     /// Unique identifier in RDNN (reverse domain name notation) format.
-    const APP_ID: &'static str = "io.codeberg.wfx.Noctua";
+    const APP_ID: &'static str = "org.codeberg.wfx.Noctua";
 
     fn core(&self) -> &cosmic::Core {
         &self.core
