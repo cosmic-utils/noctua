@@ -72,20 +72,22 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
         let tile: Element<'_, Message> = match &entry.thumb {
             Some(handle) => widget::Image::new(handle.clone())
                 .content_fit(ContentFit::ScaleDown)
-                .width(Length::Fixed(TILE))
-                .height(Length::Fixed(TILE))
+                .width(Length::Fill)
+                .height(Length::Fill)
                 .into(),
             // Unloaded tiles show the file name until the thumb arrives.
-            None => widget::text::body(entry.name.clone())
-                .size(12)
-                .width(Length::Fixed(TILE))
-                .height(Length::Fixed(TILE))
+            None => widget::text::caption(entry.name.clone())
+                .width(Length::Fill)
+                .height(Length::Fill)
                 .into(),
         };
 
         let tile = widget::container(tile)
             .width(Length::Fixed(TILE))
             .height(Length::Fixed(TILE))
+            .padding(space.space_xxs)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
             .class(if selected {
                 cosmic::style::Container::Primary
             } else {
@@ -154,25 +156,33 @@ fn preview_view<'a>(preview: &'a DocumentPreview) -> Element<'a, Message> {
         .into()
 }
 
+/// A centered placeholder: an icon above a hint text.
+fn empty_state(icon_name: &'static str, hint: String) -> Element<'static, Message> {
+    let space = cosmic::theme::spacing();
+    widget::container(
+        widget::column::with_capacity(2)
+            .spacing(space.space_m)
+            .align_x(Alignment::Center)
+            .push(widget::icon::from_name(icon_name).size(48))
+            .push(widget::text::body(hint)),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(Horizontal::Center)
+    .align_y(Vertical::Center)
+    .into()
+}
+
 /// The content area view.
 fn content_view(app: &AppModel) -> Element<'_, Message> {
     let space = cosmic::theme::spacing();
 
     if app.tabs.is_empty() {
-        return widget::container(
-            widget::text::body(match &app.start_error {
-                Some(path) => fl!("start-error", path = path),
-                None => fl!("open-folder-hint"),
-            })
-            .size(18)
-            .apply(widget::container)
-            .width(Length::Fill)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
+        let hint = match &app.start_error {
+            Some(path) => fl!("start-error", path = path),
+            None => fl!("open-folder-hint"),
+        };
+        return empty_state("folder-open-symbolic", hint);
     }
 
     // Continuous preview of the selected multi-page PDF.
@@ -216,16 +226,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
 
             content
         }
-        None => widget::container(
-            widget::text::body(fl!("select-hint"))
-                .apply(widget::container)
-                .width(Length::Fill)
-                .align_x(Horizontal::Center)
-                .align_y(Vertical::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into(),
+        None => empty_state("image-x-generic-symbolic", fl!("select-hint")),
     }
 }
 
@@ -233,11 +234,8 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
 fn status_bar(app: &AppModel) -> Element<'_, Message> {
     let space = cosmic::theme::spacing();
 
-    let mut row = widget::row::with_capacity(8)
-        .spacing(space.space_m)
-        .align_y(Alignment::Center);
-
-    row = row
+    let nav = widget::row::with_capacity(2)
+        .spacing(space.space_xxs)
         .push(
             widget::button::icon(icon::from_name("go-previous-symbolic"))
                 .on_press(Message::PrevEntry),
@@ -246,12 +244,16 @@ fn status_bar(app: &AppModel) -> Element<'_, Message> {
             widget::button::icon(icon::from_name("go-next-symbolic")).on_press(Message::NextEntry),
         );
 
+    let mut info = widget::row::with_capacity(4)
+        .spacing(space.space_s)
+        .align_y(Alignment::Center);
+
     let position = position_label(app);
     if !position.is_empty() {
-        row = row.push(widget::text::body(position));
+        info = info.push(widget::text::body(position));
     }
 
-    row = row.push(widget::text::body(format!("{:.0}%", app.zoom * 100.0)));
+    info = info.push(widget::text::body(format!("{:.0}%", app.zoom * 100.0)));
 
     if let Some(target) = &app.current_target {
         let path = match target {
@@ -259,13 +261,20 @@ fn status_bar(app: &AppModel) -> Element<'_, Message> {
             CurrentTarget::Page { path, .. } => path,
         };
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            row = row.push(widget::text::body(name.to_string()));
+            info = info.push(widget::text::body(name.to_string()));
         }
     }
 
     if let Some(size) = app.current_size {
-        row = row.push(widget::text::body(storage::document::format_size(size)));
+        info = info.push(widget::text::body(storage::document::format_size(size)));
     }
+
+    let row = widget::row::with_capacity(3)
+        .spacing(space.space_s)
+        .align_y(Alignment::Center)
+        .push(nav)
+        .push(widget::space().width(Length::Fill))
+        .push(info);
 
     widget::container(row)
         .width(Length::Fill)
