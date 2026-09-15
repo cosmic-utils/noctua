@@ -99,7 +99,6 @@ impl cosmic::Application for AppModel {
                     vec![
                         menu::Item::Button(fl!("open-folder"), None, MenuAction::OpenFolder),
                         menu::Item::Button(fl!("close-tab"), None, MenuAction::CloseTab),
-                        menu::Item::Divider,
                         menu::Item::Button(fl!("quit"), None, MenuAction::Quit),
                     ],
                 ),
@@ -112,9 +111,7 @@ impl cosmic::Application for AppModel {
                         menu::Item::Button(fl!("zoom-in"), None, MenuAction::ZoomIn),
                         menu::Item::Button(fl!("zoom-out"), None, MenuAction::ZoomOut),
                         menu::Item::Button(fl!("zoom-100"), None, MenuAction::Zoom100),
-                        menu::Item::Divider,
                         menu::Item::Button(fl!("show-nav-panel"), None, MenuAction::ToggleNavPanel),
-                        menu::Item::Divider,
                         menu::Item::Button(fl!("about"), None, MenuAction::About),
                     ],
                 ),
