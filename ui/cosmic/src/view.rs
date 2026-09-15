@@ -4,6 +4,7 @@
 // Pure view: builds widgets from the application model. Never changes state.
 
 use cosmic::iced::alignment::{Horizontal, Vertical};
+use cosmic::iced::widget::scrollable::{Direction, Scrollbar};
 use cosmic::iced::{Alignment, ContentFit, Length};
 use cosmic::prelude::*;
 use cosmic::widget::{self, icon, tab_bar};
@@ -204,21 +205,41 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
             let content: Element<'_, Message> = if (app.zoom - 1.0).abs() < f32::EPSILON {
                 // Fit view: scale down images larger than the viewport,
                 // keep smaller ones at their native size, never crop.
-                widget::container(
-                    widget::Image::new(image.handle.clone()).content_fit(ContentFit::ScaleDown),
+                // The mouse wheel zooms over the image.
+                widget::mouse_area(
+                    widget::container(
+                        widget::Image::new(image.handle.clone()).content_fit(ContentFit::ScaleDown),
+                    )
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding(space.space_m)
+                    .align_x(Horizontal::Center)
+                    .align_y(Vertical::Center),
                 )
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(space.space_m)
-                .align_x(Horizontal::Center)
-                .align_y(Vertical::Center)
+                .on_scroll(Message::WheelZoom)
                 .into()
             } else {
-                // Zoomed view: show native pixels and scroll.
+                // Zoomed view: show native pixels at their rendered size.
+                // ContentFit::None keeps the image from being re-fitted to the
+                // viewport; the scrollable pans in both axes. The mouse area
+                // sits inside the scrollable so the wheel zooms (it captures
+                // the event before the scrollable would scroll).
                 widget::scrollable(
-                    widget::container(widget::Image::new(image.handle.clone()))
+                    widget::mouse_area(
+                        widget::container(
+                            widget::Image::new(image.handle.clone()).content_fit(ContentFit::None),
+                        )
                         .padding(space.space_m),
+                    )
+                    .on_scroll(Message::WheelZoom),
                 )
+                .direction(Direction::Both {
+                    vertical: Scrollbar::new(),
+                    horizontal: Scrollbar::new(),
+                })
+                .scroller_width(8.0)
+                .scrollbar_width(8.0)
+                .scrollbar_padding(8.0)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()

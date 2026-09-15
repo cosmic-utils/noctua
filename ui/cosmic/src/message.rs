@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use cosmic::iced::mouse;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::Entity;
 
@@ -92,6 +93,8 @@ pub enum Message {
     ZoomIn,
     ZoomOut,
     Zoom100,
+    /// The mouse wheel was scrolled over the content area.
+    WheelZoom(mouse::ScrollDelta),
     ToggleNavPanel,
     ToggleAbout,
     LaunchUrl(String),
@@ -99,7 +102,7 @@ pub enum Message {
 }
 
 /// Actions offered by the menu bar.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum MenuAction {
     OpenFolder,
     CloseTab,

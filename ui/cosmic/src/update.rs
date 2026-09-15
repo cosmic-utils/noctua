@@ -58,6 +58,11 @@ impl AppModel {
             ),
             bind(
                 &[Modifier::Ctrl],
+                Key::Character("+".into()),
+                MenuAction::ZoomIn,
+            ),
+            bind(
+                &[Modifier::Ctrl],
                 Key::Character("=".into()),
                 MenuAction::ZoomIn,
             ),
@@ -614,6 +619,12 @@ impl AppModel {
             Some(CurrentTarget::Page { path, page }) => self.render_page_task(path, page),
             None => iced::Task::none(),
         }
+    }
+
+    /// Change the zoom by `steps` (signed) and re-render the current target.
+    fn zoom_by(&mut self, steps: f32) -> iced::Task<cosmic::Action<Message>> {
+        self.zoom = (self.zoom * ZOOM_STEP.powf(steps)).clamp(0.05, 8.0);
+        self.render_current()
     }
 
     /// Open the system folder dialog.
@@ -1183,19 +1194,25 @@ impl AppModel {
                 }
             }
 
-            Message::ZoomIn => {
-                self.zoom = (self.zoom * ZOOM_STEP).min(8.0);
-                return self.render_current();
-            }
+            Message::ZoomIn => return self.zoom_by(1.0),
 
-            Message::ZoomOut => {
-                self.zoom = (self.zoom / ZOOM_STEP).max(0.05);
-                return self.render_current();
-            }
+            Message::ZoomOut => return self.zoom_by(-1.0),
 
             Message::Zoom100 => {
                 self.zoom = 1.0;
                 return self.render_current();
+            }
+
+            Message::WheelZoom(delta) => {
+                // Normalize the scroll to zoom steps: one wheel notch is
+                // one step, 50 trackpad pixels count as one step.
+                let steps = match delta {
+                    iced::mouse::ScrollDelta::Lines { y, .. } => y,
+                    iced::mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
+                };
+                if steps != 0.0 {
+                    return self.zoom_by(steps);
+                }
             }
 
             Message::ToggleNavPanel => {
@@ -1215,7 +1232,7 @@ impl AppModel {
 
             Message::Quit => {
                 self.save_session();
-                std::process::exit(0);
+                return iced::exit();
             }
         }
         iced::Task::none()

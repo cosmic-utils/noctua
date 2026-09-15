@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use cosmic::app::context_drawer;
 use cosmic::widget::about::About;
+use cosmic::widget::menu::action::MenuAction as _;
 use cosmic::widget::segmented_button::SingleSelectModel;
 use cosmic::widget::{self, menu};
 use cosmic::{iced, prelude::*};
@@ -147,6 +148,23 @@ impl cosmic::Application for AppModel {
     /// Handles messages emitted by the application and its widgets.
     fn update(&mut self, message: Self::Message) -> iced::Task<cosmic::Action<Self::Message>> {
         self.handle_message(message)
+    }
+
+    /// Maps the menu key binds to their actions. The menu bar only displays
+    /// the shortcuts; this subscription is what actually triggers them.
+    fn subscription(&self) -> iced::Subscription<Self::Message> {
+        // A HashMap is not Hash, so pass the binds as a Vec for the
+        // subscription state.
+        let key_binds: Vec<_> = self.key_binds.clone().into_iter().collect();
+        iced::keyboard::listen()
+            .with(key_binds)
+            .filter_map(|(key_binds, event)| match event {
+                iced::keyboard::Event::KeyPressed { key, modifiers, .. } => key_binds
+                    .iter()
+                    .find(|(bind, _)| bind.matches(modifiers, &key))
+                    .map(|(_, action)| action.message()),
+                _ => None,
+            })
     }
 
     /// Save the session when the app exits.
