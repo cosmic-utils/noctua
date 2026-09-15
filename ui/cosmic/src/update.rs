@@ -616,15 +616,6 @@ impl AppModel {
         }
     }
 
-    /// Emit [`Message::RepaintTick`] after a short delay so the image just
-    /// applied gets a follow-up frame (see the variant's doc comment).
-    fn repaint_task() -> iced::Task<cosmic::Action<Message>> {
-        cosmic::task::future(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            Message::RepaintTick
-        })
-    }
-
     /// Open the system folder dialog.
     fn open_folder_dialog(&self) -> iced::Task<cosmic::Action<Message>> {
         cosmic::task::future(async move {
@@ -1099,9 +1090,6 @@ impl AppModel {
                         *slot = PageSlot::Empty;
                     }
                 }
-
-                // The follow-up frame picks up the freshly uploaded textures.
-                return Self::repaint_task();
             }
 
             Message::PreviewScrolled {
@@ -1177,11 +1165,7 @@ impl AppModel {
                 if self.current_target == Some(CurrentTarget::File { path })
                     && (self.zoom - zoom).abs() < f32::EPSILON
                 {
-                    let has_pixels = rgba.is_some();
                     self.apply_image(rgba);
-                    if has_pixels {
-                        return Self::repaint_task();
-                    }
                 }
             }
 
@@ -1195,17 +1179,8 @@ impl AppModel {
                 if self.current_target == Some(CurrentTarget::Page { path, page })
                     && (self.zoom - zoom).abs() < f32::EPSILON
                 {
-                    let has_pixels = rgba.is_some();
                     self.apply_image(rgba);
-                    if has_pixels {
-                        return Self::repaint_task();
-                    }
                 }
-            }
-
-            Message::RepaintTick => {
-                // The frame triggered by this message picks up the texture
-                // uploaded by iced's image worker. State is already current.
             }
 
             Message::ZoomIn => {

@@ -89,10 +89,6 @@ pub enum Message {
         zoom: f32,
         rgba: Option<(u32, u32, Vec<u8>)>,
     },
-    /// Scheduled shortly after an image was applied: iced's wgpu backend
-    /// uploads textures larger than 2 MB on a background thread and skips
-    /// them in the current frame, so the follow-up frame shows the image.
-    RepaintTick,
     ZoomIn,
     ZoomOut,
     Zoom100,
