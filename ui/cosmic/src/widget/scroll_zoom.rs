@@ -93,10 +93,7 @@ impl Widget<Message, Theme, Renderer> for ScrollZoom<'_> {
     ) {
         if let Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) = event {
             tree.state.downcast_mut::<State>().keyboard_modifiers = *modifiers;
-            return;
-        }
-
-        if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
+        } else if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
             let modifiers = tree.state.downcast_ref::<State>().keyboard_modifiers;
             if modifiers.control() && cursor.position_over(layout.bounds()).is_some() {
                 if let Some(on_zoom) = &self.on_zoom {
