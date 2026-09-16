@@ -24,8 +24,8 @@ pub enum Message {
     CloseTab,
     /// An entry of the thumbnail strip was activated (0-based index).
     StripActivated(usize),
-    /// An entry of the thumbnail strip was double-clicked: open it.
-    /// PDFs dive into a document tab.
+    /// An entry of the thumbnail strip was double-clicked: toggle the
+    /// in-strip page expansion of a multi-page PDF.
     StripDoubleClicked(usize),
     /// Move to the previous strip entry.
     PrevEntry,
@@ -40,9 +40,9 @@ pub enum Message {
         dir: PathBuf,
         result: Result<Vec<BrowserEntry>, String>,
     },
-    /// The worker counted the pages of a document tab.
+    /// The worker counted the pages of a PDF selected for expansion.
     PagesKnown {
-        tab: Entity,
+        path: PathBuf,
         pages: Option<u32>,
     },
     /// Thumbnails for strip entries arrived. Guarded by the tab entity.

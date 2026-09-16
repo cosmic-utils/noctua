@@ -46,16 +46,12 @@ pub(crate) enum TabContent {
         path: PathBuf,
         entries: Vec<BrowserEntry>,
     },
-    /// A multi-page document (PDF) the user dove into. `pages` is 0
-    /// until the worker has counted them.
-    Document { path: PathBuf, pages: u32 },
 }
 
 impl TabContent {
     pub(crate) fn path(&self) -> &PathBuf {
         match self {
             TabContent::Folder { path, .. } => path,
-            TabContent::Document { path, .. } => path,
         }
     }
 }
@@ -74,6 +70,8 @@ pub(crate) struct StripEntry {
     pub(crate) target: NavEntry,
     pub(crate) name: String,
     pub(crate) thumb: Option<widget::image::Handle>,
+    /// Whether the entry is a multi-page PDF that can be expanded in place.
+    pub(crate) expandable: bool,
 }
 
 /// The entry currently shown in the content area.
@@ -125,6 +123,8 @@ pub(crate) struct TabUiState {
     pub(crate) strip: Vec<StripEntry>,
     pub(crate) selected: Option<usize>,
     pub(crate) preview: Option<DocumentPreview>,
+    /// Path of the PDF currently expanded in the strip, if any.
+    pub(crate) expanded: Option<PathBuf>,
 }
 
 impl TabUiState {
@@ -134,6 +134,7 @@ impl TabUiState {
             strip,
             selected,
             preview: None,
+            expanded: None,
         }
     }
 }

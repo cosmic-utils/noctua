@@ -99,27 +99,13 @@ impl AppModel {
     /// it still points into the new strip; the preview survives only when
     /// it still matches the selected entry.
     fn rebuild_strip(&mut self, tab: Entity) {
-        let entries: Vec<(NavEntry, String)> = match &self.tabs[&tab] {
+        let entries: Vec<(NavEntry, String, bool)> = match &self.tabs[&tab] {
             TabContent::Folder { entries, .. } => entries
                 .iter()
                 .map(|entry| {
-                    (
-                        NavEntry::File {
-                            path: entry.path.clone(),
-                        },
-                        entry.name.clone(),
-                    )
-                })
-                .collect(),
-            TabContent::Document { path, pages } => (1..=*pages)
-                .map(|page| {
-                    (
-                        NavEntry::Page {
-                            path: path.clone(),
-                            page,
-                        },
-                        fl!("page-num", num = page),
-                    )
+                    let path = entry.path.clone();
+                    let expandable = storage::document::is_pdf(&path).unwrap_or(false);
+                    (NavEntry::File { path }, entry.name.clone(), expandable)
                 })
                 .collect(),
         };
@@ -133,16 +119,17 @@ impl AppModel {
         let preview = previous.and_then(|state| state.preview).filter(|preview| {
             matches!(
                 selected.and_then(|index| entries.get(index)),
-                Some((NavEntry::File { path }, _)) if path == &preview.path
+                Some((NavEntry::File { path }, _, _)) if path == &preview.path
             )
         });
 
         let strip = entries
             .into_iter()
-            .map(|(target, name)| StripEntry {
+            .map(|(target, name, expandable)| StripEntry {
                 target,
                 name,
                 thumb: None,
+                expandable,
             })
             .collect();
         self.tab_ui.insert(
@@ -151,6 +138,7 @@ impl AppModel {
                 strip,
                 selected,
                 preview,
+                expanded: None,
             },
         );
     }
@@ -170,7 +158,6 @@ impl AppModel {
         // strip on first activation.
         let has_content = match self.tabs.get(&tab) {
             Some(TabContent::Folder { entries, .. }) => !entries.is_empty(),
-            Some(TabContent::Document { pages, .. }) => *pages > 0,
             None => false,
         };
         if has_content
@@ -513,25 +500,56 @@ impl AppModel {
         })
     }
 
-    /// Open a document tab for the given PDF and count its pages on the worker.
-    fn dive_into(&mut self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
-        let title = storage::browser::display_name(&path);
-        let tab = self.tab_model.insert().text(title).closable().id();
-        self.tabs.insert(
-            tab,
-            TabContent::Document {
-                path: path.clone(),
-                pages: 0,
-            },
-        );
-        self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
-        self.tab_model.activate(tab);
-        let activate = self.activate_tab();
+    /// Toggle the in-strip page expansion of the PDF at the given strip index.
+    fn toggle_expand(&mut self, index: usize) -> iced::Task<cosmic::Action<Message>> {
+        let Some(tab) = self.active_tab() else {
+            return iced::Task::none();
+        };
+        let (path, already_expanded) = {
+            let Some(state) = self.tab_ui.get(&tab) else {
+                return iced::Task::none();
+            };
+            let Some(path) = state
+                .strip
+                .get(index)
+                .and_then(|entry| match &entry.target {
+                    NavEntry::File { path } => Some(path.clone()),
+                    NavEntry::Page { .. } => None,
+                })
+            else {
+                return iced::Task::none();
+            };
+            (path.clone(), state.expanded.as_ref() == Some(&path))
+        };
+
+        if !storage::document::is_pdf(&path).unwrap_or(false) {
+            return iced::Task::none();
+        }
+
+        if already_expanded {
+            self.collapse_pdf(tab, &path);
+            return iced::Task::none();
+        }
+
+        if let Some(previous) = self
+            .tab_ui
+            .get(&tab)
+            .and_then(|state| state.expanded.clone())
+        {
+            self.collapse_pdf(tab, &previous);
+        }
+        if let Some(state) = self.tab_ui.get_mut(&tab) {
+            state.expanded = Some(path.clone());
+        }
 
         let worker = self.worker.clone();
-        let count = cosmic::task::future(async move {
+        let count_path = path.clone();
+        cosmic::task::future(async move {
             let pages = tokio::task::spawn_blocking(move || {
-                match worker.execute(Priority::VisiblePage, Job::FilePageCount { path }) {
+                match worker.execute(
+                    Priority::VisiblePage,
+                    Job::FilePageCount { path: count_path },
+                ) {
                     JobResult::PageCount(count) => Some(count),
                     _ => None,
                 }
@@ -539,10 +557,54 @@ impl AppModel {
             .await
             .ok()
             .flatten();
-            Message::PagesKnown { tab, pages }
-        });
+            Message::PagesKnown { path, pages }
+        })
+    }
 
-        cosmic::task::batch(vec![activate, count])
+    /// Remove the page entries of the expanded PDF at `path`.
+    fn collapse_pdf(&mut self, tab: Entity, path: &PathBuf) {
+        let Some(state) = self.tab_ui.get_mut(&tab) else {
+            return;
+        };
+        if state.expanded.as_ref() == Some(path) {
+            state.expanded = None;
+        }
+        let Some(start) = state
+            .strip
+            .iter()
+            .position(|entry| matches!(&entry.target, NavEntry::File { path: p } if p == path))
+        else {
+            return;
+        };
+        let mut end = start + 1;
+        while end < state.strip.len() && matches!(state.strip[end].target, NavEntry::Page { .. }) {
+            end += 1;
+        }
+        state.strip.drain(start + 1..end);
+    }
+
+    /// Insert the page entries of an expanded PDF after its file entry.
+    fn insert_pages(&mut self, tab: Entity, path: &PathBuf, pages: u32) {
+        let Some(state) = self.tab_ui.get_mut(&tab) else {
+            return;
+        };
+        let Some(start) = state
+            .strip
+            .iter()
+            .position(|entry| matches!(&entry.target, NavEntry::File { path: p } if p == path))
+        else {
+            return;
+        };
+        let page_entries = (1..=pages).map(|page| StripEntry {
+            target: NavEntry::Page {
+                path: path.clone(),
+                page,
+            },
+            name: fl!("page-num", num = page),
+            thumb: None,
+            expandable: false,
+        });
+        state.strip.splice(start + 1..start + 1, page_entries);
     }
 
     /// Render a raster or SVG file into the content area.
@@ -671,8 +733,8 @@ impl AppModel {
         cosmic::task::batch(vec![activate, list])
     }
 
-    /// Open a tab for a start path: folders list, PDFs dive, other files
-    /// open their parent folder with the file pre-selected.
+    /// Open a tab for a start path: folders list, files open their parent
+    /// folder with the file pre-selected.
     pub(crate) fn open_start_path(&mut self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
         // A missing path is a user error; surface it instead of opening
         // the parent folder silently.
@@ -683,10 +745,6 @@ impl AppModel {
 
         if path.is_dir() {
             return self.open_folder(path);
-        }
-
-        if storage::document::is_pdf(&path).unwrap_or(false) {
-            return self.dive_into(path);
         }
 
         match path.parent().map(PathBuf::from) {
@@ -735,34 +793,10 @@ impl AppModel {
                     };
                     Message::FolderListed { dir, result }
                 }));
-            } else if storage::document::is_pdf(&path).unwrap_or(false) {
-                let title = storage::browser::display_name(&path);
-                let tab = self.tab_model.insert().text(title).closable().id();
-                self.tabs.insert(
-                    tab,
-                    TabContent::Document {
-                        path: path.clone(),
-                        pages: 0,
-                    },
-                );
-                self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
-                let worker = self.worker.clone();
-                let dir = path.clone();
-                tasks.push(cosmic::task::future(async move {
-                    let pages = tokio::task::spawn_blocking(move || {
-                        match worker.execute(Priority::Low, Job::FilePageCount { path: dir }) {
-                            JobResult::PageCount(count) => Some(count),
-                            _ => None,
-                        }
-                    })
-                    .await
-                    .ok()
-                    .flatten();
-                    Message::PagesKnown { tab, pages }
-                }));
             } else {
-                // Browser tabs hold folders or PDFs; anything else is stale.
-                tracing::warn!("restore: skipping non-document path {path:?}");
+                // Browser tabs now hold only folders; document paths are stale
+                // because multi-page PDFs expand inside their folder tab.
+                tracing::warn!("restore: skipping non-folder path {path:?}");
             }
 
             if index == session.active_tab {
@@ -998,25 +1032,33 @@ impl AppModel {
                 }
             }
 
-            Message::PagesKnown { tab, pages } => match (self.tabs.get(&tab), pages) {
-                (Some(TabContent::Document { path, .. }), Some(pages)) => {
-                    self.tabs.insert(
-                        tab,
-                        TabContent::Document {
-                            path: path.clone(),
-                            pages,
-                        },
-                    );
-                    if self.active_tab() == Some(tab) {
-                        self.rebuild_strip(tab);
-                        return self.activate_tab();
+            Message::PagesKnown { path, pages } => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                match pages {
+                    Some(pages) => {
+                        self.insert_pages(tab, &path, pages);
+                        let range = {
+                            let Some(state) = self.tab_ui.get(&tab) else {
+                                return iced::Task::none();
+                            };
+                            let Some(start) = state.strip.iter().position(|entry| {
+                                matches!(&entry.target, NavEntry::File { path: p } if p == &path)
+                            }) else {
+                                return iced::Task::none();
+                            };
+                            let end = (start + 1 + STRIP_INITIAL_THUMBS).min(state.strip.len());
+                            start + 1..end
+                        };
+                        return self.request_strip_thumbs(tab, range);
+                    }
+                    None => {
+                        tracing::error!("failed to count pages of {path:?}");
+                        self.collapse_pdf(tab, &path);
                     }
                 }
-                (_, None) => {
-                    tracing::error!("failed to count pages of document tab");
-                }
-                _ => {}
-            },
+            }
 
             Message::StripThumbsReady { tab, thumbs } => {
                 if let Some(state) = self.tab_ui.get_mut(&tab) {
@@ -1152,23 +1194,7 @@ impl AppModel {
             }
 
             Message::StripDoubleClicked(index) => {
-                // Opening is only defined for PDFs: dive into a document tab.
-                let Some(tab) = self.active_tab() else {
-                    return iced::Task::none();
-                };
-                let Some(target) = self
-                    .tab_ui
-                    .get(&tab)
-                    .and_then(|state| state.strip.get(index))
-                    .map(|entry| entry.target.clone())
-                else {
-                    return iced::Task::none();
-                };
-                if let NavEntry::File { path } = target
-                    && storage::document::is_pdf(&path).unwrap_or(false)
-                {
-                    return self.dive_into(path);
-                }
+                return self.toggle_expand(index);
             }
 
             Message::FileRendered { path, zoom, rgba } => {

@@ -13,7 +13,7 @@ use noctua_core::storage;
 
 use crate::fl;
 use crate::message::Message;
-use crate::model::{AppModel, CurrentTarget, TabContent};
+use crate::model::{AppModel, CurrentTarget};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
 use crate::widget::thumbnail_strip::thumbnail_strip;
@@ -25,12 +25,18 @@ use crate::widget::thumbnail_strip::thumbnail_strip;
 pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
     let space = cosmic::theme::spacing();
 
-    let tab_strip = tab_bar::horizontal(&app.tab_model)
-        .on_activate(Message::TabActivated)
-        .on_close(Message::TabCloseRequested);
-
     let mut column = widget::column::with_capacity(3).spacing(space.space_xxs);
-    column = column.push(tab_strip);
+
+    // A single tab is the whole window; only show the tab bar with more,
+    // matching COSMIC Terminal.
+    if app.tabs.len() > 1 {
+        let tab_strip = tab_bar::horizontal(&app.tab_model)
+            .on_activate(Message::TabActivated)
+            .on_close(Message::TabCloseRequested)
+            .button_height(32)
+            .button_spacing(space.space_xxs);
+        column = column.push(tab_strip);
+    }
 
     if app.tabs.is_empty() {
         column = column.push(content_view(app));
@@ -60,7 +66,7 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
         return widget::container(widget::text::body("")).into();
     };
 
-    thumbnail_strip(&state.strip, state.selected, tab)
+    thumbnail_strip(&state.strip, state.selected, state.expanded.as_ref(), tab)
 }
 
 /// The content area view.
@@ -210,11 +216,5 @@ fn position_label(app: &AppModel) -> String {
         return String::new();
     };
 
-    match app.tabs.get(&tab) {
-        Some(TabContent::Document { .. }) => {
-            let page = (position + 1) as u32;
-            format!("{} / {total}", fl!("page-num", num = page))
-        }
-        _ => format!("{} / {total}", position + 1),
-    }
+    format!("{} / {total}", position + 1)
 }
