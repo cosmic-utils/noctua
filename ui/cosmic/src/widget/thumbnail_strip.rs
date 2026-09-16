@@ -43,7 +43,8 @@ pub(crate) fn thumbnail_strip<'a>(
 
     let mut column = widget::column::with_capacity(entries.len())
         .spacing(space.space_xxs)
-        .padding(space.space_xxs);
+        .padding(space.space_xxs)
+        .align_x(Horizontal::Center);
 
     for (index, entry) in entries.iter().enumerate() {
         let is_selected = selected == Some(index);
@@ -113,6 +114,9 @@ pub(crate) fn thumbnail_strip<'a>(
 
     let strip_scroll = widget::scrollable(column)
         .id(widget::Id::new(SCROLL_ID))
+        // Reserve the scrollbar width instead of overlaying the thumbnails,
+        // so the gap to the scrollbar matches the gap to the panel edge.
+        .spacing(0.0)
         .on_scroll(move |viewport| Message::StripScrolled {
             tab,
             offset_y: viewport.absolute_offset().y,
