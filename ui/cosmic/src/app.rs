@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use cosmic::app::context_drawer;
+use cosmic::iced::keyboard::key::Named;
 use cosmic::widget::about::About;
 use cosmic::widget::menu::action::MenuAction as _;
 use cosmic::widget::segmented_button::SingleSelectModel;
@@ -66,7 +67,8 @@ impl cosmic::Application for AppModel {
             tab_ui: HashMap::new(),
             current_target: None,
             current_image: None,
-            zoom: 1.0,
+            zoom_states: HashMap::new(),
+            keyboard_modifiers: iced::keyboard::Modifiers::default(),
             show_nav_panel: true,
             worker: SharedWorker::spawn(),
             current_size: None,
@@ -112,8 +114,10 @@ impl cosmic::Application for AppModel {
                     vec![
                         menu::Item::Button(fl!("zoom-in"), None, MenuAction::ZoomIn),
                         menu::Item::Button(fl!("zoom-out"), None, MenuAction::ZoomOut),
+                        menu::Item::Button(fl!("zoom-fit"), None, MenuAction::ZoomToFit),
                         menu::Item::Button(fl!("zoom-100"), None, MenuAction::Zoom100),
                         menu::Item::Divider,
+                        menu::Item::Button(fl!("fullscreen"), None, MenuAction::Fullscreen),
                         menu::Item::Button(fl!("show-nav-panel"), None, MenuAction::ToggleNavPanel),
                         menu::Item::Divider,
                         menu::Item::Button(fl!("about"), None, MenuAction::About),
@@ -124,7 +128,18 @@ impl cosmic::Application for AppModel {
         .item_height(menu::ItemHeight::Dynamic(40))
         .item_width(menu::ItemWidth::Uniform(360));
 
-        vec![menu_bar.into()]
+        let nav = widget::row::with_capacity(2)
+            .spacing(cosmic::theme::spacing().space_xxs)
+            .push(
+                widget::button::icon(widget::icon::from_name("go-previous-symbolic"))
+                    .on_press(Message::PrevEntry),
+            )
+            .push(
+                widget::button::icon(widget::icon::from_name("go-next-symbolic"))
+                    .on_press(Message::NextEntry),
+            );
+
+        vec![menu_bar.into(), nav.into()]
     }
 
     /// Display a context drawer if the context page is requested.
@@ -159,10 +174,25 @@ impl cosmic::Application for AppModel {
         iced::keyboard::listen()
             .with(key_binds)
             .filter_map(|(key_binds, event)| match event {
-                iced::keyboard::Event::KeyPressed { key, modifiers, .. } => key_binds
-                    .iter()
-                    .find(|(bind, _)| bind.matches(modifiers, &key))
-                    .map(|(_, action)| action.message()),
+                iced::keyboard::Event::ModifiersChanged(modifiers) => {
+                    Some(Message::ModifiersChanged(modifiers))
+                }
+                iced::keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                    if let Some((_, action)) = key_binds
+                        .iter()
+                        .find(|(bind, _)| bind.matches(modifiers, &key))
+                    {
+                        return Some(action.message());
+                    }
+
+                    match key {
+                        iced::keyboard::Key::Named(Named::ArrowLeft) => Some(Message::PrevEntry),
+                        iced::keyboard::Key::Named(Named::ArrowRight) => Some(Message::NextEntry),
+                        iced::keyboard::Key::Named(Named::ArrowUp) => Some(Message::PrevPage),
+                        iced::keyboard::Key::Named(Named::ArrowDown) => Some(Message::NextPage),
+                        _ => None,
+                    }
+                }
                 _ => None,
             })
     }

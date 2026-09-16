@@ -10,6 +10,7 @@ use cosmic::widget;
 
 use crate::message::Message;
 use crate::model::{DocumentPreview, PREVIEW_SCROLL_ID, PageSlot};
+use crate::widget::scroll_zoom::ScrollZoom;
 
 /// Build the continuous multi-page preview. Emits `Message::PreviewScrolled`.
 pub(crate) fn document_preview<'a>(preview: &'a DocumentPreview) -> Element<'a, Message> {
@@ -42,7 +43,13 @@ pub(crate) fn document_preview<'a>(preview: &'a DocumentPreview) -> Element<'a, 
         column = column.push(page);
     }
 
-    widget::scrollable(column)
+    let path = preview.path.clone();
+    let content = ScrollZoom::new(column).on_zoom(move |delta| Message::PreviewWheel {
+        path: path.clone(),
+        delta,
+    });
+
+    widget::scrollable(content)
         .id(widget::Id::new(PREVIEW_SCROLL_ID))
         .on_scroll(|viewport| Message::PreviewScrolled {
             path: preview.path.clone(),

@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use cosmic::iced::keyboard::Modifiers;
 use cosmic::widget;
 use cosmic::widget::about::About;
 use cosmic::widget::menu;
@@ -21,6 +22,12 @@ pub(crate) const SESSION_NAME: &str = "default";
 
 /// Zoom factor applied per zoom step.
 pub(crate) const ZOOM_STEP: f32 = 1.25;
+
+/// Minimum zoom factor for single images (0.25 = 25 % of native pixels).
+pub(crate) const MIN_SCALE: f32 = 0.25;
+
+/// Maximum zoom factor for single images (8.0 = 800 % of native pixels).
+pub(crate) const MAX_SCALE: f32 = 8.0;
 
 /// Render scale for page thumbnails (strip and preview placeholders).
 pub(crate) const THUMB_ZOOM: f32 = 0.2;
@@ -75,10 +82,33 @@ pub(crate) struct StripEntry {
 }
 
 /// The entry currently shown in the content area.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum CurrentTarget {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CurrentTarget {
     File { path: PathBuf },
     Page { path: PathBuf, page: u32 },
+}
+
+/// Per-image zoom/pan state remembered across selections.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ZoomState {
+    /// Whether the image is shown fitted to the viewport.
+    pub(crate) fit: bool,
+    /// Zoom factor (1.0 = 100 % = native pixels); ignored while `fit`.
+    pub(crate) scale: f32,
+    /// Pan offset in logical pixels.
+    pub(crate) offset_x: f32,
+    pub(crate) offset_y: f32,
+}
+
+impl Default for ZoomState {
+    fn default() -> Self {
+        Self {
+            fit: true,
+            scale: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+        }
+    }
 }
 
 /// A rendered image shown in the content area. The handle is created
@@ -158,8 +188,11 @@ pub struct AppModel {
     pub(crate) current_target: Option<CurrentTarget>,
     /// Rendered single-page content for the current target.
     pub(crate) current_image: Option<CurrentImage>,
-    /// Current zoom factor (1.0 = 100%).
-    pub(crate) zoom: f32,
+    /// Zoom/pan state per image, keyed by the current target.
+    pub(crate) zoom_states: HashMap<CurrentTarget, ZoomState>,
+    /// Current keyboard modifiers, tracked so widgets know the state at
+    /// creation time (e.g. Ctrl already held).
+    pub(crate) keyboard_modifiers: Modifiers,
     /// Whether the nav panel is visible.
     pub(crate) show_nav_panel: bool,
     /// Single pdfium worker; all pdfium jobs run on its thread.

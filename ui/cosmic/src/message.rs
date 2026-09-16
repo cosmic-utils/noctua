@@ -5,13 +5,14 @@
 
 use std::path::PathBuf;
 
+use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::Entity;
 
 use noctua_core::storage::browser::BrowserEntry;
 
-use crate::model::Rgba;
+use crate::model::{CurrentTarget, Rgba};
 
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
@@ -31,6 +32,10 @@ pub enum Message {
     PrevEntry,
     /// Move to the next strip entry.
     NextEntry,
+    /// Scroll the active preview one page up.
+    PrevPage,
+    /// Scroll the active preview one page down.
+    NextPage,
     /// The Open Folder menu entry was activated.
     OpenFolder,
     /// The folder dialog returned a result.
@@ -70,6 +75,11 @@ pub enum Message {
         offset_y: f32,
         viewport_height: f32,
     },
+    /// The mouse wheel scrolled over a PDF preview; Ctrl turns it into a zoom.
+    PreviewWheel {
+        path: PathBuf,
+        delta: mouse::ScrollDelta,
+    },
     /// The thumbnail strip was scrolled; carries the absolute offset and
     /// the viewport height to compute the visible tile range.
     StripScrolled {
@@ -80,21 +90,30 @@ pub enum Message {
     /// A raster or SVG file was rendered for the content area.
     FileRendered {
         path: PathBuf,
-        zoom: f32,
         rgba: Option<(u32, u32, Vec<u8>)>,
     },
     /// A PDF page was rendered for the content area.
     PageRendered {
         path: PathBuf,
         page: u32,
-        zoom: f32,
         rgba: Option<(u32, u32, Vec<u8>)>,
+    },
+    /// The image viewer reported a zoom/pan state change.
+    ViewerStateChanged {
+        target: CurrentTarget,
+        scale: f32,
+        offset_x: f32,
+        offset_y: f32,
     },
     ZoomIn,
     ZoomOut,
     Zoom100,
-    /// The mouse wheel was scrolled over the content area.
-    WheelZoom(mouse::ScrollDelta),
+    ZoomToFit,
+    /// Set the zoom of the current single image to an absolute scale.
+    SetZoom(f32),
+    /// The keyboard modifiers changed; tracked to keep widgets in sync.
+    ModifiersChanged(Modifiers),
+    ToggleFullscreen,
     ToggleNavPanel,
     ToggleAbout,
     LaunchUrl(String),
@@ -109,6 +128,11 @@ pub enum MenuAction {
     ZoomIn,
     ZoomOut,
     Zoom100,
+    ZoomToFit,
+    Zoom50,
+    Zoom200,
+    Zoom400,
+    Fullscreen,
     ToggleNavPanel,
     About,
     Quit,
@@ -124,6 +148,11 @@ impl menu::action::MenuAction for MenuAction {
             MenuAction::ZoomIn => Message::ZoomIn,
             MenuAction::ZoomOut => Message::ZoomOut,
             MenuAction::Zoom100 => Message::Zoom100,
+            MenuAction::ZoomToFit => Message::ZoomToFit,
+            MenuAction::Zoom50 => Message::SetZoom(0.5),
+            MenuAction::Zoom200 => Message::SetZoom(2.0),
+            MenuAction::Zoom400 => Message::SetZoom(4.0),
+            MenuAction::Fullscreen => Message::ToggleFullscreen,
             MenuAction::ToggleNavPanel => Message::ToggleNavPanel,
             MenuAction::About => Message::ToggleAbout,
             MenuAction::Quit => Message::Quit,

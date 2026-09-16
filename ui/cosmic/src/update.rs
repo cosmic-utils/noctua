@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cosmic::iced::keyboard::Key;
+use cosmic::iced::keyboard::key::Named;
+use cosmic::iced::mouse;
 use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 use cosmic::widget::menu;
 use cosmic::widget::menu::key_bind::Modifier;
@@ -24,9 +26,9 @@ use noctua_core::storage::thumbcache::ThumbSize;
 use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{
-    AppModel, CurrentImage, CurrentTarget, DocumentPreview, NavEntry, PREVIEW_FULL_CACHE,
-    PREVIEW_SCROLL_ID, PageSlot, Rgba, SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM,
-    TabContent, TabUiState, ZOOM_STEP,
+    AppModel, CurrentImage, CurrentTarget, DocumentPreview, MAX_SCALE, MIN_SCALE, NavEntry,
+    PREVIEW_FULL_CACHE, PREVIEW_SCROLL_ID, PageSlot, Rgba, SESSION_NAME, STRIP_INITIAL_THUMBS,
+    StripEntry, THUMB_ZOOM, TabContent, TabUiState, ZOOM_STEP,
 };
 
 /// Estimated strip tile height including spacing, for lazy thumbnails.
@@ -76,6 +78,12 @@ impl AppModel {
                 Key::Character("1".into()),
                 MenuAction::Zoom100,
             ),
+            bind(
+                &[Modifier::Ctrl],
+                Key::Character("0".into()),
+                MenuAction::ZoomToFit,
+            ),
+            bind(&[], Key::Named(Named::F11), MenuAction::Fullscreen),
             bind(
                 &[Modifier::Ctrl],
                 Key::Character("b".into()),
@@ -276,7 +284,7 @@ impl AppModel {
                     path: path.clone(),
                     page_sizes: sizes,
                     pages,
-                    zoom: self.zoom,
+                    zoom: 1.0,
                     scroll: 0.0,
                     viewport_height: 800.0,
                     full_order: Vec::new(),
@@ -289,7 +297,7 @@ impl AppModel {
         match visible {
             Some(visible) => self.request_preview_window(&path, visible),
             None => cosmic::task::batch(vec![
-                self.request_preview_pages(&path, 1..=count.min(2), self.zoom, true),
+                self.request_preview_pages(&path, 1..=count.min(2), 1.0, true),
                 self.request_preview_pages(&path, 1..=count.min(12), THUMB_ZOOM, false),
                 scroll_to::<Message>(
                     cosmic::widget::Id::new(PREVIEW_SCROLL_ID),
@@ -607,86 +615,182 @@ impl AppModel {
         state.strip.splice(start + 1..start + 1, page_entries);
     }
 
-    /// Render a raster or SVG file into the content area.
+    /// Render a raster or SVG file into the content area at native resolution.
+    /// The image viewer scales it for zooming.
     fn render_file_task(&self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
-        let zoom = self.zoom;
         let render_path = path.clone();
         cosmic::task::future(async move {
             let rgba = tokio::task::spawn_blocking(move || {
-                render::render_path(&render_path, zoom)
+                render::render_path(&render_path, 1.0)
                     .ok()
                     .map(|rendered| (rendered.width, rendered.height, rendered.rgba_data))
             })
             .await
             .ok()
             .flatten();
-            Message::FileRendered { path, zoom, rgba }
+            Message::FileRendered { path, rgba }
         })
     }
 
-    /// Render a PDF page into the content area via the worker.
+    /// Render a PDF page into the content area at native resolution. The
+    /// image viewer scales it for zooming.
     fn render_page_task(&self, path: PathBuf, page: u32) -> iced::Task<cosmic::Action<Message>> {
         let worker = self.worker.clone();
-        let zoom = self.zoom;
         let render_path = path.clone();
         cosmic::task::future(async move {
             let rgba =
-                tokio::task::spawn_blocking(move || worker.render_page(&render_path, page, zoom))
+                tokio::task::spawn_blocking(move || worker.render_page(&render_path, page, 1.0))
                     .await
                     .ok()
                     .flatten();
-            Message::PageRendered {
-                path,
-                page,
-                zoom,
-                rgba,
-            }
+            Message::PageRendered { path, page, rgba }
         })
     }
 
-    /// Re-render the current target at the current zoom.
-    fn render_current(&mut self) -> iced::Task<cosmic::Action<Message>> {
-        match self.current_target.clone() {
-            Some(CurrentTarget::File { path })
-                if storage::document::is_pdf(&path).unwrap_or(false) =>
-            {
-                // Zoom change on a preview: clear full pages, keep the
-                // thumbnails and re-render the visible window.
-                let Some(tab) = self.active_tab() else {
-                    return iced::Task::none();
-                };
-                let visible = {
-                    let Some(state) = self.tab_ui.get_mut(&tab) else {
-                        return iced::Task::none();
-                    };
-                    let Some(preview) = state.preview.as_mut() else {
-                        return iced::Task::none();
-                    };
-                    if preview.path != path {
-                        return iced::Task::none();
-                    }
-                    preview.zoom = self.zoom;
-                    preview.full_order.clear();
-                    preview.requested = None;
-                    for slot in preview.pages.iter_mut() {
-                        if matches!(slot, PageSlot::Full { .. }) {
-                            *slot = PageSlot::Empty;
-                        }
-                    }
-                    Self::preview_visible_range(preview)
-                };
-                self.request_preview_window(&path, visible)
+    /// Re-render the visible window of the PDF preview at `zoom`.
+    fn render_preview_at(
+        &mut self,
+        path: &PathBuf,
+        zoom: f32,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let Some(tab) = self.active_tab() else {
+            return iced::Task::none();
+        };
+        let visible = {
+            let Some(state) = self.tab_ui.get_mut(&tab) else {
+                return iced::Task::none();
+            };
+            let Some(preview) = state.preview.as_mut() else {
+                return iced::Task::none();
+            };
+            if preview.path != *path {
+                return iced::Task::none();
             }
-            Some(CurrentTarget::File { path }) => self.render_file_task(path),
-            Some(CurrentTarget::Page { path, page }) => self.render_page_task(path, page),
-            None => iced::Task::none(),
+            preview.zoom = zoom;
+            preview.full_order.clear();
+            preview.requested = None;
+            for slot in preview.pages.iter_mut() {
+                if matches!(slot, PageSlot::Full { .. }) {
+                    *slot = PageSlot::Empty;
+                }
+            }
+            Self::preview_visible_range(preview)
+        };
+        self.request_preview_window(path, visible)
+    }
+
+    /// Change the zoom of a PDF preview by `steps` (signed) and re-render.
+    fn zoom_preview(&mut self, path: &PathBuf, steps: f32) -> iced::Task<cosmic::Action<Message>> {
+        let zoom = self.preview_zoom(path).unwrap_or(1.0);
+        let zoom = (zoom * ZOOM_STEP.powf(steps)).clamp(0.05, 8.0);
+        self.render_preview_at(path, zoom)
+    }
+
+    /// Scroll the active preview by one document page. `direction` is -1 (up)
+    /// or +1 (down). No-op when the active tab has no continuous preview.
+    fn scroll_preview_page(&mut self, direction: i32) -> iced::Task<cosmic::Action<Message>> {
+        let Some(tab) = self.active_tab() else {
+            return iced::Task::none();
+        };
+        let Some(state) = self.tab_ui.get(&tab) else {
+            return iced::Task::none();
+        };
+        let Some(preview) = state.preview.as_ref() else {
+            return iced::Task::none();
+        };
+        if preview.page_sizes.is_empty() {
+            return iced::Task::none();
+        }
+
+        // The page whose top is currently at or above the viewport top.
+        let mut current = 0usize;
+        let mut top = 0.0;
+        for (index, (_, height)) in preview.page_sizes.iter().enumerate() {
+            let bottom = top + height * preview.zoom;
+            if bottom > preview.scroll + 1.0 {
+                current = index;
+                break;
+            }
+            top = bottom;
+        }
+
+        let last = preview.page_sizes.len() - 1;
+        let target = (current as i32 + direction).clamp(0, last as i32) as usize;
+        let target_y = preview.page_sizes[..target]
+            .iter()
+            .map(|(_, height)| height * preview.zoom)
+            .sum();
+
+        scroll_to::<Message>(
+            cosmic::widget::Id::new(PREVIEW_SCROLL_ID),
+            AbsoluteOffset {
+                x: None,
+                y: Some(target_y),
+            },
+        )
+        .map(cosmic::Action::from)
+    }
+
+    /// Change the zoom by `steps` (signed). Single images are scaled by the
+    /// viewer; PDF previews re-render at the new zoom.
+    fn zoom_by(&mut self, steps: f32) -> iced::Task<cosmic::Action<Message>> {
+        let Some(target) = self.current_target.clone() else {
+            return iced::Task::none();
+        };
+        match target {
+            CurrentTarget::File { path } if storage::document::is_pdf(&path).unwrap_or(false) => {
+                self.zoom_preview(&path, steps)
+            }
+            target => {
+                let state = self.zoom_states.entry(target).or_default();
+                if state.fit {
+                    // Leave fit. Zoom in lands on native 100 %; zoom out
+                    // starts one step below native.
+                    state.fit = false;
+                    state.scale = if steps > 0.0 { 1.0 } else { 1.0 / ZOOM_STEP };
+                } else {
+                    state.scale = (state.scale * ZOOM_STEP.powf(steps)).clamp(MIN_SCALE, MAX_SCALE);
+                }
+                iced::Task::none()
+            }
         }
     }
 
-    /// Change the zoom by `steps` (signed) and re-render the current target.
-    fn zoom_by(&mut self, steps: f32) -> iced::Task<cosmic::Action<Message>> {
-        self.zoom = (self.zoom * ZOOM_STEP.powf(steps)).clamp(0.05, 8.0);
-        self.render_current()
+    /// Set the zoom of the current target to `scale` (1.0 = 100 %).
+    fn set_zoom(&mut self, scale: f32) -> iced::Task<cosmic::Action<Message>> {
+        let Some(target) = self.current_target.clone() else {
+            return iced::Task::none();
+        };
+        match target {
+            CurrentTarget::File { path } if storage::document::is_pdf(&path).unwrap_or(false) => {
+                self.render_preview_at(&path, scale)
+            }
+            target => {
+                let state = self.zoom_states.entry(target).or_default();
+                state.fit = false;
+                state.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
+                state.offset_x = 0.0;
+                state.offset_y = 0.0;
+                iced::Task::none()
+            }
+        }
+    }
+
+    /// Fit the current target to the viewport (single images only).
+    fn set_fit(&mut self) {
+        let Some(target) = self.current_target.clone() else {
+            return;
+        };
+        if let CurrentTarget::File { path } = &target
+            && storage::document::is_pdf(path).unwrap_or(false)
+        {
+            return;
+        }
+        let state = self.zoom_states.entry(target).or_default();
+        state.fit = true;
+        state.scale = 1.0;
+        state.offset_x = 0.0;
+        state.offset_y = 0.0;
     }
 
     /// Open the system folder dialog.
@@ -992,6 +1096,14 @@ impl AppModel {
                 return self.activate_target(target);
             }
 
+            Message::PrevPage => {
+                return self.scroll_preview_page(-1);
+            }
+
+            Message::NextPage => {
+                return self.scroll_preview_page(1);
+            }
+
             Message::OpenFolder => {
                 return self.open_folder_dialog();
             }
@@ -1177,6 +1289,17 @@ impl AppModel {
                 return self.request_preview_window(&path, visible);
             }
 
+            Message::PreviewWheel { path, delta } => {
+                let steps = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
+                };
+                if steps == 0.0 {
+                    return iced::Task::none();
+                }
+                return self.zoom_preview(&path, steps);
+            }
+
             Message::StripScrolled {
                 tab,
                 offset_y,
@@ -1197,27 +1320,31 @@ impl AppModel {
                 return self.toggle_expand(index);
             }
 
-            Message::FileRendered { path, zoom, rgba } => {
-                // Ignore renders that raced with a zoom change.
-                if self.current_target == Some(CurrentTarget::File { path })
-                    && (self.zoom - zoom).abs() < f32::EPSILON
-                {
+            Message::FileRendered { path, rgba } => {
+                // Ignore renders that raced with a target change.
+                if self.current_target == Some(CurrentTarget::File { path }) {
                     self.apply_image(rgba);
                 }
             }
 
-            Message::PageRendered {
-                path,
-                page,
-                zoom,
-                rgba,
-            } => {
-                // Ignore renders that raced with a zoom change.
-                if self.current_target == Some(CurrentTarget::Page { path, page })
-                    && (self.zoom - zoom).abs() < f32::EPSILON
-                {
+            Message::PageRendered { path, page, rgba } => {
+                // Ignore renders that raced with a target change.
+                if self.current_target == Some(CurrentTarget::Page { path, page }) {
                     self.apply_image(rgba);
                 }
+            }
+
+            Message::ViewerStateChanged {
+                target,
+                scale,
+                offset_x,
+                offset_y,
+            } => {
+                let state = self.zoom_states.entry(target).or_default();
+                state.fit = false;
+                state.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
+                state.offset_x = offset_x;
+                state.offset_y = offset_y;
             }
 
             Message::ZoomIn => return self.zoom_by(1.0),
@@ -1225,19 +1352,24 @@ impl AppModel {
             Message::ZoomOut => return self.zoom_by(-1.0),
 
             Message::Zoom100 => {
-                self.zoom = 1.0;
-                return self.render_current();
+                return self.set_zoom(1.0);
             }
 
-            Message::WheelZoom(delta) => {
-                // Normalize the scroll to zoom steps: one wheel notch is
-                // one step, 50 trackpad pixels count as one step.
-                let steps = match delta {
-                    iced::mouse::ScrollDelta::Lines { y, .. } => y,
-                    iced::mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
-                };
-                if steps != 0.0 {
-                    return self.zoom_by(steps);
+            Message::SetZoom(scale) => {
+                return self.set_zoom(scale);
+            }
+
+            Message::ModifiersChanged(modifiers) => {
+                self.keyboard_modifiers = modifiers;
+            }
+
+            Message::ZoomToFit => {
+                self.set_fit();
+            }
+
+            Message::ToggleFullscreen => {
+                if let Some(window_id) = self.core.main_window_id() {
+                    return cosmic::command::toggle_maximize(window_id);
                 }
             }
 

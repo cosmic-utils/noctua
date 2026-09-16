@@ -3,11 +3,9 @@
 //
 // Pure view: builds widgets from the application model. Never changes state.
 
-use cosmic::iced::alignment::{Horizontal, Vertical};
-use cosmic::iced::widget::scrollable::{Direction, Scrollbar};
 use cosmic::iced::{Alignment, ContentFit, Length};
 use cosmic::prelude::*;
-use cosmic::widget::{self, icon, tab_bar};
+use cosmic::widget::{self, tab_bar};
 
 use noctua_core::storage;
 
@@ -16,7 +14,9 @@ use crate::message::Message;
 use crate::model::{AppModel, CurrentTarget};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
+use crate::widget::image_viewer::Viewer;
 use crate::widget::thumbnail_strip::thumbnail_strip;
+use crate::widget::zoom_controls::zoom_controls;
 
 /// Describes the interface based on the current state of the application model.
 ///
@@ -97,50 +97,40 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
             // upload bounds check drops the bottom-right fragment, so
             // such images render with a missing block. Deliberately
             // not worked around — fix belongs in iced/libcosmic.
-            let content: Element<'_, Message> = if (app.zoom - 1.0).abs() < f32::EPSILON {
-                // Fit view: scale down images larger than the viewport,
-                // keep smaller ones at their native size, never crop.
-                // The mouse wheel zooms over the image.
-                widget::mouse_area(
-                    widget::container(
-                        widget::Image::new(image.handle.clone()).content_fit(ContentFit::ScaleDown),
-                    )
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .padding(space.space_m)
-                    .align_x(Horizontal::Center)
-                    .align_y(Vertical::Center),
-                )
-                .on_scroll(Message::WheelZoom)
-                .into()
+            let Some(target) = app.current_target.clone() else {
+                return empty_state("image-x-generic-symbolic", fl!("select-hint"));
+            };
+            let state = app.zoom_states.get(&target).copied().unwrap_or_default();
+
+            let content_fit = if state.fit {
+                ContentFit::ScaleDown
             } else {
-                // Zoomed view: show native pixels at their rendered size.
-                // ContentFit::None keeps the image from being re-fitted to the
-                // viewport; the scrollable pans in both axes. The mouse area
-                // sits inside the scrollable so the wheel zooms (it captures
-                // the event before the scrollable would scroll).
-                widget::scrollable(
-                    widget::mouse_area(
-                        widget::container(
-                            widget::Image::new(image.handle.clone()).content_fit(ContentFit::None),
-                        )
-                        .padding(space.space_m),
-                    )
-                    .on_scroll(Message::WheelZoom),
-                )
-                .direction(Direction::Both {
-                    vertical: Scrollbar::new(),
-                    horizontal: Scrollbar::new(),
-                })
-                .scroller_width(8.0)
-                .scrollbar_width(8.0)
-                .scrollbar_padding(8.0)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
+                ContentFit::None
+            };
+            let (scale, offset_x, offset_y) = if state.fit {
+                (1.0, 0.0, 0.0)
+            } else {
+                (state.scale, state.offset_x, state.offset_y)
             };
 
-            content
+            widget::container(
+                Viewer::new(image.handle.clone())
+                    .content_fit(content_fit)
+                    .modifiers(app.keyboard_modifiers)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .with_state(scale, offset_x, offset_y)
+                    .on_state_change(move |scale, offset_x, offset_y| {
+                        Message::ViewerStateChanged {
+                            target: target.clone(),
+                            scale,
+                            offset_x,
+                            offset_y,
+                        }
+                    }),
+            )
+            .padding(space.space_m)
+            .into()
         }
         None => empty_state("image-x-generic-symbolic", fl!("select-hint")),
     }
@@ -150,17 +140,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
 fn status_bar(app: &AppModel) -> Element<'_, Message> {
     let space = cosmic::theme::spacing();
 
-    let nav = widget::row::with_capacity(2)
-        .spacing(space.space_xxs)
-        .push(
-            widget::button::icon(icon::from_name("go-previous-symbolic"))
-                .on_press(Message::PrevEntry),
-        )
-        .push(
-            widget::button::icon(icon::from_name("go-next-symbolic")).on_press(Message::NextEntry),
-        );
-
-    let mut info = widget::row::with_capacity(4)
+    let mut info = widget::row::with_capacity(3)
         .spacing(space.space_s)
         .align_y(Alignment::Center);
 
@@ -168,8 +148,6 @@ fn status_bar(app: &AppModel) -> Element<'_, Message> {
     if !position.is_empty() {
         info = info.push(widget::text::body(position));
     }
-
-    info = info.push(widget::text::body(format!("{:.0}%", app.zoom * 100.0)));
 
     if let Some(target) = &app.current_target {
         let path = match target {
@@ -188,9 +166,9 @@ fn status_bar(app: &AppModel) -> Element<'_, Message> {
     let row = widget::row::with_capacity(3)
         .spacing(space.space_s)
         .align_y(Alignment::Center)
-        .push(nav)
         .push(widget::space().width(Length::Fill))
-        .push(info);
+        .push(info)
+        .push(zoom_controls_view(app));
 
     widget::container(row)
         .width(Length::Fill)
@@ -217,4 +195,33 @@ fn position_label(app: &AppModel) -> String {
     };
 
     format!("{} / {total}", position + 1)
+}
+
+/// The current zoom of the active target: `(fit, scale)`.
+fn current_zoom(app: &AppModel) -> (bool, f32) {
+    let Some(target) = &app.current_target else {
+        return (true, 1.0);
+    };
+
+    // PDF previews keep their zoom in the preview itself.
+    if let CurrentTarget::File { path } = target
+        && storage::document::is_pdf(path).unwrap_or(false)
+        && let Some(zoom) = app
+            .active_tab()
+            .and_then(|tab| app.tab_ui.get(&tab))
+            .and_then(|state| state.preview.as_ref())
+            .filter(|preview| &preview.path == path)
+            .map(|preview| preview.zoom)
+    {
+        return (false, zoom);
+    }
+
+    let state = app.zoom_states.get(target).copied().unwrap_or_default();
+    (state.fit, state.scale)
+}
+
+/// Zoom controls reflecting the current zoom of the active target.
+fn zoom_controls_view(app: &AppModel) -> Element<'_, Message> {
+    let (fit, scale) = current_zoom(app);
+    zoom_controls(fit, scale, &app.key_binds)
 }
