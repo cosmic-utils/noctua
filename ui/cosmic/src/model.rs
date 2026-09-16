@@ -35,7 +35,6 @@ pub(crate) const PREVIEW_FULL_CACHE: usize = 12;
 
 /// Stable widget ids; restoring scroll offsets needs them.
 pub(crate) const PREVIEW_SCROLL_ID: &str = "preview-scroll";
-pub(crate) const STRIP_SCROLL_ID: &str = "strip-scroll";
 
 /// RGBA pixels: (width, height, data).
 pub(crate) type Rgba = (u32, u32, Vec<u8>);

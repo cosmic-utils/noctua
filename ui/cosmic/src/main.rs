@@ -9,6 +9,7 @@ mod message;
 mod model;
 mod update;
 mod view;
+mod widget;
 
 use clap::Parser;
 use cosmic::app::Settings;
