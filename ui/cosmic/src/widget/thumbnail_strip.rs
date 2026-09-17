@@ -105,9 +105,12 @@ pub(crate) fn thumbnail_strip<'a>(
             tile.into()
         };
 
+        // Select on release so a double-click does not fire the activation
+        // twice (`mouse_area::on_press` runs on every press, also the second
+        // one of a double-click).
         column = column.push(
             widget::mouse_area(entry_widget)
-                .on_press(Message::StripActivated(index))
+                .on_release(Message::StripActivated(index))
                 .on_double_click(Message::StripDoubleClicked(index)),
         );
     }
