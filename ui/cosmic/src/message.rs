@@ -118,6 +118,8 @@ pub enum Message {
     ToggleAbout,
     LaunchUrl(String),
     Quit,
+    /// No-op message used to force a present after an async render.
+    Tick,
 }
 
 /// Actions offered by the menu bar.

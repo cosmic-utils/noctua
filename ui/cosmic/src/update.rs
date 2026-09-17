@@ -1284,17 +1284,19 @@ impl AppModel {
             }
 
             Message::FileRendered { path, rgba } => {
-                // Ignore renders that raced with a target change.
-                if self.current_target == Some(CurrentTarget::File { path }) {
-                    self.apply_image(rgba);
+                if self.current_target != Some(CurrentTarget::File { path }) {
+                    return iced::Task::none();
                 }
+                self.apply_image(rgba);
+                self.pending_redraw = true;
             }
 
             Message::PageRendered { path, page, rgba } => {
-                // Ignore renders that raced with a target change.
-                if self.current_target == Some(CurrentTarget::Page { path, page }) {
-                    self.apply_image(rgba);
+                if self.current_target != Some(CurrentTarget::Page { path, page }) {
+                    return iced::Task::none();
                 }
+                self.apply_image(rgba);
+                self.pending_redraw = true;
             }
 
             Message::ViewerStateChanged {
@@ -1354,6 +1356,10 @@ impl AppModel {
             Message::Quit => {
                 self.save_session();
                 return iced::exit();
+            }
+
+            Message::Tick => {
+                self.pending_redraw = false;
             }
         }
         iced::Task::none()

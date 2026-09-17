@@ -74,6 +74,7 @@ impl cosmic::Application for AppModel {
             current_size: None,
             pending_select: None,
             start_error: None,
+            pending_redraw: false,
         };
 
         let mut command = iced::Task::none();
@@ -171,7 +172,7 @@ impl cosmic::Application for AppModel {
         // A HashMap is not Hash, so pass the binds as a Vec for the
         // subscription state.
         let key_binds: Vec<_> = self.key_binds.clone().into_iter().collect();
-        iced::keyboard::listen()
+        let keyboard = iced::keyboard::listen()
             .with(key_binds)
             .filter_map(|(key_binds, event)| match event {
                 iced::keyboard::Event::ModifiersChanged(modifiers) => {
@@ -199,7 +200,19 @@ impl cosmic::Application for AppModel {
                     }
                 }
                 _ => None,
-            })
+            });
+
+        // Timer-driven redraw hack: async render results are not presented on
+        // their own (libcosmic/iced bug), so a short-lived subscription emits a
+        // message that forces a present. Active only while `pending_redraw`.
+        if self.pending_redraw {
+            iced::Subscription::batch(vec![
+                keyboard,
+                iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::Tick),
+            ])
+        } else {
+            keyboard
+        }
     }
 
     /// Save the session when the app exits.

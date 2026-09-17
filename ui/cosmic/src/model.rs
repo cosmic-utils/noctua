@@ -205,4 +205,8 @@ pub struct AppModel {
     /// Path of a start argument that could not be opened; shown in the
     /// empty view instead of the folder hint.
     pub(crate) start_error: Option<String>,
+    /// Set after an async render updates the image; requests a single
+    /// timer-driven redraw because async results are not presented on their
+    /// own (libcosmic/iced bug).
+    pub(crate) pending_redraw: bool,
 }
