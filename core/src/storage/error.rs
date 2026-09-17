@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// src/storage/error.rs
+// core/src/storage/error.rs
 //
 // Central error type for all storage-related operations (I/O, serialization, thumbnails).
 
@@ -21,8 +21,8 @@ pub enum StorageError {
     #[error("Document error: {0}")]
     Document(String),
 
-    #[error("Invalid workspace: {0}")]
-    Workspace(String),
+    #[error("Data directory unavailable: {0}")]
+    DataDir(String),
 }
 
 impl From<std::io::Error> for StorageError {

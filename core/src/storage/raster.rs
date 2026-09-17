@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// src/storage/raster.rs
+// core/src/storage/raster.rs
 //
 // Raster image metadata extraction (PNG, JPEG, GIF, BMP, TIFF, WebP).
 

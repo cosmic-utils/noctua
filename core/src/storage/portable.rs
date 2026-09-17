@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// src/storage/portable.rs
+// core/src/storage/portable.rs
 //
 // Portable document (PDF) metadata extraction.
 

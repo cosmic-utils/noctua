@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// src/storage/vector.rs
+// core/src/storage/vector.rs
 //
 // Vector graphics (SVG) metadata extraction.
 

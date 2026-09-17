@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 /// Directory holding all session files under the default data root.
 pub fn sessions_dir() -> Result<PathBuf, StorageError> {
     let data_root = dirs::data_dir()
-        .ok_or_else(|| StorageError::Workspace("data directory not found".to_string()))?;
+        .ok_or_else(|| StorageError::DataDir("data directory not found".to_string()))?;
     Ok(sessions_dir_at(&data_root))
 }
 
