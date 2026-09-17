@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
+use tokio::sync::oneshot;
+
 use crate::pdfium_ops::{Command, CommandResult, PdfOpsManager};
 use crate::storage::thumbcache::ThumbSize;
 
@@ -30,8 +32,14 @@ pub enum Priority {
 pub enum Job {
     /// Execute a PDF editing command on the shared document.
     Op(Command),
-    /// Render a page of an arbitrary PDF file at the given zoom.
-    RenderFilePage { path: PathBuf, page: u32, zoom: f32 },
+    /// Render a raster, SVG, or PDF file at the given zoom. `page` is only
+    /// relevant for PDFs (`None` renders page 1). The worker dispatches by
+    /// document format, so callers never branch on the type.
+    Render {
+        path: PathBuf,
+        page: Option<u32>,
+        zoom: f32,
+    },
     /// Render the given 1-based pages of a PDF file as thumbnails. The
     /// document is opened once and closed again — the shared open
     /// document stays untouched.
@@ -77,7 +85,7 @@ struct QueuedJob {
     seq: u64,
     priority: Priority,
     job: Job,
-    reply: Sender<JobResult>,
+    reply: oneshot::Sender<JobResult>,
 }
 
 impl PartialEq for QueuedJob {
@@ -120,9 +128,10 @@ impl Worker {
         }
     }
 
-    /// Submit a job and block until the result arrives.
-    pub fn execute(&self, priority: Priority, job: Job) -> JobResult {
-        let (reply, result) = mpsc::channel();
+    /// Submit a job and return a receiver for the result. The worker thread
+    /// resolves it asynchronously; the caller awaits the receiver.
+    pub fn execute(&self, priority: Priority, job: Job) -> oneshot::Receiver<JobResult> {
+        let (reply, result) = oneshot::channel();
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let queued = QueuedJob {
@@ -131,19 +140,17 @@ impl Worker {
             job,
             reply,
         };
-        match &self.sender {
-            Some(sender) => {
-                if sender.send(queued).is_err() {
-                    return JobResult::Error("pdfium worker is not running".to_string());
-                }
-            }
-            None => {
-                return JobResult::Error("pdfium worker is shut down".to_string());
-            }
+        let sent = match &self.sender {
+            Some(sender) => sender.send(queued).is_ok(),
+            None => false,
+        };
+        if !sent {
+            // Resolve immediately so callers always receive a result.
+            let (error_tx, error_rx) = oneshot::channel();
+            let _ = error_tx.send(JobResult::Error("pdfium worker is not running".to_string()));
+            return error_rx;
         }
         result
-            .recv()
-            .unwrap_or_else(|_| JobResult::Error("pdfium worker vanished".to_string()))
     }
 
     /// Shut down the worker thread.
@@ -176,52 +183,47 @@ impl SharedWorker {
         }
     }
 
-    /// Submit a job and block until the result arrives.
-    pub fn execute(&self, priority: Priority, job: Job) -> JobResult {
+    /// Submit a job and return a receiver for the result.
+    pub fn execute(&self, priority: Priority, job: Job) -> oneshot::Receiver<JobResult> {
         self.inner.worker.execute(priority, job)
     }
 
-    /// Thumbnail for a file: freedesktop cache first; on a miss, PDFs
-    /// are rendered on the worker thread, raster/SVG in place.
-    pub fn thumbnail(&self, path: &Path, size: ThumbSize) -> Option<(u32, u32, Vec<u8>)> {
-        if let Ok(Some(thumb)) = crate::storage::thumbcache::lookup(path, size) {
-            return Some(thumb);
-        }
-        if crate::storage::document::is_pdf(path).unwrap_or(false) {
-            match self.execute(
-                Priority::Low,
-                Job::RenderThumb {
-                    path: path.to_path_buf(),
-                    size,
-                },
-            ) {
-                JobResult::Rendered {
-                    width,
-                    height,
-                    rgba_data,
-                } => Some((width, height, rgba_data)),
-                _ => None,
-            }
-        } else {
-            crate::storage::thumbcache::get_or_create(path, size).ok()
-        }
-    }
-
-    /// Render a page of an arbitrary PDF file on the worker thread.
-    pub fn render_page(&self, path: &Path, page: u32, zoom: f32) -> Option<(u32, u32, Vec<u8>)> {
-        match self.execute(
-            Priority::VisiblePage,
-            Job::RenderFilePage {
-                path: path.to_path_buf(),
-                page,
-                zoom,
-            },
-        ) {
-            JobResult::Rendered {
+    /// Render a raster, SVG, or PDF file at the given zoom. `page` is only
+    /// used for PDFs (`None` renders page 1).
+    pub async fn render(
+        &self,
+        path: PathBuf,
+        page: Option<u32>,
+        zoom: f32,
+    ) -> Option<(u32, u32, Vec<u8>)> {
+        match self
+            .execute(Priority::VisiblePage, Job::Render { path, page, zoom })
+            .await
+        {
+            Ok(JobResult::Rendered {
                 width,
                 height,
                 rgba_data,
-            } => Some((width, height, rgba_data)),
+            }) => Some((width, height, rgba_data)),
+            _ => None,
+        }
+    }
+
+    /// Thumbnail for a file: freedesktop cache first; on a miss the render
+    /// happens on the worker thread.
+    pub async fn thumbnail(&self, path: PathBuf, size: ThumbSize) -> Option<(u32, u32, Vec<u8>)> {
+        if let Ok(Some(thumb)) = crate::storage::thumbcache::lookup(&path, size) {
+            return Some(thumb);
+        }
+        match self
+            .execute(Priority::Low, Job::RenderThumb { path, size })
+            .await
+        {
+            Ok(JobResult::Rendered {
+                width,
+                height,
+                rgba_data,
+            }) => Some((width, height, rgba_data)),
             _ => None,
         }
     }
@@ -229,40 +231,39 @@ impl SharedWorker {
     /// Render several pages of a PDF file with a single document open.
     /// The document is opened once on the worker; failed pages are
     /// skipped. Returns (page, width, height, rgba) tuples.
-    pub fn render_pages(
+    pub async fn render_pages(
         &self,
-        path: &Path,
-        pages: &[u32],
+        path: PathBuf,
+        pages: Vec<u32>,
         zoom: f32,
         priority: Priority,
     ) -> Option<Vec<PageThumb>> {
-        match self.execute(
-            priority,
-            Job::RenderPageThumbs {
-                path: path.to_path_buf(),
-                pages: pages.to_vec(),
-                zoom,
-            },
-        ) {
-            JobResult::RenderedThumbs(thumbs) => Some(thumbs),
+        match self
+            .execute(priority, Job::RenderPageThumbs { path, pages, zoom })
+            .await
+        {
+            Ok(JobResult::RenderedThumbs(thumbs)) => Some(thumbs),
             _ => None,
         }
     }
 
     /// Render several pages of a PDF file as thumbnails (low priority).
-    pub fn page_thumbs(&self, path: &Path, pages: &[u32], zoom: f32) -> Option<Vec<PageThumb>> {
-        self.render_pages(path, pages, zoom, Priority::Low)
+    pub async fn page_thumbs(
+        &self,
+        path: PathBuf,
+        pages: Vec<u32>,
+        zoom: f32,
+    ) -> Option<Vec<PageThumb>> {
+        self.render_pages(path, pages, zoom, Priority::Low).await
     }
 
     /// Width and height of every page of a PDF file, in points.
-    pub fn page_sizes(&self, path: &Path) -> Option<Vec<(f32, f32)>> {
-        match self.execute(
-            Priority::VisiblePage,
-            Job::FilePageSizes {
-                path: path.to_path_buf(),
-            },
-        ) {
-            JobResult::PageSizes(sizes) => Some(sizes),
+    pub async fn page_sizes(&self, path: PathBuf) -> Option<Vec<(f32, f32)>> {
+        match self
+            .execute(Priority::VisiblePage, Job::FilePageSizes { path })
+            .await
+        {
+            Ok(JobResult::PageSizes(sizes)) => Some(sizes),
             _ => None,
         }
     }
@@ -310,7 +311,7 @@ fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
     // every later job fail silently.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job.job {
         Job::Op(command) => JobResult::Op(manager.execute(command)),
-        Job::RenderFilePage { path, page, zoom } => render_file_page(&path, page, zoom),
+        Job::Render { path, page, zoom } => render_file(&path, page, zoom),
         Job::RenderPageThumbs { path, pages, zoom } => render_page_thumbs(&path, &pages, zoom),
         Job::FilePageCount { path } => file_page_count(&path),
         Job::FilePageSizes { path } => file_page_sizes(&path),
@@ -321,6 +322,24 @@ fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
         JobResult::Error("worker job panicked".to_string())
     });
     let _ = job.reply.send(result);
+}
+
+/// Render a raster, SVG, or PDF file at the given zoom. PDFs go through
+/// pdfium (page is 1-based); everything else uses the shared raster/SVG
+/// render path.
+fn render_file(path: &std::path::Path, page: Option<u32>, zoom: f32) -> JobResult {
+    if crate::storage::document::is_pdf(path).unwrap_or(false) {
+        render_file_page(path, page.unwrap_or(1), zoom)
+    } else {
+        match crate::render::render_path(path, zoom) {
+            Ok(rendered) => JobResult::Rendered {
+                width: rendered.width,
+                height: rendered.height,
+                rgba_data: rendered.rgba_data,
+            },
+            Err(e) => JobResult::Error(format!("{e:?}")),
+        }
+    }
 }
 
 /// Render a page of an arbitrary PDF file. Opens the file, renders,
@@ -411,10 +430,22 @@ fn file_page_sizes(path: &Path) -> JobResult {
     }
 }
 
-/// Render the first page of a PDF file as a thumbnail-sized image and
-/// store it in the freedesktop thumbnail cache. The caller has already
-/// checked the cache, so this always renders on a miss.
+/// Render a thumbnail for any document type and store it in the
+/// freedesktop thumbnail cache. The caller has already checked the cache,
+/// so this always renders on a miss.
 fn render_thumb(path: &std::path::Path, size: ThumbSize) -> JobResult {
+    if !crate::storage::document::is_pdf(path).unwrap_or(false) {
+        // Raster/SVG: the thumbnail cache renders and stores on a miss.
+        return match crate::storage::thumbcache::get_or_create(path, size) {
+            Ok((width, height, rgba_data)) => JobResult::Rendered {
+                width,
+                height,
+                rgba_data,
+            },
+            Err(e) => JobResult::Error(format!("{e:?}")),
+        };
+    }
+
     let mut scratch = PdfOpsManager::new();
     match scratch.execute(Command::Open {
         path: path.to_path_buf(),

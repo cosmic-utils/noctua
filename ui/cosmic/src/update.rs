@@ -17,7 +17,6 @@ use cosmic::widget::menu::key_bind::Modifier;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::{iced, prelude::*};
 
-use noctua_core::render;
 use noctua_core::render::worker::{Job, JobResult, Priority};
 use noctua_core::session::Session;
 use noctua_core::storage;
@@ -251,10 +250,7 @@ impl AppModel {
         let worker = self.worker.clone();
         let worker_path = path.clone();
         cosmic::task::future(async move {
-            let sizes = tokio::task::spawn_blocking(move || worker.page_sizes(&worker_path))
-                .await
-                .ok()
-                .flatten();
+            let sizes = worker.page_sizes(worker_path).await;
             Message::PreviewSizesKnown { path, sizes }
         })
     }
@@ -363,13 +359,10 @@ impl AppModel {
             Priority::Low
         };
         cosmic::task::future(async move {
-            let pages = tokio::task::spawn_blocking(move || {
-                worker.render_pages(&worker_path, &wanted, zoom, priority)
-            })
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+            let pages = worker
+                .render_pages(worker_path, wanted, zoom, priority)
+                .await
+                .unwrap_or_default();
             Message::PreviewPagesRendered {
                 path: result_path,
                 zoom,
@@ -457,58 +450,55 @@ impl AppModel {
 
         let worker = self.worker.clone();
         cosmic::task::future(async move {
-            let thumbs = tokio::task::spawn_blocking(move || {
-                let mut results: Vec<(usize, Option<Rgba>)> = Vec::new();
-                let mut page_requests: Vec<(usize, PathBuf, u32)> = Vec::new();
+            let mut results: Vec<(usize, Option<Rgba>)> = Vec::new();
+            let mut page_requests: Vec<(usize, PathBuf, u32)> = Vec::new();
 
-                for (index, target) in wanted {
-                    match target {
-                        NavEntry::File { path } => {
-                            let thumb = worker.thumbnail(&path, ThumbSize::Normal);
-                            if thumb.is_none() {
-                                tracing::warn!("thumbnail generation failed for {path:?}");
-                            }
-                            results.push((index, thumb));
+            for (index, target) in wanted {
+                match target {
+                    NavEntry::File { path } => {
+                        let thumb = worker.thumbnail(path.clone(), ThumbSize::Normal).await;
+                        if thumb.is_none() {
+                            tracing::warn!("thumbnail generation failed for {path:?}");
                         }
-                        NavEntry::Page { path, page } => {
-                            page_requests.push((index, path, page));
+                        results.push((index, thumb));
+                    }
+                    NavEntry::Page { path, page } => {
+                        page_requests.push((index, path, page));
+                    }
+                }
+            }
+
+            let mut by_path: Vec<(PathBuf, Vec<(usize, u32)>)> = Vec::new();
+            for (index, path, page) in page_requests {
+                match by_path.iter_mut().find(|(p, _)| *p == path) {
+                    Some((_, pages)) => pages.push((index, page)),
+                    None => by_path.push((path, vec![(index, page)])),
+                }
+            }
+            for (path, pages) in by_path {
+                let page_numbers: Vec<u32> = pages.iter().map(|(_, page)| *page).collect();
+                match worker.page_thumbs(path, page_numbers, THUMB_ZOOM).await {
+                    Some(thumbs) => {
+                        for (index, page) in pages {
+                            let rgba = thumbs
+                                .iter()
+                                .find(|(p, ..)| *p == page)
+                                .map(|(_, w, h, data)| (*w, *h, data.clone()));
+                            results.push((index, rgba));
+                        }
+                    }
+                    None => {
+                        for (index, _) in pages {
+                            results.push((index, None));
                         }
                     }
                 }
+            }
 
-                let mut by_path: Vec<(PathBuf, Vec<(usize, u32)>)> = Vec::new();
-                for (index, path, page) in page_requests {
-                    match by_path.iter_mut().find(|(p, _)| *p == path) {
-                        Some((_, pages)) => pages.push((index, page)),
-                        None => by_path.push((path, vec![(index, page)])),
-                    }
-                }
-                for (path, pages) in by_path {
-                    let page_numbers: Vec<u32> = pages.iter().map(|(_, page)| *page).collect();
-                    match worker.page_thumbs(&path, &page_numbers, THUMB_ZOOM) {
-                        Some(thumbs) => {
-                            for (index, page) in pages {
-                                let rgba = thumbs
-                                    .iter()
-                                    .find(|(p, ..)| *p == page)
-                                    .map(|(_, w, h, data)| (*w, *h, data.clone()));
-                                results.push((index, rgba));
-                            }
-                        }
-                        None => {
-                            for (index, _) in pages {
-                                results.push((index, None));
-                            }
-                        }
-                    }
-                }
-
-                results
-            })
-            .await
-            .ok()
-            .unwrap_or_default();
-            Message::StripThumbsReady { tab, thumbs }
+            Message::StripThumbsReady {
+                tab,
+                thumbs: results,
+            }
         })
     }
 
@@ -557,18 +547,16 @@ impl AppModel {
         let worker = self.worker.clone();
         let count_path = path.clone();
         cosmic::task::future(async move {
-            let pages = tokio::task::spawn_blocking(move || {
-                match worker.execute(
+            let pages = match worker
+                .execute(
                     Priority::VisiblePage,
                     Job::FilePageCount { path: count_path },
-                ) {
-                    JobResult::PageCount(count) => Some(count),
-                    _ => None,
-                }
-            })
-            .await
-            .ok()
-            .flatten();
+                )
+                .await
+            {
+                Ok(JobResult::PageCount(count)) => Some(count),
+                _ => None,
+            };
             Message::PagesKnown { path, pages }
         })
     }
@@ -619,34 +607,22 @@ impl AppModel {
         state.strip.splice(start + 1..start + 1, page_entries);
     }
 
-    /// Render a raster or SVG file into the content area at native resolution.
-    /// The image viewer scales it for zooming.
+    /// Render a single-image target (raster/SVG, or a single-page PDF) at
+    /// native resolution. The worker dispatches by document format.
     fn render_file_task(&self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
-        let render_path = path.clone();
+        let worker = self.worker.clone();
         cosmic::task::future(async move {
-            let rgba = tokio::task::spawn_blocking(move || {
-                render::render_path(&render_path, 1.0)
-                    .ok()
-                    .map(|rendered| (rendered.width, rendered.height, rendered.rgba_data))
-            })
-            .await
-            .ok()
-            .flatten();
+            let rgba = worker.render(path.clone(), None, 1.0).await;
             Message::FileRendered { path, rgba }
         })
     }
 
-    /// Render a PDF page into the content area at native resolution. The
-    /// image viewer scales it for zooming.
+    /// Render a single PDF page into the content area at native resolution.
+    /// The image viewer scales it for zooming.
     fn render_page_task(&self, path: PathBuf, page: u32) -> iced::Task<cosmic::Action<Message>> {
         let worker = self.worker.clone();
-        let render_path = path.clone();
         cosmic::task::future(async move {
-            let rgba =
-                tokio::task::spawn_blocking(move || worker.render_page(&render_path, page, 1.0))
-                    .await
-                    .ok()
-                    .flatten();
+            let rgba = worker.render(path.clone(), Some(page), 1.0).await;
             Message::PageRendered { path, page, rgba }
         })
     }
@@ -986,15 +962,6 @@ impl AppModel {
         });
     }
 
-    /// Request a redraw so a freshly rendered image is uploaded and drawn.
-    /// The image viewer has no handle cache, so updating `current_image` does
-    /// not schedule a redraw on its own in the Wayland event loop.
-    fn request_redraw(&self) -> iced::Task<cosmic::Action<Message>> {
-        iced::runtime::task::effect(iced::runtime::Action::Window(
-            iced::window::Action::RedrawAll,
-        ))
-    }
-
     /// Handles messages emitted by the application and its widgets.
     ///
     /// Tasks may be returned for asynchronous execution of code in the background
@@ -1251,8 +1218,6 @@ impl AppModel {
                         *slot = PageSlot::Empty;
                     }
                 }
-
-                return self.request_redraw();
             }
 
             Message::PreviewScrolled {
@@ -1322,7 +1287,6 @@ impl AppModel {
                 // Ignore renders that raced with a target change.
                 if self.current_target == Some(CurrentTarget::File { path }) {
                     self.apply_image(rgba);
-                    return self.request_redraw();
                 }
             }
 
@@ -1330,7 +1294,6 @@ impl AppModel {
                 // Ignore renders that raced with a target change.
                 if self.current_target == Some(CurrentTarget::Page { path, page }) {
                     self.apply_image(rgba);
-                    return self.request_redraw();
                 }
             }
 

@@ -11,6 +11,7 @@ ron = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
+tokio = { version = "1", features = ["sync"] }
 
 # Document backends
 image = "0.25"
@@ -25,6 +26,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 filetime = "0.2"
+futures = "0.3"
 image = "0.25"
 md5 = "0.7"
 noctua-core-test-common = { path = "tests/common" }
