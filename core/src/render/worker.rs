@@ -412,21 +412,9 @@ fn file_page_sizes(path: &Path) -> JobResult {
 }
 
 /// Render the first page of a PDF file as a thumbnail-sized image and
-/// store it in the freedesktop thumbnail cache.
+/// store it in the freedesktop thumbnail cache. The caller has already
+/// checked the cache, so this always renders on a miss.
 fn render_thumb(path: &std::path::Path, size: ThumbSize) -> JobResult {
-    // Serve from cache when a valid entry already exists.
-    match crate::storage::thumbcache::lookup(path, size) {
-        Ok(Some((width, height, rgba_data))) => {
-            return JobResult::Rendered {
-                width,
-                height,
-                rgba_data,
-            };
-        }
-        Ok(None) => {}
-        Err(e) => return JobResult::Error(format!("{e:?}")),
-    }
-
     let mut scratch = PdfOpsManager::new();
     match scratch.execute(Command::Open {
         path: path.to_path_buf(),
