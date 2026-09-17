@@ -7,9 +7,9 @@
 use cosmic::iced::advanced::layout;
 use cosmic::iced::advanced::renderer;
 use cosmic::iced::advanced::widget::Widget;
-use cosmic::iced::advanced::widget::tree::{self, Tree};
+use cosmic::iced::advanced::widget::tree::Tree;
 use cosmic::iced::advanced::{Clipboard, Layout, Shell};
-use cosmic::iced::keyboard::{self, Modifiers};
+use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
 use cosmic::iced::{Event, Length, Rectangle, Size};
 use cosmic::{Element, Renderer, Theme};
@@ -20,6 +20,8 @@ use crate::message::Message;
 /// events (including plain wheel) pass through to the wrapped content.
 pub(crate) struct ScrollZoom<'a> {
     content: Element<'a, Message>,
+    /// Current keyboard modifiers, synced from the app.
+    modifiers: Modifiers,
     on_zoom: Option<Box<dyn Fn(mouse::ScrollDelta) -> Message + 'a>>,
 }
 
@@ -28,8 +30,15 @@ impl<'a> ScrollZoom<'a> {
     pub(crate) fn new(content: impl Into<Element<'a, Message>>) -> Self {
         Self {
             content: content.into(),
+            modifiers: Modifiers::default(),
             on_zoom: None,
         }
+    }
+
+    /// Sets the current keyboard modifiers, synced from the app.
+    pub(crate) fn modifiers(mut self, modifiers: Modifiers) -> Self {
+        self.modifiers = modifiers;
+        self
     }
 
     /// Sets the callback notified on Ctrl+wheel.
@@ -42,21 +51,7 @@ impl<'a> ScrollZoom<'a> {
     }
 }
 
-/// Local state: the current keyboard modifiers.
-#[derive(Default)]
-struct State {
-    keyboard_modifiers: Modifiers,
-}
-
 impl Widget<Message, Theme, Renderer> for ScrollZoom<'_> {
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<State>()
-    }
-
-    fn state(&self) -> tree::State {
-        tree::State::new(State::default())
-    }
-
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.content)]
     }
@@ -91,17 +86,15 @@ impl Widget<Message, Theme, Renderer> for ScrollZoom<'_> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        if let Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) = event {
-            tree.state.downcast_mut::<State>().keyboard_modifiers = *modifiers;
-        } else if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
-            let modifiers = tree.state.downcast_ref::<State>().keyboard_modifiers;
-            if modifiers.control() && cursor.position_over(layout.bounds()).is_some() {
-                if let Some(on_zoom) = &self.on_zoom {
-                    shell.publish(on_zoom(*delta));
-                    shell.capture_event();
-                }
-                return;
+        if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
+            && self.modifiers.control()
+            && cursor.position_over(layout.bounds()).is_some()
+        {
+            if let Some(on_zoom) = &self.on_zoom {
+                shell.publish(on_zoom(*delta));
+                shell.capture_event();
             }
+            return;
         }
 
         self.content.as_widget_mut().update(

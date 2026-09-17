@@ -12,7 +12,7 @@ use cosmic::iced::advanced::{Clipboard, Layout, Shell};
 use cosmic::iced::core::Image;
 use cosmic::iced::core::border;
 use cosmic::iced::core::image::FilterMethod;
-use cosmic::iced::keyboard::{self, Modifiers};
+use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
 use cosmic::iced::{ContentFit, Element, Event, Length, Point, Radians, Rectangle, Size, Vector};
 
@@ -188,9 +188,6 @@ where
         let bounds = layout.bounds();
 
         match event {
-            Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
-                tree.state.downcast_mut::<State>().keyboard_modifiers = *modifiers;
-            }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 let Some(cursor_position) = cursor.position_over(bounds) else {
                     return;

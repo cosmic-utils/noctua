@@ -87,7 +87,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
         && let Some(preview) = state.preview.as_ref()
         && matches!(&app.current_target, Some(CurrentTarget::File { path }) if path == &preview.path)
     {
-        return document_preview(preview);
+        return document_preview(preview, app.keyboard_modifiers);
     }
 
     match &app.current_image {
