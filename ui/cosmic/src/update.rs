@@ -809,8 +809,9 @@ impl AppModel {
         })
     }
 
-    /// Start listing a folder and open a tab for it.
-    fn open_folder(&mut self, dir: PathBuf) -> iced::Task<cosmic::Action<Message>> {
+    /// Create a folder tab and return its entity plus the asynchronous
+    /// folder-listing task.
+    fn open_folder_tab(&mut self, dir: PathBuf) -> (Entity, iced::Task<cosmic::Action<Message>>) {
         let title = storage::browser::display_name(&dir);
         let tab = self.tab_model.insert().text(title).closable().id();
         self.tabs.insert(
@@ -821,8 +822,6 @@ impl AppModel {
             },
         );
         self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
-        self.tab_model.activate(tab);
-        let activate = self.activate_tab();
 
         let list_dir = dir.clone();
         let list = cosmic::task::future(async move {
@@ -838,6 +837,14 @@ impl AppModel {
             Message::FolderListed { dir, result }
         });
 
+        (tab, list)
+    }
+
+    /// Start listing a folder and open a tab for it.
+    fn open_folder(&mut self, dir: PathBuf) -> iced::Task<cosmic::Action<Message>> {
+        let (tab, list) = self.open_folder_tab(dir);
+        self.tab_model.activate(tab);
+        let activate = self.activate_tab();
         cosmic::task::batch(vec![activate, list])
     }
 
@@ -877,41 +884,15 @@ impl AppModel {
 
         for (index, path) in session.browser_tabs.into_iter().enumerate() {
             if path.is_dir() {
-                let title = storage::browser::display_name(&path);
-                let tab = self.tab_model.insert().text(title).closable().id();
-                self.tabs.insert(
-                    tab,
-                    TabContent::Folder {
-                        path: path.clone(),
-                        entries: Vec::new(),
-                    },
-                );
-                self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
-                let dir = path.clone();
-                let list_dir = dir.clone();
-                tasks.push(cosmic::task::future(async move {
-                    let result = match tokio::task::spawn_blocking(move || {
-                        storage::browser::list_documents(&list_dir)
-                    })
-                    .await
-                    {
-                        Ok(Ok(entries)) => Ok(entries),
-                        Ok(Err(e)) => Err(e.to_string()),
-                        Err(e) => Err(e.to_string()),
-                    };
-                    Message::FolderListed { dir, result }
-                }));
+                let (tab, list) = self.open_folder_tab(path);
+                if index == session.active_tab {
+                    self.tab_model.activate(tab);
+                }
+                tasks.push(list);
             } else {
                 // Browser tabs now hold only folders; document paths are stale
                 // because multi-page PDFs expand inside their folder tab.
                 tracing::warn!("restore: skipping non-folder path {path:?}");
-            }
-
-            if index == session.active_tab {
-                let entity = self.tab_model.entity_at(index as u16);
-                if let Some(entity) = entity {
-                    self.tab_model.activate(entity);
-                }
             }
         }
 
