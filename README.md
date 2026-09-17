@@ -2,6 +2,13 @@
 
 Noctua – a document viewer for the COSMIC™ desktop
 
+> [!IMPORTANT]
+> **Development happens on [Codeberg](https://codeberg.org/wfx/noctua).**
+>
+> The GitHub repository is a read-only mirror and is overwritten
+> automatically — issues and pull requests opened there will be lost.
+> Sorry that this wasn't stated clearly before.
+
 ## Installation
 
 A [justfile](./justfile) is included by default for the [casey/just][just] command runner.
