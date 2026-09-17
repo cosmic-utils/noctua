@@ -361,17 +361,13 @@ impl PdfOpsManager {
             page.delete().map_err(pdfium_err)?;
         }
 
-        // 3. Insert the copy at the target position.
+        // 3. Insert the copy at the target position. pdfium inserts AT the
+        // destination index, so the 1-based target `to` maps directly to the
+        // 0-based `to_idx` — the deleted page already shifted everything up.
         let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
-        let insert_at = if from_idx < to_idx {
-            // Deleting the original shifted pages down by one.
-            to_idx - 1
-        } else {
-            to_idx
-        };
         document
             .pages_mut()
-            .copy_page_from_document(&scratch, 0, insert_at)
+            .copy_page_from_document(&scratch, 0, to_idx)
             .map_err(pdfium_err)?;
 
         self.dirty = true;

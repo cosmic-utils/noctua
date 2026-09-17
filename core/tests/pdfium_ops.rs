@@ -8,7 +8,7 @@ use noctua_core_test_common as common;
 
 use noctua_core::pdfium_ops::model::palette;
 use noctua_core::pdfium_ops::{BindSource, Command, CommandResult, PdfOpsManager};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn pdfium() -> Option<&'static pdfium_render::prelude::Pdfium> {
     noctua_core::pdfium_ops::try_pdfium()
@@ -27,6 +27,18 @@ fn sources(paths: &[PathBuf]) -> Vec<BindSource> {
             path: p.clone(),
             pages: None,
         })
+        .collect()
+}
+
+/// Read the text of every page of a PDF in page order, trimmed. Used to
+/// assert that page-reordering commands produce the expected order.
+fn page_texts(pdfium: &pdfium_render::prelude::Pdfium, path: &Path) -> Vec<String> {
+    pdfium
+        .load_pdf_from_file(path, None)
+        .expect("load pdf")
+        .pages()
+        .iter()
+        .map(|page| page.text().map(|text| text.all()).unwrap_or_default())
         .collect()
 }
 
@@ -189,6 +201,7 @@ fn move_page_forward() {
     let _guard = pdfium_guard();
     let dir = common::temp_dir("move-fwd");
     let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 4);
+    let saved = dir.join("moved.pdf");
 
     let mut mgr = PdfOpsManager::new();
     assert!(matches!(
@@ -204,6 +217,17 @@ fn move_page_forward() {
         mgr.execute(Command::PageCount),
         CommandResult::PageCount(4)
     ));
+    // Persist the result and verify the page order, not just the count.
+    assert!(matches!(
+        mgr.execute(Command::SaveAs {
+            path: saved.clone()
+        }),
+        CommandResult::Ok
+    ));
+    assert_eq!(
+        page_texts(pdfium, &saved),
+        ["page 2", "page 3", "page 4", "page 1"]
+    );
     common::remove_dir(&dir);
 }
 
@@ -216,6 +240,7 @@ fn move_page_backward() {
     let _guard = pdfium_guard();
     let dir = common::temp_dir("move-bwd");
     let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 4);
+    let saved = dir.join("moved.pdf");
 
     let mut mgr = PdfOpsManager::new();
     assert!(matches!(
@@ -231,6 +256,17 @@ fn move_page_backward() {
         mgr.execute(Command::PageCount),
         CommandResult::PageCount(4)
     ));
+    // Persist the result and verify the page order, not just the count.
+    assert!(matches!(
+        mgr.execute(Command::SaveAs {
+            path: saved.clone()
+        }),
+        CommandResult::Ok
+    ));
+    assert_eq!(
+        page_texts(pdfium, &saved),
+        ["page 4", "page 1", "page 2", "page 3"]
+    );
     common::remove_dir(&dir);
 }
 
