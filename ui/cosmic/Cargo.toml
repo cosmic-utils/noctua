@@ -6,6 +6,13 @@ license.workspace = true
 description.workspace = true
 repository.workspace = true
 
+# The shipped binary is `noctua` (matching the desktop file's `Exec` and the
+# justfile), while the package stays `noctua-cosmic` to distinguish it within
+# the workspace.
+[[bin]]
+name = "noctua"
+path = "src/main.rs"
+
 [dependencies]
 # Referenz auf unseren Core
 noctua-core = { path = "../../core" }

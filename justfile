@@ -16,6 +16,8 @@ appdata := appid + '.metainfo.xml'
 desktop := appid + '.desktop'
 # Application's icon.
 icon-svg := appid + '.svg'
+# Directory holding the desktop, appdata and icon assets.
+resources-dir := 'ui' / 'cosmic' / 'resources'
 
 # Install destinations
 base-dir := absolute_path(clean(rootdir / prefix))
@@ -73,9 +75,9 @@ test *args:
 # Installs files
 install:
     install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{bin-dst}}
-    install -Dm0644 {{ 'resources' / desktop }} {{desktop-dst}}
-    install -Dm0644 {{ 'resources' / appdata }} {{appdata-dst}}
-    install -Dm0644 {{ 'resources' / 'icons' / 'hicolor' / 'scalable' / 'apps' / icon-svg }} {{icon-svg-dst}}
+    install -Dm0644 {{ resources-dir / desktop }} {{desktop-dst}}
+    install -Dm0644 {{ resources-dir / appdata }} {{appdata-dst}}
+    install -Dm0644 {{ resources-dir / 'icons' / 'hicolor' / 'scalable' / 'apps' / icon-svg }} {{icon-svg-dst}}
 
 # Uninstalls installed files
 uninstall:
