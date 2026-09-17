@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use super::StorageError;
+use super::document::Format;
 
 /// A document found in a browsed folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +15,8 @@ pub struct BrowserEntry {
     pub path: PathBuf,
     /// File name for display purposes.
     pub name: String,
+    /// Whether the file is a PDF, detected once from magic bytes.
+    pub is_pdf: bool,
 }
 
 /// List the supported documents directly inside a folder.
@@ -40,12 +43,15 @@ pub fn list_documents(dir: &Path) -> Result<Vec<BrowserEntry>, StorageError> {
             continue;
         }
 
-        if super::document::supported(&path)? {
-            entries.push(BrowserEntry {
-                path,
-                name: name_str.into_owned(),
-            });
+        let format = super::document::format(&path)?;
+        if format == Format::Unknown {
+            continue;
         }
+        entries.push(BrowserEntry {
+            is_pdf: format == Format::Pdf,
+            path,
+            name: name_str.into_owned(),
+        });
     }
 
     entries.sort_by_key(|e| e.name.to_lowercase());

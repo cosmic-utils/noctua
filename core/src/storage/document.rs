@@ -54,7 +54,7 @@ pub fn format_size(bytes: u64) -> String {
 
 /// Detected file format based on extension and magic bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Format {
+pub enum Format {
     Raster,
     Pdf,
     Svg,
@@ -135,24 +135,26 @@ fn read_first_bytes(path: &Path) -> Result<Vec<u8>, StorageError> {
     Ok(buffer)
 }
 
-/// Whether the file is a supported document format.
+/// Detect the document format, reading only the magic bytes.
 ///
 /// Uses magic-byte detection with an extension fallback, so this is more
 /// reliable than checking the extension alone.
-pub fn supported(path: &Path) -> Result<bool, StorageError> {
+pub fn format(path: &Path) -> Result<Format, StorageError> {
     let first_bytes = read_first_bytes(path)?;
-    Ok(detect_format(path, &first_bytes) != Format::Unknown)
+    Ok(detect_format(path, &first_bytes))
+}
+
+/// Whether the file is a supported document format.
+pub fn supported(path: &Path) -> Result<bool, StorageError> {
+    Ok(format(path)? != Format::Unknown)
 }
 
 /// Whether the file is a PDF document.
 ///
-/// Uses the same magic-byte detection with extension fallback as
-/// `supported`. The UI uses this to decide which render path applies:
-/// PDFs must go through the pdfium worker, everything else can be
-/// rendered in place.
+/// The UI uses this to decide which render path applies: PDFs must go
+/// through the pdfium worker, everything else can be rendered in place.
 pub fn is_pdf(path: &Path) -> Result<bool, StorageError> {
-    let first_bytes = read_first_bytes(path)?;
-    Ok(detect_format(path, &first_bytes) == Format::Pdf)
+    Ok(format(path)? == Format::Pdf)
 }
 
 /// Load document metadata from a file path.
