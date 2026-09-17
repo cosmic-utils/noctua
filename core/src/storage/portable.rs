@@ -64,8 +64,11 @@ pub fn contains_javascript(path: &Path) -> Result<bool, StorageError> {
             break;
         }
         let total = filled + read;
+        // Skip needles longer than the bytes read so far; `windows` panics
+        // when its size exceeds the slice length.
         if NEEDLES
             .iter()
+            .filter(|needle| needle.len() <= total)
             .any(|needle| buffer[..total].windows(needle.len()).any(|w| w == *needle))
         {
             return Ok(true);
