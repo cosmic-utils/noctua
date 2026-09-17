@@ -14,12 +14,21 @@ use super::command::{Command, CommandResult};
 use super::error::PdfOpsError;
 use super::model::{AnnotationColor, BindSource, PdfMetadata};
 
+use crate::storage::document::Format;
+
 fn pdfium_err(e: PdfiumError) -> PdfOpsError {
     PdfOpsError::Pdfium(format!("{e:?}"))
 }
 
 fn to_color(c: AnnotationColor) -> PdfColor {
     PdfColor::new(c.red, c.green, c.blue, c.alpha)
+}
+
+/// Detect a bind source's format from magic bytes, mapping storage errors to
+/// PDF ops errors. Cheaper than loading full document metadata.
+fn load_source_format(source: &BindSource) -> Result<Format, PdfOpsError> {
+    crate::storage::document::format(&source.path)
+        .map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))
 }
 
 /// Manager for PDF editing operations. Owns the currently open document.
@@ -189,32 +198,26 @@ impl PdfOpsManager {
 
     /// Bind sources into a fresh PDF at `target`, then open it.
     fn bind(&mut self, sources: Vec<BindSource>, target: &Path) -> Result<(), PdfOpsError> {
-        // Validate all sources before touching pdfium, so unsupported
-        // formats fail fast without creating a document.
-        for source in &sources {
-            match crate::storage::document::load(&source.path)
-                .map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))?
-                .kind
-            {
-                crate::document::Kind::Portable(_)
-                | crate::document::Kind::Raster(_)
-                | crate::document::Kind::Vector(_) => {}
-                crate::document::Kind::Unknown => {
-                    return Err(PdfOpsError::UnsupportedSource(
-                        source.path.display().to_string(),
-                    ));
-                }
+        // Detect every source's format up front, so unsupported formats fail
+        // fast without creating a document or loading full metadata.
+        let formats: Vec<Format> = sources
+            .iter()
+            .map(load_source_format)
+            .collect::<Result<_, PdfOpsError>>()?;
+
+        for (source, format) in sources.iter().zip(&formats) {
+            if matches!(format, Format::Unknown) {
+                return Err(PdfOpsError::UnsupportedSource(
+                    source.path.display().to_string(),
+                ));
             }
         }
 
         let mut document = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
 
-        for source in &sources {
-            match crate::storage::document::load(&source.path)
-                .map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))?
-                .kind
-            {
-                crate::document::Kind::Portable(_) => {
+        for (source, format) in sources.iter().zip(&formats) {
+            match format {
+                Format::Pdf => {
                     let src_doc = pdfium_or_err()?
                         .load_pdf_from_file(&source.path, None)
                         .map_err(pdfium_err)?;
@@ -229,13 +232,14 @@ impl PdfOpsManager {
                         }
                     }
                 }
-                crate::document::Kind::Raster(_) => {
+                Format::Raster => {
                     embed_raster_page(&mut document, &source.path)?;
                 }
-                crate::document::Kind::Vector(_) => {
+                Format::Svg => {
                     embed_vector_page(&mut document, &source.path)?;
                 }
-                crate::document::Kind::Unknown => {
+                Format::Unknown => {
+                    // Validated above; kept defensive.
                     return Err(PdfOpsError::UnsupportedSource(
                         source.path.display().to_string(),
                     ));
@@ -256,11 +260,8 @@ impl PdfOpsManager {
         }
         let dest_index = (at - 1) as PdfPageIndex;
 
-        match crate::storage::document::load(&source.path)
-            .map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))?
-            .kind
-        {
-            crate::document::Kind::Portable(_) => {
+        match load_source_format(source)? {
+            Format::Pdf => {
                 let src_doc = pdfium_or_err()?
                     .load_pdf_from_file(&source.path, None)
                     .map_err(pdfium_err)?;
@@ -273,10 +274,9 @@ impl PdfOpsManager {
                         .map_err(pdfium_err)?,
                 }
             }
-            crate::document::Kind::Raster(_) => {
+            Format::Raster => {
                 // Raster pages are inserted by binding into a scratch document
-                // and importing the resulting page. Simple approach: bind into
-                // a fresh document, then import its single page.
+                // and importing the resulting page.
                 let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
                 embed_raster_page(&mut scratch, &source.path)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
@@ -285,7 +285,7 @@ impl PdfOpsManager {
                     .copy_page_from_document(&scratch, 0, dest_index)
                     .map_err(pdfium_err)?;
             }
-            crate::document::Kind::Vector(_) => {
+            Format::Svg => {
                 let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
                 embed_vector_page(&mut scratch, &source.path)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
@@ -294,7 +294,7 @@ impl PdfOpsManager {
                     .copy_page_from_document(&scratch, 0, dest_index)
                     .map_err(pdfium_err)?;
             }
-            crate::document::Kind::Unknown => {
+            Format::Unknown => {
                 return Err(PdfOpsError::UnsupportedSource(
                     source.path.display().to_string(),
                 ));
@@ -596,7 +596,14 @@ pub fn read_pdf_metadata(path: &Path) -> Result<PdfMetadata, PdfOpsError> {
             .security_handler_revision()
             .map(|revision| revision != PdfSecurityHandlerRevision::Unprotected)
             .unwrap_or(false),
-        has_text_layer: document.pages().iter().any(|page| page.text().is_ok()),
+        // Probing only the first page is a cheap representative heuristic:
+        // born-digital PDFs carry text from page one, scanned PDFs lack it
+        // throughout.
+        has_text_layer: document.pages().iter().next().is_some_and(|page| {
+            page.text()
+                .map(|text| !text.all().is_empty())
+                .unwrap_or(false)
+        }),
         page_count: document.pages().len() as u32,
     })
 }
