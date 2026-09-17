@@ -1001,6 +1001,15 @@ impl AppModel {
         });
     }
 
+    /// Request a redraw so a freshly rendered image is uploaded and drawn.
+    /// The image viewer has no handle cache, so updating `current_image` does
+    /// not schedule a redraw on its own in the Wayland event loop.
+    fn request_redraw(&self) -> iced::Task<cosmic::Action<Message>> {
+        iced::runtime::task::effect(iced::runtime::Action::Window(
+            iced::window::Action::RedrawAll,
+        ))
+    }
+
     /// Handles messages emitted by the application and its widgets.
     ///
     /// Tasks may be returned for asynchronous execution of code in the background
@@ -1053,25 +1062,24 @@ impl AppModel {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
-                let Some(selected) = self
-                    .tab_ui
-                    .get(&tab)
-                    .and_then(|state| state.selected)
-                    .filter(|selected| *selected >= 1)
-                else {
-                    return iced::Task::none();
+
+                let target = {
+                    let Some(state) = self.tab_ui.get_mut(&tab) else {
+                        return iced::Task::none();
+                    };
+                    let Some(previous) =
+                        state.selected.and_then(|selected| selected.checked_sub(1))
+                    else {
+                        return iced::Task::none();
+                    };
+                    let Some(entry) = state.strip.get(previous) else {
+                        return iced::Task::none();
+                    };
+
+                    state.selected = Some(previous);
+                    entry.target.clone()
                 };
-                let Some(target) = self
-                    .tab_ui
-                    .get(&tab)
-                    .and_then(|state| state.strip.get(selected - 1))
-                    .map(|entry| entry.target.clone())
-                else {
-                    return iced::Task::none();
-                };
-                if let Some(state) = self.tab_ui.get_mut(&tab) {
-                    state.selected = Some(selected - 1);
-                }
+
                 return self.activate_target(target);
             }
 
@@ -1079,20 +1087,23 @@ impl AppModel {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
-                let Some(selected) = self.tab_ui.get(&tab).and_then(|state| state.selected) else {
-                    return iced::Task::none();
+
+                let target = {
+                    let Some(state) = self.tab_ui.get_mut(&tab) else {
+                        return iced::Task::none();
+                    };
+                    let Some(next) = state.selected.and_then(|selected| selected.checked_add(1))
+                    else {
+                        return iced::Task::none();
+                    };
+                    let Some(entry) = state.strip.get(next) else {
+                        return iced::Task::none();
+                    };
+
+                    state.selected = Some(next);
+                    entry.target.clone()
                 };
-                let Some(target) = self
-                    .tab_ui
-                    .get(&tab)
-                    .and_then(|state| state.strip.get(selected + 1))
-                    .map(|entry| entry.target.clone())
-                else {
-                    return iced::Task::none();
-                };
-                if let Some(state) = self.tab_ui.get_mut(&tab) {
-                    state.selected = Some(selected + 1);
-                }
+
                 return self.activate_target(target);
             }
 
@@ -1255,6 +1266,8 @@ impl AppModel {
                         *slot = PageSlot::Empty;
                     }
                 }
+
+                return self.request_redraw();
             }
 
             Message::PreviewScrolled {
@@ -1324,6 +1337,7 @@ impl AppModel {
                 // Ignore renders that raced with a target change.
                 if self.current_target == Some(CurrentTarget::File { path }) {
                     self.apply_image(rgba);
+                    return self.request_redraw();
                 }
             }
 
@@ -1331,6 +1345,7 @@ impl AppModel {
                 // Ignore renders that raced with a target change.
                 if self.current_target == Some(CurrentTarget::Page { path, page }) {
                     self.apply_image(rgba);
+                    return self.request_redraw();
                 }
             }
 
