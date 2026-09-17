@@ -59,7 +59,7 @@ impl AppModel {
                 MenuAction::CloseTab,
             ),
             bind(
-                &[Modifier::Ctrl],
+                &[Modifier::Ctrl, Modifier::Shift],
                 Key::Character("+".into()),
                 MenuAction::ZoomIn,
             ),
@@ -111,9 +111,13 @@ impl AppModel {
             TabContent::Folder { entries, .. } => entries
                 .iter()
                 .map(|entry| {
-                    let path = entry.path.clone();
-                    let expandable = storage::document::is_pdf(&path).unwrap_or(false);
-                    (NavEntry::File { path }, entry.name.clone(), expandable)
+                    (
+                        NavEntry::File {
+                            path: entry.path.clone(),
+                        },
+                        entry.name.clone(),
+                        entry.is_pdf,
+                    )
                 })
                 .collect(),
         };

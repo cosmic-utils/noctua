@@ -203,9 +203,10 @@ fn current_zoom(app: &AppModel) -> (bool, f32) {
         return (true, 1.0);
     };
 
-    // PDF previews keep their zoom in the preview itself.
+    // PDF previews keep their zoom in the preview itself. A preview exists
+    // only for PDFs, so matching its path is enough — no need to re-read the
+    // file's magic bytes on every frame.
     if let CurrentTarget::File { path } = target
-        && storage::document::is_pdf(path).unwrap_or(false)
         && let Some(zoom) = app
             .active_tab()
             .and_then(|tab| app.tab_ui.get(&tab))
