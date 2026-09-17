@@ -41,7 +41,7 @@ pub(crate) fn zoom_controls<'a>(
         ),
     )]);
 
-    widget::row()
+    widget::row::with_capacity(3)
         .spacing(space.space_xxs)
         .push(widget::button::icon(icon::from_name("zoom-out-symbolic")).on_press(Message::ZoomOut))
         .push(percentage_menu)

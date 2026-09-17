@@ -177,10 +177,15 @@ impl cosmic::Application for AppModel {
                 iced::keyboard::Event::ModifiersChanged(modifiers) => {
                     Some(Message::ModifiersChanged(modifiers))
                 }
-                iced::keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                iced::keyboard::Event::KeyPressed {
+                    key,
+                    modifiers,
+                    physical_key,
+                    ..
+                } => {
                     if let Some((_, action)) = key_binds
                         .iter()
-                        .find(|(bind, _)| bind.matches(modifiers, &key))
+                        .find(|(bind, _)| bind.matches(modifiers, &key, Some(&physical_key)))
                     {
                         return Some(action.message());
                     }
