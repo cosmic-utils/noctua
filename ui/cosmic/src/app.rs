@@ -53,8 +53,12 @@ impl cosmic::Application for AppModel {
             .name(fl!("app-title"))
             .icon(widget::icon::from_svg_bytes(APP_ICON))
             .version(env!("CARGO_PKG_VERSION"))
-            .links([(fl!("repository"), REPOSITORY)])
-            .license(env!("CARGO_PKG_LICENSE"));
+            .author("cosmic-utils")
+            .copyright("Copyright © 2026 cosmic-utils")
+            .license(env!("CARGO_PKG_LICENSE"))
+            .license_url("https://www.gnu.org/licenses/gpl-3.0.html")
+            .developers([("wfx", "wfx.codeberg@mailbox.org")])
+            .links([(fl!("repository"), REPOSITORY)]);
 
         let mut app = AppModel {
             core,
@@ -115,6 +119,23 @@ impl cosmic::Application for AppModel {
                         menu::Item::Button(fl!("zoom-out"), None, MenuAction::ZoomOut),
                         menu::Item::Button(fl!("zoom-fit"), None, MenuAction::ZoomToFit),
                         menu::Item::Button(fl!("zoom-100"), None, MenuAction::Zoom100),
+                        menu::Item::Divider,
+                        menu::Item::Button(
+                            fl!("rotate-clockwise"),
+                            None,
+                            MenuAction::RotateClockwise,
+                        ),
+                        menu::Item::Button(
+                            fl!("rotate-counter-clockwise"),
+                            None,
+                            MenuAction::RotateCounterClockwise,
+                        ),
+                        menu::Item::Button(
+                            fl!("flip-horizontal"),
+                            None,
+                            MenuAction::FlipHorizontal,
+                        ),
+                        menu::Item::Button(fl!("flip-vertical"), None, MenuAction::FlipVertical),
                         menu::Item::Divider,
                         menu::Item::Button(fl!("fullscreen"), None, MenuAction::Fullscreen),
                         menu::Item::Button(fl!("show-nav-panel"), None, MenuAction::ToggleNavPanel),

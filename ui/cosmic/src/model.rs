@@ -115,9 +115,11 @@ impl Default for ZoomState {
 
 /// A rendered image shown in the content area. The handle is created
 /// once per image so the renderer reuses the uploaded texture instead
-/// of re-uploading it on every frame.
+/// of re-uploading it on every frame. The raw pixels are kept so the
+/// view can rotate/flip without re-rendering from disk.
 pub(crate) struct CurrentImage {
     pub(crate) handle: widget::image::Handle,
+    pub(crate) rgba: Rgba,
 }
 
 /// One page of the continuous PDF preview.

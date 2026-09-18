@@ -17,6 +17,7 @@ use cosmic::widget::menu::key_bind::Modifier;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::{iced, prelude::*};
 
+use noctua_core::render::transform_rgba;
 use noctua_core::render::worker::{Job, JobResult, Priority};
 use noctua_core::session::Session;
 use noctua_core::storage;
@@ -81,6 +82,26 @@ impl AppModel {
                 &[Modifier::Ctrl],
                 Key::Character("0".into()),
                 MenuAction::ZoomToFit,
+            ),
+            bind(
+                &[Modifier::Ctrl],
+                Key::Character("r".into()),
+                MenuAction::RotateClockwise,
+            ),
+            bind(
+                &[Modifier::Ctrl, Modifier::Shift],
+                Key::Character("r".into()),
+                MenuAction::RotateCounterClockwise,
+            ),
+            bind(
+                &[Modifier::Ctrl],
+                Key::Character("h".into()),
+                MenuAction::FlipHorizontal,
+            ),
+            bind(
+                &[Modifier::Ctrl],
+                Key::Character("v".into()),
+                MenuAction::FlipVertical,
             ),
             bind(&[], Key::Named(Named::F11), MenuAction::Fullscreen),
             bind(
@@ -965,9 +986,38 @@ impl AppModel {
     }
 
     fn apply_image(&mut self, rgba: Option<(u32, u32, Vec<u8>)>) {
-        self.current_image = rgba.map(|(width, height, rgba)| CurrentImage {
-            handle: cosmic::widget::image::Handle::from_rgba(width, height, rgba),
+        self.current_image = rgba.map(|(width, height, data)| CurrentImage {
+            handle: cosmic::widget::image::Handle::from_rgba(width, height, data.clone()),
+            rgba: (width, height, data),
         });
+    }
+
+    /// Rotate and/or flip the current single image in place, rebuilding the
+    /// display handle from the transformed pixels. The view is recentered
+    /// because the dimensions may have swapped.
+    fn transform_current_image(&mut self, rotation: u16, flip_h: bool, flip_v: bool) {
+        let Some(image) = &self.current_image else {
+            return;
+        };
+        let (width, height, data) = transform_rgba(
+            image.rgba.0,
+            image.rgba.1,
+            image.rgba.2.clone(),
+            rotation,
+            flip_h,
+            flip_v,
+        );
+        self.current_image = Some(CurrentImage {
+            handle: cosmic::widget::image::Handle::from_rgba(width, height, data.clone()),
+            rgba: (width, height, data),
+        });
+
+        if let Some(target) = self.current_target.clone()
+            && let Some(state) = self.zoom_states.get_mut(&target)
+        {
+            state.offset_x = 0.0;
+            state.offset_y = 0.0;
+        }
     }
 
     /// Handles messages emitted by the application and its widgets.
@@ -1338,6 +1388,22 @@ impl AppModel {
 
             Message::ZoomToFit => {
                 self.set_fit();
+            }
+
+            Message::RotateClockwise => {
+                self.transform_current_image(90, false, false);
+            }
+
+            Message::RotateCounterClockwise => {
+                self.transform_current_image(270, false, false);
+            }
+
+            Message::FlipHorizontal => {
+                self.transform_current_image(0, true, false);
+            }
+
+            Message::FlipVertical => {
+                self.transform_current_image(0, false, true);
             }
 
             Message::ToggleFullscreen => {

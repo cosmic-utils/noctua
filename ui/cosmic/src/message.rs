@@ -111,6 +111,14 @@ pub enum Message {
     ZoomToFit,
     /// Set the zoom of the current single image to an absolute scale.
     SetZoom(f32),
+    /// Rotate the current single image 90° clockwise.
+    RotateClockwise,
+    /// Rotate the current single image 90° counter-clockwise.
+    RotateCounterClockwise,
+    /// Mirror the current single image horizontally.
+    FlipHorizontal,
+    /// Mirror the current single image vertically.
+    FlipVertical,
     /// The keyboard modifiers changed; tracked to keep widgets in sync.
     ModifiersChanged(Modifiers),
     ToggleFullscreen,
@@ -134,6 +142,10 @@ pub enum MenuAction {
     Zoom50,
     Zoom200,
     Zoom400,
+    RotateClockwise,
+    RotateCounterClockwise,
+    FlipHorizontal,
+    FlipVertical,
     Fullscreen,
     ToggleNavPanel,
     About,
@@ -154,6 +166,10 @@ impl menu::action::MenuAction for MenuAction {
             MenuAction::Zoom50 => Message::SetZoom(0.5),
             MenuAction::Zoom200 => Message::SetZoom(2.0),
             MenuAction::Zoom400 => Message::SetZoom(4.0),
+            MenuAction::RotateClockwise => Message::RotateClockwise,
+            MenuAction::RotateCounterClockwise => Message::RotateCounterClockwise,
+            MenuAction::FlipHorizontal => Message::FlipHorizontal,
+            MenuAction::FlipVertical => Message::FlipVertical,
             MenuAction::Fullscreen => Message::ToggleFullscreen,
             MenuAction::ToggleNavPanel => Message::ToggleNavPanel,
             MenuAction::About => Message::ToggleAbout,

@@ -167,6 +167,37 @@ pub fn render_page_rotated(
     Ok(page)
 }
 
+/// Transform already-rendered RGBA pixels (rotate, then flip) and return the
+/// new dimensions and pixel buffer. Works on the final pixels, so it applies
+/// to raster, SVG and PDF pages alike without re-rendering from disk.
+pub fn transform_rgba(
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+    rotation_degrees: u16,
+    flip_h: bool,
+    flip_v: bool,
+) -> (u32, u32, Vec<u8>) {
+    let mut page = RenderedPage {
+        width,
+        height,
+        rgba_data: data,
+    };
+
+    let deg = rotation_degrees % 360;
+    if deg != 0 {
+        page = rotate_rgba(&page, deg);
+    }
+    if flip_h {
+        page = flip_rgba_horizontal(&page);
+    }
+    if flip_v {
+        page = flip_rgba_vertical(&page);
+    }
+
+    (page.width, page.height, page.rgba_data)
+}
+
 // ── Raster Rendering ──
 
 fn render_raster(
