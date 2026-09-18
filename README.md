@@ -2,6 +2,8 @@
 
 Noctua – a document viewer for the COSMIC™ desktop
 
+![Noctua screenshot](docs/screenshot.png)
+
 > [!IMPORTANT]
 > **Development happens on [Codeberg](https://codeberg.org/wfx/noctua).**
 >
