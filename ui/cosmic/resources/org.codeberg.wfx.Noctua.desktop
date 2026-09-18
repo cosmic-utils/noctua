@@ -8,4 +8,4 @@ Terminal=false
 StartupNotify=true
 Categories=COSMIC
 Keywords=COSMIC
-MimeType=image/avif;image/gif;image/jpeg;image/png;image/svg+xml;image/webp;application/pdf
+MimeType=image/bmp;image/gif;image/jpeg;image/png;image/svg+xml;image/tiff;image/webp;application/pdf
