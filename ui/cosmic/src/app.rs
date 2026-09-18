@@ -49,7 +49,6 @@ impl cosmic::Application for AppModel {
 
     /// Initializes the application with any given flags and startup commands.
     fn init(core: cosmic::Core, args: Self::Flags) -> (Self, iced::Task<cosmic::Action<Message>>) {
-        // Create the about widget
         let about = About::default()
             .name(fl!("app-title"))
             .icon(widget::icon::from_svg_bytes(APP_ICON))
@@ -57,7 +56,6 @@ impl cosmic::Application for AppModel {
             .links([(fl!("repository"), REPOSITORY)])
             .license(env!("CARGO_PKG_LICENSE"));
 
-        // Construct the app model with the runtime's core.
         let mut app = AppModel {
             core,
             about,

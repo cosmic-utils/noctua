@@ -37,10 +37,8 @@ fn main() -> cosmic::iced::Result {
         )
         .init();
 
-    // Get the system's preferred languages.
     let requested_languages = i18n_embed::DesktopLanguageRequester::requested_languages();
 
-    // Enable localizations to be applied.
     i18n::init(&requested_languages);
 
     // Fail fast with a clear hint instead of dead PDF features.
@@ -52,6 +50,5 @@ fn main() -> cosmic::iced::Result {
 
     let args = Args::parse();
 
-    // Start the application.
     cosmic::app::run::<model::AppModel>(Settings::default(), args)
 }

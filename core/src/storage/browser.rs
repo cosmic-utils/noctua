@@ -31,12 +31,10 @@ pub fn list_documents(dir: &Path) -> Result<Vec<BrowserEntry>, StorageError> {
         let entry = entry?;
         let path = entry.path();
 
-        // Only regular files are candidates.
         if !entry.file_type()?.is_file() {
             continue;
         }
 
-        // Skip hidden files (dotfiles).
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
         if name_str.starts_with('.') {

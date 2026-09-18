@@ -69,13 +69,11 @@ const MAGIC_BYTES_LEN: usize = 16;
 
 /// Detect document format from path and file content.
 fn detect_format(path: &Path, first_bytes: &[u8]) -> Format {
-    // Check extension first
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_lowercase());
 
-    // Check magic bytes for common formats
     if first_bytes.len() >= 8 {
         // PNG
         if first_bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {

@@ -62,7 +62,8 @@ pub enum Kind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentInfo {
     pub file_size_bytes: u64,
-    pub number_of_pages: u32, // A document has a minimum of 1 page
+    /// A document always has at least one page.
+    pub number_of_pages: u32,
     pub kind: Kind,
     pub metadata: Metadata,
 }
