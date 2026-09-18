@@ -7,9 +7,11 @@ Noctua – a document viewer for the COSMIC™ desktop
 > [!IMPORTANT]
 > **Development happens on [Codeberg](https://codeberg.org/wfx/noctua).**
 >
-> The GitHub repository is a read-only mirror and is overwritten
-> automatically — issues and pull requests opened there will be lost.
-> Sorry that this wasn't stated clearly before.
+> This GitHub repository is a read-only mirror, automatically updated on every push to Codeberg. Any commits, issues or pull requests created here will be **overwritten and lost**.
+>
+> Please open issues and pull requests on [Codeberg](https://codeberg.org/wfx/noctua/issues).
+
+
 
 ## Installation
 
