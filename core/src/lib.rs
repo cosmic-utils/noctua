@@ -8,3 +8,5 @@ pub mod pdfium_ops;
 pub mod render;
 pub mod session;
 pub mod storage;
+
+pub use pdfium_ops::try_pdfium;

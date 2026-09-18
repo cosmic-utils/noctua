@@ -66,8 +66,10 @@ impl TabContent {
 /// What a strip entry points to.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum NavEntry {
-    /// A file in a folder tab. PDFs show an inline preview.
-    File { path: PathBuf },
+    /// A file in a folder tab. PDFs show an inline preview. The format is
+    /// detected once when the folder is listed and carried here so the UI
+    /// never re-reads file bytes to decide the render path.
+    File { path: PathBuf, is_pdf: bool },
     /// A page of the document tab (1-based).
     Page { path: PathBuf, page: u32 },
 }

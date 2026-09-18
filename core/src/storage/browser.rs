@@ -58,6 +58,15 @@ pub fn list_documents(dir: &Path) -> Result<Vec<BrowserEntry>, StorageError> {
     Ok(entries)
 }
 
+/// List the supported documents directly inside a folder, off the calling
+/// thread. Wraps [`list_documents`] in a blocking task so the async runtime
+/// stays responsive while `std::fs` runs.
+pub async fn list_documents_async(dir: PathBuf) -> Result<Vec<BrowserEntry>, StorageError> {
+    tokio::task::spawn_blocking(move || list_documents(&dir))
+        .await
+        .map_err(|e| StorageError::Io(format!("folder listing task failed: {e}")))?
+}
+
 /// Display name for a path: its last component. Used for tab titles and
 /// nav labels; UIs may override it with a custom name.
 pub fn display_name(path: &Path) -> String {

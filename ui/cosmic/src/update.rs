@@ -113,6 +113,7 @@ impl AppModel {
                     (
                         NavEntry::File {
                             path: entry.path.clone(),
+                            is_pdf: entry.is_pdf,
                         },
                         entry.name.clone(),
                         entry.is_pdf,
@@ -130,7 +131,7 @@ impl AppModel {
         let preview = previous.and_then(|state| state.preview).filter(|preview| {
             matches!(
                 selected.and_then(|index| entries.get(index)),
-                Some((NavEntry::File { path }, _, _)) if path == &preview.path
+                Some((NavEntry::File { path, .. }, _, _)) if path == &preview.path
             )
         });
 
@@ -216,12 +217,12 @@ impl AppModel {
     /// Show or render the given strip entry.
     fn activate_target(&mut self, entry: NavEntry) -> iced::Task<cosmic::Action<Message>> {
         match entry {
-            NavEntry::File { path } => {
+            NavEntry::File { path, is_pdf } => {
                 self.current_image = None;
                 self.current_size = storage::document::metadata(&path)
                     .ok()
                     .map(|meta| meta.size_bytes);
-                if storage::document::is_pdf(&path).unwrap_or(false) {
+                if is_pdf {
                     self.start_preview(path)
                 } else {
                     self.current_target = Some(CurrentTarget::File { path: path.clone() });
@@ -253,6 +254,17 @@ impl AppModel {
             let sizes = worker.page_sizes(worker_path).await;
             Message::PreviewSizesKnown { path, sizes }
         })
+    }
+
+    /// Whether the active tab has a built preview for `path`. Only multi-page
+    /// PDFs build a preview, so this is the "is a multi-page PDF" check
+    /// without re-reading file bytes.
+    fn has_preview(&self, path: &PathBuf) -> bool {
+        self.active_tab()
+            .and_then(|tab| self.tab_ui.get(&tab))
+            .and_then(|state| state.preview.as_ref())
+            .map(|preview| preview.path == *path)
+            .unwrap_or(false)
     }
 
     /// Build the preview once the page sizes are known and start the
@@ -455,7 +467,7 @@ impl AppModel {
 
             for (index, target) in wanted {
                 match target {
-                    NavEntry::File { path } => {
+                    NavEntry::File { path, .. } => {
                         let thumb = worker.thumbnail(path.clone(), ThumbSize::Normal).await;
                         if thumb.is_none() {
                             tracing::warn!("thumbnail generation failed for {path:?}");
@@ -507,24 +519,26 @@ impl AppModel {
         let Some(tab) = self.active_tab() else {
             return iced::Task::none();
         };
-        let (path, already_expanded) = {
+        let (path, is_pdf, already_expanded) = {
             let Some(state) = self.tab_ui.get(&tab) else {
                 return iced::Task::none();
             };
-            let Some(path) = state
-                .strip
-                .get(index)
-                .and_then(|entry| match &entry.target {
-                    NavEntry::File { path } => Some(path.clone()),
-                    NavEntry::Page { .. } => None,
-                })
+            let Some((path, is_pdf)) =
+                state
+                    .strip
+                    .get(index)
+                    .and_then(|entry| match &entry.target {
+                        NavEntry::File { path, is_pdf } => Some((path.clone(), *is_pdf)),
+                        NavEntry::Page { .. } => None,
+                    })
             else {
                 return iced::Task::none();
             };
-            (path.clone(), state.expanded.as_ref() == Some(&path))
+            let already_expanded = state.expanded.as_ref() == Some(&path);
+            (path, is_pdf, already_expanded)
         };
 
-        if !storage::document::is_pdf(&path).unwrap_or(false) {
+        if !is_pdf {
             return iced::Task::none();
         }
 
@@ -572,7 +586,7 @@ impl AppModel {
         let Some(start) = state
             .strip
             .iter()
-            .position(|entry| matches!(&entry.target, NavEntry::File { path: p } if p == path))
+            .position(|entry| matches!(&entry.target, NavEntry::File { path: p, .. } if p == path))
         else {
             return;
         };
@@ -591,7 +605,7 @@ impl AppModel {
         let Some(start) = state
             .strip
             .iter()
-            .position(|entry| matches!(&entry.target, NavEntry::File { path: p } if p == path))
+            .position(|entry| matches!(&entry.target, NavEntry::File { path: p, .. } if p == path))
         else {
             return;
         };
@@ -718,7 +732,7 @@ impl AppModel {
             return iced::Task::none();
         };
         match target {
-            CurrentTarget::File { path } if storage::document::is_pdf(&path).unwrap_or(false) => {
+            CurrentTarget::File { path } if self.has_preview(&path) => {
                 self.zoom_preview(&path, steps)
             }
             target => {
@@ -742,7 +756,7 @@ impl AppModel {
             return iced::Task::none();
         };
         match target {
-            CurrentTarget::File { path } if storage::document::is_pdf(&path).unwrap_or(false) => {
+            CurrentTarget::File { path } if self.has_preview(&path) => {
                 self.render_preview_at(&path, scale)
             }
             target => {
@@ -762,7 +776,7 @@ impl AppModel {
             return;
         };
         if let CurrentTarget::File { path } = &target
-            && storage::document::is_pdf(path).unwrap_or(false)
+            && self.has_preview(path)
         {
             return;
         }
@@ -801,15 +815,9 @@ impl AppModel {
 
         let list_dir = dir.clone();
         let list = cosmic::task::future(async move {
-            let result = match tokio::task::spawn_blocking(move || {
-                storage::browser::list_documents(&list_dir)
-            })
-            .await
-            {
-                Ok(Ok(entries)) => Ok(entries),
-                Ok(Err(e)) => Err(e.to_string()),
-                Err(e) => Err(e.to_string()),
-            };
+            let result = storage::browser::list_documents_async(list_dir)
+                .await
+                .map_err(|e| e.to_string());
             Message::FolderListed { dir, result }
         });
 
@@ -1094,7 +1102,7 @@ impl AppModel {
                                 && let Some(state) = self.tab_ui.get_mut(&tab)
                             {
                                 state.selected = state.strip.iter().position(|entry| {
-                                    matches!(&entry.target, NavEntry::File { path: p } if p == &path)
+                                    matches!(&entry.target, NavEntry::File { path: p, .. } if p == &path)
                                 });
                             }
                             return self.activate_tab();
@@ -1119,7 +1127,7 @@ impl AppModel {
                                 return iced::Task::none();
                             };
                             let Some(start) = state.strip.iter().position(|entry| {
-                                matches!(&entry.target, NavEntry::File { path: p } if p == &path)
+                                matches!(&entry.target, NavEntry::File { path: p, .. } if p == &path)
                             }) else {
                                 return iced::Task::none();
                             };

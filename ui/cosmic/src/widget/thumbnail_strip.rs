@@ -50,7 +50,7 @@ pub(crate) fn thumbnail_strip<'a>(
         let is_selected = selected == Some(index);
         let is_page = matches!(entry.target, NavEntry::Page { .. });
         let is_expanded =
-            matches!(&entry.target, NavEntry::File { path } if expanded == Some(path));
+            matches!(&entry.target, NavEntry::File { path, .. } if expanded == Some(path));
         let tile_size = if is_page { PAGE_TILE_SIZE } else { TILE_SIZE };
 
         let body: Element<'_, Message> = match &entry.thumb {
