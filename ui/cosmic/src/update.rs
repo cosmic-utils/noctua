@@ -27,12 +27,36 @@ use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{
     AppModel, CurrentImage, CurrentTarget, DocumentPreview, MAX_SCALE, MIN_SCALE, NavEntry,
-    PREVIEW_FULL_CACHE, PREVIEW_SCROLL_ID, PageSlot, Rgba, SESSION_NAME, STRIP_INITIAL_THUMBS,
-    StripEntry, THUMB_ZOOM, TabContent, TabUiState, ZOOM_STEP,
+    PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, Rgba, SESSION_NAME,
+    STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent, TabUiState, ZOOM_STEP,
 };
 
 /// Estimated strip tile height including spacing, for lazy thumbnails.
 const STRIP_TILE: f32 = 150.0;
+
+/// Compose one rotate/flip operation into the PDF preview's cumulative view
+/// transform, encoded as `(rotation, flip_h)`. The pair represents the eight
+/// dihedral symmetries: vertical flip folds into `180° rotation + horizontal
+/// flip`, so no separate `flip_v` flag is stored.
+fn compose_view_transform(
+    rotation: u16,
+    flip_h: bool,
+    rotate_by: u16,
+    flip_horizontally: bool,
+    flip_vertically: bool,
+) -> (u16, bool) {
+    if flip_vertically {
+        if flip_h {
+            ((rotation + 180) % 360, false)
+        } else {
+            ((180 + 360 - rotation) % 360, true)
+        }
+    } else if flip_horizontally {
+        ((360 - rotation) % 360, !flip_h)
+    } else {
+        ((rotation + rotate_by) % 360, flip_h)
+    }
+}
 
 impl AppModel {
     /// Register the menu key bindings.
@@ -701,7 +725,7 @@ impl AppModel {
     /// Change the zoom of a PDF preview by `steps` (signed) and re-render.
     fn zoom_preview(&mut self, path: &PathBuf, steps: f32) -> iced::Task<cosmic::Action<Message>> {
         let zoom = self.preview_zoom(path).unwrap_or(1.0);
-        let zoom = (zoom * ZOOM_STEP.powf(steps)).clamp(0.05, 8.0);
+        let zoom = (zoom * ZOOM_STEP.powf(steps)).clamp(PREVIEW_MIN_SCALE, MAX_SCALE);
         self.render_preview_at(path, zoom)
     }
 
@@ -839,7 +863,7 @@ impl AppModel {
         let padding = 2.0 * f32::from(cosmic::theme::spacing().space_m);
         let available = (preview.viewport_width - padding).max(0.0);
         let zoom = if max_width > 0.0 && available > 0.0 {
-            (available / max_width).clamp(0.05, 8.0)
+            (available / max_width).clamp(PREVIEW_MIN_SCALE, MAX_SCALE)
         } else {
             1.0
         };
@@ -1099,23 +1123,10 @@ impl AppModel {
                 return iced::Task::none();
             }
 
-            // The (rotation, flip_h) pair represents the eight dihedral
-            // symmetries; vertical flip folds into rotation == 180 plus
-            // flip_h. Compose the single operation on the right.
-            if flip_v {
-                if preview.flip_h {
-                    preview.rotation = (preview.rotation + 180) % 360;
-                    preview.flip_h = false;
-                } else {
-                    preview.rotation = (180 + 360 - preview.rotation) % 360;
-                    preview.flip_h = true;
-                }
-            } else if flip_h {
-                preview.rotation = (360 - preview.rotation) % 360;
-                preview.flip_h = !preview.flip_h;
-            } else {
-                preview.rotation = (preview.rotation + rotation) % 360;
-            }
+            let (new_rotation, new_flip_h) =
+                compose_view_transform(preview.rotation, preview.flip_h, rotation, flip_h, flip_v);
+            preview.rotation = new_rotation;
+            preview.flip_h = new_flip_h;
 
             preview.full_order.clear();
             preview.requested = None;

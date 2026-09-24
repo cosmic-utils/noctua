@@ -29,7 +29,7 @@ pub fn load_svg_metadata(path: &Path) -> Result<(Vector, u32), StorageError> {
             shape_rendering: usvg::ShapeRendering::GeometricPrecision,
             text_rendering: usvg::TextRendering::OptimizeLegibility,
             image_rendering: usvg::ImageRendering::OptimizeQuality,
-            default_size: usvg::Size::from_wh(100.0, 100.0).unwrap(),
+            default_size: usvg::Size::from_wh(100.0, 100.0).expect("non-zero default SVG size"),
             ..Default::default()
         };
 

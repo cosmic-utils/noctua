@@ -29,6 +29,9 @@ pub(crate) const MIN_SCALE: f32 = 0.25;
 /// Maximum zoom factor for single images (8.0 = 800 % of native pixels).
 pub(crate) const MAX_SCALE: f32 = 8.0;
 
+/// Minimum zoom factor for the PDF preview (0.05 = 5 % of native size).
+pub(crate) const PREVIEW_MIN_SCALE: f32 = 0.05;
+
 /// Render scale for page thumbnails (strip and preview placeholders).
 pub(crate) const THUMB_ZOOM: f32 = 0.2;
 
