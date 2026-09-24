@@ -342,12 +342,23 @@ fn render_file(path: &std::path::Path, page: Option<u32>, zoom: f32) -> JobResul
     }
 }
 
+/// Read a file's bytes via the storage layer, mapping I/O errors to a
+/// job result so the worker never performs file I/O directly.
+fn read_pdf_bytes(path: &Path) -> Result<Vec<u8>, JobResult> {
+    crate::storage::document::open(path).map_err(|e| JobResult::Error(format!("{e:?}")))
+}
+
 /// Render a page of an arbitrary PDF file. Opens the file, renders,
 /// closes it again — the shared open document stays untouched.
 fn render_file_page(path: &std::path::Path, page: u32, zoom: f32) -> JobResult {
     // A fresh manager instance keeps the worker's open document untouched.
     let mut scratch = PdfOpsManager::new();
+    let data = match read_pdf_bytes(path) {
+        Ok(data) => data,
+        Err(err) => return err,
+    };
     match scratch.execute(Command::Open {
+        data,
         path: path.to_path_buf(),
     }) {
         CommandResult::Ok => match scratch.execute(Command::RenderPage { page, zoom }) {
@@ -373,7 +384,12 @@ fn render_file_page(path: &std::path::Path, page: u32, zoom: f32) -> JobResult {
 /// shared open document stays untouched. Failed pages are skipped.
 fn render_page_thumbs(path: &Path, pages: &[u32], zoom: f32) -> JobResult {
     let mut scratch = PdfOpsManager::new();
+    let data = match read_pdf_bytes(path) {
+        Ok(data) => data,
+        Err(err) => return err,
+    };
     match scratch.execute(Command::Open {
+        data,
         path: path.to_path_buf(),
     }) {
         CommandResult::Ok => {
@@ -399,7 +415,12 @@ fn render_page_thumbs(path: &Path, pages: &[u32], zoom: f32) -> JobResult {
 /// closes it again — the shared open document stays untouched.
 fn file_page_count(path: &Path) -> JobResult {
     let mut scratch = PdfOpsManager::new();
+    let data = match read_pdf_bytes(path) {
+        Ok(data) => data,
+        Err(err) => return err,
+    };
     match scratch.execute(Command::Open {
+        data,
         path: path.to_path_buf(),
     }) {
         CommandResult::Ok => match scratch.execute(Command::PageCount) {
@@ -417,7 +438,12 @@ fn file_page_count(path: &Path) -> JobResult {
 /// stays untouched.
 fn file_page_sizes(path: &Path) -> JobResult {
     let mut scratch = PdfOpsManager::new();
+    let data = match read_pdf_bytes(path) {
+        Ok(data) => data,
+        Err(err) => return err,
+    };
     match scratch.execute(Command::Open {
+        data,
         path: path.to_path_buf(),
     }) {
         CommandResult::Ok => match scratch.execute(Command::PageSizes) {
@@ -447,7 +473,12 @@ fn render_thumb(path: &std::path::Path, size: ThumbSize) -> JobResult {
     }
 
     let mut scratch = PdfOpsManager::new();
+    let data = match read_pdf_bytes(path) {
+        Ok(data) => data,
+        Err(err) => return err,
+    };
     match scratch.execute(Command::Open {
+        data,
         path: path.to_path_buf(),
     }) {
         CommandResult::Ok => {

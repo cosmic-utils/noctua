@@ -147,6 +147,21 @@ pub fn render_path(path: &Path, zoom: f32) -> Result<RenderedPage, RenderError> 
     render_page(&content, zoom)
 }
 
+/// Parse and render an SVG document from bytes at the given zoom factor.
+///
+/// The single source for SVG rasterization: it reuses [`render_svg`]'s
+/// premultiplied→straight RGBA conversion, so other modules (e.g. PDF bind)
+/// do not duplicate it.
+#[cfg(feature = "resvg")]
+pub fn render_svg_bytes(data: &[u8], zoom: f32) -> Result<RenderedPage, RenderError> {
+    use resvg::usvg;
+
+    let tree = usvg::Tree::from_data(data, &usvg::Options::default())
+        .map_err(|e| RenderError::Other(format!("Failed to parse SVG: {e}")))?;
+    let size = tree.size();
+    render_svg(&tree, size.width(), size.height(), zoom)
+}
+
 /// Render a single page with a rotation in degrees (0, 90, 180, 270).
 ///
 /// Rotation is applied to the RGBA output after rendering. Backs the

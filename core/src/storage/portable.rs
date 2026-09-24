@@ -15,8 +15,10 @@ use crate::storage::StorageError;
 pub fn load_pdf_metadata(path: &Path) -> Result<(Portable, u32), StorageError> {
     #[cfg(feature = "pdfium-render")]
     {
-        // pdfium access lives in pdfium_ops, not in the storage layer.
-        let meta = crate::pdfium_ops::read_pdf_metadata(path)
+        // pdfium access lives in pdfium_ops, not in the storage layer; the
+        // storage layer reads the file bytes and passes them in.
+        let data = super::document::open(path)?;
+        let meta = crate::pdfium_ops::read_pdf_metadata(&data)
             .map_err(|e| StorageError::Document(format!("Failed to load PDF: {e}")))?;
 
         // Never executed by Noctua; detected only to warn the user.

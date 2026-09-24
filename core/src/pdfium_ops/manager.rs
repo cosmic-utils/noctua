@@ -24,13 +24,6 @@ fn to_color(c: AnnotationColor) -> PdfColor {
     PdfColor::new(c.red, c.green, c.blue, c.alpha)
 }
 
-/// Detect a bind source's format from magic bytes, mapping storage errors to
-/// PDF ops errors. Cheaper than loading full document metadata.
-fn load_source_format(source: &BindSource) -> Result<Format, PdfOpsError> {
-    crate::storage::document::format(&source.path)
-        .map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))
-}
-
 /// Manager for PDF editing operations. Owns the currently open document.
 pub struct PdfOpsManager {
     document: Option<PdfDocument<'static>>,
@@ -67,7 +60,7 @@ impl PdfOpsManager {
     /// Execute a command on the open document.
     pub fn execute(&mut self, command: Command) -> CommandResult {
         match command {
-            Command::Open { path } => self.open(&path).into(),
+            Command::Open { data, path } => self.open(data, &path).into(),
             Command::New => self.new_document().into(),
             Command::Close => {
                 self.document = None;
@@ -148,9 +141,11 @@ impl PdfOpsManager {
         self.document.as_ref().ok_or(PdfOpsError::NoDocumentOpen)
     }
 
-    fn open(&mut self, path: &Path) -> Result<(), PdfOpsError> {
+    fn open(&mut self, data: Vec<u8>, path: &Path) -> Result<(), PdfOpsError> {
+        // `load_pdf_from_byte_vec` takes ownership of the bytes so the
+        // stored document can outlive the caller's buffer.
         let document = pdfium_or_err()?
-            .load_pdf_from_file(path, None)
+            .load_pdf_from_byte_vec(data, None)
             .map_err(pdfium_err)?;
         self.document = Some(document);
         self.path = Some(path.to_path_buf());
@@ -178,48 +173,45 @@ impl PdfOpsManager {
             .collect()
     }
 
-    fn save(&mut self) -> Result<(), PdfOpsError> {
-        let path = self.path.clone().ok_or(PdfOpsError::NoDocumentOpen)?;
-        self.require_document()?
-            .save_to_file(&path)
+    fn save(&mut self) -> Result<Vec<u8>, PdfOpsError> {
+        if self.path.is_none() {
+            return Err(PdfOpsError::NoDocumentOpen);
+        }
+        let data = self
+            .require_document()?
+            .save_to_bytes()
             .map_err(pdfium_err)?;
         self.dirty = false;
-        Ok(())
+        Ok(data)
     }
 
-    fn save_as(&mut self, path: &Path) -> Result<(), PdfOpsError> {
-        self.require_document()?
-            .save_to_file(path)
+    fn save_as(&mut self, path: &Path) -> Result<Vec<u8>, PdfOpsError> {
+        let data = self
+            .require_document()?
+            .save_to_bytes()
             .map_err(pdfium_err)?;
         self.path = Some(path.to_path_buf());
         self.dirty = false;
-        Ok(())
+        Ok(data)
     }
 
-    /// Bind sources into a fresh PDF at `target`, then open it.
-    fn bind(&mut self, sources: Vec<BindSource>, target: &Path) -> Result<(), PdfOpsError> {
-        // Detect every source's format up front, so unsupported formats fail
-        // fast without creating a document or loading full metadata.
-        let formats: Vec<Format> = sources
-            .iter()
-            .map(load_source_format)
-            .collect::<Result<_, PdfOpsError>>()?;
-
-        for (source, format) in sources.iter().zip(&formats) {
-            if matches!(format, Format::Unknown) {
-                return Err(PdfOpsError::UnsupportedSource(
-                    source.path.display().to_string(),
-                ));
+    /// Bind sources into a fresh PDF, then open it. Returns the serialized
+    /// bytes for the caller to write to `target`.
+    fn bind(&mut self, sources: Vec<BindSource>, target: &Path) -> Result<Vec<u8>, PdfOpsError> {
+        // Reject unknown formats up front, before creating a document.
+        for source in &sources {
+            if matches!(source.format, Format::Unknown) {
+                return Err(PdfOpsError::UnsupportedSource(source.name.clone()));
             }
         }
 
         let mut document = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
 
-        for (source, format) in sources.iter().zip(&formats) {
-            match format {
+        for source in &sources {
+            match source.format {
                 Format::Pdf => {
                     let src_doc = pdfium_or_err()?
-                        .load_pdf_from_file(&source.path, None)
+                        .load_pdf_from_byte_slice(&source.data, None)
                         .map_err(pdfium_err)?;
                     match &source.pages {
                         None => document.pages_mut().append(&src_doc).map_err(pdfium_err)?,
@@ -233,25 +225,23 @@ impl PdfOpsManager {
                     }
                 }
                 Format::Raster => {
-                    embed_raster_page(&mut document, &source.path)?;
+                    embed_raster_page(&mut document, &source.data)?;
                 }
                 Format::Svg => {
-                    embed_vector_page(&mut document, &source.path)?;
+                    embed_vector_page(&mut document, &source.data)?;
                 }
                 Format::Unknown => {
                     // Validated above; kept defensive.
-                    return Err(PdfOpsError::UnsupportedSource(
-                        source.path.display().to_string(),
-                    ));
+                    return Err(PdfOpsError::UnsupportedSource(source.name.clone()));
                 }
             }
         }
 
-        document.save_to_file(target).map_err(pdfium_err)?;
+        let data = document.save_to_bytes().map_err(pdfium_err)?;
         self.document = Some(document);
         self.path = Some(target.to_path_buf());
         self.dirty = false;
-        Ok(())
+        Ok(data)
     }
 
     fn insert_pages(&mut self, source: &BindSource, at: u32) -> Result<(), PdfOpsError> {
@@ -260,10 +250,10 @@ impl PdfOpsManager {
         }
         let dest_index = (at - 1) as PdfPageIndex;
 
-        match load_source_format(source)? {
+        match source.format {
             Format::Pdf => {
                 let src_doc = pdfium_or_err()?
-                    .load_pdf_from_file(&source.path, None)
+                    .load_pdf_from_byte_slice(&source.data, None)
                     .map_err(pdfium_err)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
                 match &source.pages {
@@ -278,7 +268,7 @@ impl PdfOpsManager {
                 // Raster pages are inserted by binding into a scratch document
                 // and importing the resulting page.
                 let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
-                embed_raster_page(&mut scratch, &source.path)?;
+                embed_raster_page(&mut scratch, &source.data)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
                 document
                     .pages_mut()
@@ -287,7 +277,7 @@ impl PdfOpsManager {
             }
             Format::Svg => {
                 let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
-                embed_vector_page(&mut scratch, &source.path)?;
+                embed_vector_page(&mut scratch, &source.data)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
                 document
                     .pages_mut()
@@ -295,9 +285,7 @@ impl PdfOpsManager {
                     .map_err(pdfium_err)?;
             }
             Format::Unknown => {
-                return Err(PdfOpsError::UnsupportedSource(
-                    source.path.display().to_string(),
-                ));
+                return Err(PdfOpsError::UnsupportedSource(source.name.clone()));
             }
         }
 
@@ -569,10 +557,10 @@ impl PdfOpsManager {
 
 /// Read PDF metadata (version, encryption, text layer, page count) via
 /// pdfium without keeping the document open. pdfium access belongs here,
-/// not in the storage layer.
-pub fn read_pdf_metadata(path: &Path) -> Result<PdfMetadata, PdfOpsError> {
+/// not in the storage layer; the caller provides the raw file bytes.
+pub fn read_pdf_metadata(data: &[u8]) -> Result<PdfMetadata, PdfOpsError> {
     let document = pdfium_or_err()?
-        .load_pdf_from_file(path, None)
+        .load_pdf_from_byte_slice(data, None)
         .map_err(pdfium_err)?;
 
     let version = match document.version() {
@@ -609,10 +597,19 @@ pub fn read_pdf_metadata(path: &Path) -> Result<PdfMetadata, PdfOpsError> {
 }
 
 /// Embed a raster image as a full-page image in the given document.
-fn embed_raster_page(document: &mut PdfDocument<'static>, path: &Path) -> Result<(), PdfOpsError> {
+fn embed_raster_page(document: &mut PdfDocument<'static>, data: &[u8]) -> Result<(), PdfOpsError> {
+    let img = image::load_from_memory(data)
+        .map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))?;
+    embed_image(document, &img)
+}
+
+/// Embed an image as a full-page image in the given document.
+fn embed_image(
+    document: &mut PdfDocument<'static>,
+    img: &image::DynamicImage,
+) -> Result<(), PdfOpsError> {
     use image::GenericImageView;
 
-    let img = image::open(path).map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))?;
     let (px_w, px_h) = img.dimensions();
 
     // 1 px = 1 pt keeps the source resolution; acceptable for bind.
@@ -626,7 +623,7 @@ fn embed_raster_page(document: &mut PdfDocument<'static>, path: &Path) -> Result
         .create_image_object(
             PdfPoints::ZERO,
             PdfPoints::ZERO,
-            &img,
+            img,
             Some(PdfPoints::new(px_w as f32)),
             Some(PdfPoints::new(px_h as f32)),
         )
@@ -636,69 +633,19 @@ fn embed_raster_page(document: &mut PdfDocument<'static>, path: &Path) -> Result
 
 /// Rasterize an SVG via resvg and embed it as a full-page image.
 #[cfg(feature = "resvg")]
-fn embed_vector_page(document: &mut PdfDocument<'static>, path: &Path) -> Result<(), PdfOpsError> {
-    use resvg::tiny_skia;
-
-    let data = std::fs::read(path).map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))?;
-    let options = resvg::usvg::Options::default();
-    let tree = resvg::usvg::Tree::from_data(&data, &options)
+fn embed_vector_page(document: &mut PdfDocument<'static>, data: &[u8]) -> Result<(), PdfOpsError> {
+    let page = crate::render::render_svg_bytes(data, 1.0)
         .map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))?;
-
-    let svg_size = tree.size();
-    let px_w = svg_size.width().ceil() as u32;
-    let px_h = svg_size.height().ceil() as u32;
-
-    let mut pixmap = tiny_skia::Pixmap::new(px_w, px_h)
-        .ok_or_else(|| PdfOpsError::UnsupportedSource("svg too large".to_string()))?;
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::identity(),
-        &mut pixmap.as_mut(),
-    );
-
-    // Convert premultiplied RGBA to straight RGBA.
-    let rgba: Vec<u8> = pixmap
-        .data()
-        .chunks(4)
-        .flat_map(|p| {
-            let a = p[3];
-            if a == 0 {
-                return [0u8, 0, 0, 0];
-            }
-            let inv_a = 255.0 / a as f32;
-            [
-                (p[0] as f32 * inv_a).round().min(255.0) as u8,
-                (p[1] as f32 * inv_a).round().min(255.0) as u8,
-                (p[2] as f32 * inv_a).round().min(255.0) as u8,
-                a,
-            ]
-        })
-        .collect();
-
-    let img = image::RgbaImage::from_raw(px_w, px_h, rgba)
+    let img = image::RgbaImage::from_raw(page.width, page.height, page.rgba_data)
         .ok_or_else(|| PdfOpsError::UnsupportedSource("invalid svg render".to_string()))?;
-    let dynamic = image::DynamicImage::ImageRgba8(img);
-
-    let page_size =
-        PdfPagePaperSize::new_custom(PdfPoints::new(px_w as f32), PdfPoints::new(px_h as f32));
-    let mut page = document
-        .pages_mut()
-        .create_page_at_end(page_size)
-        .map_err(pdfium_err)?;
-    page.objects_mut()
-        .create_image_object(
-            PdfPoints::ZERO,
-            PdfPoints::ZERO,
-            &dynamic,
-            Some(PdfPoints::new(px_w as f32)),
-            Some(PdfPoints::new(px_h as f32)),
-        )
-        .map_err(pdfium_err)?;
-    Ok(())
+    embed_image(document, &image::DynamicImage::ImageRgba8(img))
 }
 
 /// Fallback when the resvg feature is disabled.
 #[cfg(not(feature = "resvg"))]
-fn embed_vector_page(_document: &mut PdfDocument<'static>, path: &Path) -> Result<(), PdfOpsError> {
-    Err(PdfOpsError::UnsupportedSource(path.display().to_string()))
+fn embed_vector_page(
+    _document: &mut PdfDocument<'static>,
+    _data: &[u8],
+) -> Result<(), PdfOpsError> {
+    Err(PdfOpsError::UnsupportedSource("svg".to_string()))
 }

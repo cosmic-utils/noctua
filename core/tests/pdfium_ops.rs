@@ -20,14 +20,41 @@ fn pdfium_guard() -> std::sync::MutexGuard<'static, ()> {
     common::pdfium_lock()
 }
 
+/// Read a file's bytes via the storage layer.
+fn read_bytes(path: &Path) -> Vec<u8> {
+    noctua_core::storage::document::open(path).expect("read file")
+}
+
+/// Build a bind source from a path: read the bytes and detect the format.
+fn bind_source(path: &Path) -> BindSource {
+    BindSource {
+        name: path.file_name().unwrap().to_string_lossy().to_string(),
+        data: read_bytes(path),
+        format: noctua_core::storage::document::format(path).expect("detect format"),
+        pages: None,
+    }
+}
+
 fn sources(paths: &[PathBuf]) -> Vec<BindSource> {
-    paths
-        .iter()
-        .map(|p| BindSource {
-            path: p.clone(),
-            pages: None,
-        })
-        .collect()
+    paths.iter().map(|p| bind_source(p)).collect()
+}
+
+/// Read a PDF and build an `Open` command.
+fn open_command(path: &Path) -> Command {
+    Command::Open {
+        data: read_bytes(path),
+        path: path.to_path_buf(),
+    }
+}
+
+/// Execute `SaveAs` and write the serialized bytes to disk.
+fn save_as(mgr: &mut PdfOpsManager, path: &Path) {
+    match mgr.execute(Command::SaveAs {
+        path: path.to_path_buf(),
+    }) {
+        CommandResult::Saved { data } => std::fs::write(path, data).expect("write pdf"),
+        other => panic!("expected Saved, got {other:?}"),
+    }
 }
 
 /// Read the text of every page of a PDF in page order, trimmed. Used to
@@ -59,7 +86,7 @@ fn bind_two_pdfs_concatenates_all_pages() {
         sources: sources(&[a, b]),
         target: target.clone(),
     });
-    assert!(matches!(result, CommandResult::Ok), "{result:?}");
+    assert!(matches!(result, CommandResult::Saved { .. }), "{result:?}");
     assert!(matches!(
         mgr.execute(Command::PageCount),
         CommandResult::PageCount(5)
@@ -85,7 +112,7 @@ fn bind_pdf_plus_raster_plus_svg() {
         sources: sources(&[a, png, svg]),
         target,
     });
-    assert!(matches!(result, CommandResult::Ok), "{result:?}");
+    assert!(matches!(result, CommandResult::Saved { .. }), "{result:?}");
     // 1 PDF page + 1 raster page + 1 svg page
     assert!(matches!(
         mgr.execute(Command::PageCount),
@@ -123,16 +150,13 @@ fn insert_pages_at_position() {
 
     let mut mgr = PdfOpsManager::new();
     assert!(matches!(
-        mgr.execute(Command::Open { path: base }),
+        mgr.execute(open_command(&base)),
         CommandResult::Ok
     ));
     // Insert the two extra pages before page 2 → 5 pages total.
     assert!(matches!(
         mgr.execute(Command::InsertPages {
-            source: BindSource {
-                path: extra,
-                pages: None
-            },
+            source: bind_source(&extra),
             at: 2,
         }),
         CommandResult::Ok
@@ -155,10 +179,7 @@ fn delete_pages() {
     let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 5);
 
     let mut mgr = PdfOpsManager::new();
-    assert!(matches!(
-        mgr.execute(Command::Open { path: doc }),
-        CommandResult::Ok
-    ));
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
     assert!(matches!(
         mgr.execute(Command::DeletePages { pages: vec![2, 4] }),
         CommandResult::Ok
@@ -181,10 +202,7 @@ fn delete_out_of_range_fails() {
     let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 2);
 
     let mut mgr = PdfOpsManager::new();
-    assert!(matches!(
-        mgr.execute(Command::Open { path: doc }),
-        CommandResult::Ok
-    ));
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
     assert!(matches!(
         mgr.execute(Command::DeletePages { pages: vec![9] }),
         CommandResult::Error(_)
@@ -204,10 +222,7 @@ fn move_page_forward() {
     let saved = dir.join("moved.pdf");
 
     let mut mgr = PdfOpsManager::new();
-    assert!(matches!(
-        mgr.execute(Command::Open { path: doc }),
-        CommandResult::Ok
-    ));
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
     // Move page 1 to position 4.
     assert!(matches!(
         mgr.execute(Command::MovePage { from: 1, to: 4 }),
@@ -218,12 +233,7 @@ fn move_page_forward() {
         CommandResult::PageCount(4)
     ));
     // Persist the result and verify the page order, not just the count.
-    assert!(matches!(
-        mgr.execute(Command::SaveAs {
-            path: saved.clone()
-        }),
-        CommandResult::Ok
-    ));
+    save_as(&mut mgr, &saved);
     assert_eq!(
         page_texts(pdfium, &saved),
         ["page 2", "page 3", "page 4", "page 1"]
@@ -243,10 +253,7 @@ fn move_page_backward() {
     let saved = dir.join("moved.pdf");
 
     let mut mgr = PdfOpsManager::new();
-    assert!(matches!(
-        mgr.execute(Command::Open { path: doc }),
-        CommandResult::Ok
-    ));
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
     // Move page 4 to position 1.
     assert!(matches!(
         mgr.execute(Command::MovePage { from: 4, to: 1 }),
@@ -257,12 +264,7 @@ fn move_page_backward() {
         CommandResult::PageCount(4)
     ));
     // Persist the result and verify the page order, not just the count.
-    assert!(matches!(
-        mgr.execute(Command::SaveAs {
-            path: saved.clone()
-        }),
-        CommandResult::Ok
-    ));
+    save_as(&mut mgr, &saved);
     assert_eq!(
         page_texts(pdfium, &saved),
         ["page 4", "page 1", "page 2", "page 3"]
@@ -281,10 +283,7 @@ fn rotate_page() {
     let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
 
     let mut mgr = PdfOpsManager::new();
-    assert!(matches!(
-        mgr.execute(Command::Open { path: doc }),
-        CommandResult::Ok
-    ));
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
     assert!(matches!(
         mgr.execute(Command::RotatePage {
             page: 1,
@@ -314,10 +313,7 @@ fn add_annotations_and_save() {
     let saved = dir.join("saved.pdf");
 
     let mut mgr = PdfOpsManager::new();
-    assert!(matches!(
-        mgr.execute(Command::Open { path: doc }),
-        CommandResult::Ok
-    ));
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
     assert!(matches!(
         mgr.execute(Command::AddTextAnnotation {
             page: 1,
@@ -353,10 +349,7 @@ fn add_annotations_and_save() {
         CommandResult::Ok
     ));
     assert!(mgr.dirty());
-    assert!(matches!(
-        mgr.execute(Command::SaveAs { path: saved }),
-        CommandResult::Ok
-    ));
+    save_as(&mut mgr, &saved);
     assert!(!mgr.dirty());
     common::remove_dir(&dir);
 }
@@ -373,21 +366,13 @@ fn save_keeps_page_count_after_reload() {
     let saved = dir.join("saved.pdf");
 
     let mut mgr = PdfOpsManager::new();
-    assert!(matches!(
-        mgr.execute(Command::Open { path: doc }),
-        CommandResult::Ok
-    ));
-    assert!(matches!(
-        mgr.execute(Command::SaveAs {
-            path: saved.clone()
-        }),
-        CommandResult::Ok
-    ));
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
+    save_as(&mut mgr, &saved);
 
     // Reload from disk and check the page count persisted.
     let mut reloaded = PdfOpsManager::new();
     assert!(matches!(
-        reloaded.execute(Command::Open { path: saved }),
+        reloaded.execute(open_command(&saved)),
         CommandResult::Ok
     ));
     assert!(matches!(
@@ -408,10 +393,7 @@ fn render_page_returns_pixels() {
     let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
 
     let mut mgr = PdfOpsManager::new();
-    assert!(matches!(
-        mgr.execute(Command::Open { path: doc }),
-        CommandResult::Ok
-    ));
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
     match mgr.execute(Command::RenderPage { page: 1, zoom: 1.0 }) {
         CommandResult::Rendered {
             width,
@@ -437,10 +419,7 @@ fn render_thumbnail_fits_size_box() {
     let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
 
     let mut mgr = PdfOpsManager::new();
-    assert!(matches!(
-        mgr.execute(Command::Open { path: doc }),
-        CommandResult::Ok
-    ));
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
     match mgr.execute(Command::RenderThumbnail {
         page: 1,
         max_px: 128,

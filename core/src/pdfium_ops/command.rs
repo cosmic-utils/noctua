@@ -11,7 +11,9 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Open an existing PDF for editing. Replaces any currently open document.
-    Open { path: PathBuf },
+    /// `data` are the raw file bytes read by the caller; `path` is tracked for
+    /// saving back to the same location.
+    Open { data: Vec<u8>, path: PathBuf },
 
     /// Create a new empty PDF and open it.
     New,
@@ -106,6 +108,8 @@ pub enum CommandResult {
         height: u32,
         rgba_data: Vec<u8>,
     },
+    /// Serialized document bytes after a save/bind, for the caller to write.
+    Saved { data: Vec<u8> },
     /// Command failed.
     Error(crate::pdfium_ops::PdfOpsError),
 }
@@ -114,6 +118,15 @@ impl From<Result<(), crate::pdfium_ops::PdfOpsError>> for CommandResult {
     fn from(res: Result<(), crate::pdfium_ops::PdfOpsError>) -> Self {
         match res {
             Ok(()) => CommandResult::Ok,
+            Err(e) => CommandResult::Error(e),
+        }
+    }
+}
+
+impl From<Result<Vec<u8>, crate::pdfium_ops::PdfOpsError>> for CommandResult {
+    fn from(res: Result<Vec<u8>, crate::pdfium_ops::PdfOpsError>) -> Self {
+        match res {
+            Ok(data) => CommandResult::Saved { data },
             Err(e) => CommandResult::Error(e),
         }
     }

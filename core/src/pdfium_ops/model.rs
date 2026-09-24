@@ -3,14 +3,20 @@
 //
 // Data types for PDF operations. Pure data, no logic.
 
-use std::path::PathBuf;
+use crate::storage::document::Format;
 
-/// A source document to bind or insert. Pages are referenced relative
-/// to the source: `pages` None means all pages, `Some(range)` selects
-/// a 1-based inclusive page range string like "1,3-5".
+/// A source document to bind or insert. The caller (storage layer) reads the
+/// file and detects its format; the manager only processes the bytes. Pages
+/// are referenced relative to the source: `pages` None means all pages,
+/// `Some(range)` selects a 1-based inclusive page range string like "1,3-5".
 #[derive(Debug, Clone)]
 pub struct BindSource {
-    pub path: PathBuf,
+    /// Display name (e.g. file name) for error messages; not used for I/O.
+    pub name: String,
+    /// Raw file bytes, read by the caller.
+    pub data: Vec<u8>,
+    /// Detected document format.
+    pub format: Format,
     /// Optional page selection, 1-based inclusive range string ("1,3-5").
     pub pages: Option<String>,
 }
