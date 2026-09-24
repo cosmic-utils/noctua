@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/pdfium_ops/manager.rs
 //
 // PDF operations manager. Holds one open document, executes commands.

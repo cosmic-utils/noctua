@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // ui/cosmic/src/widget/empty_state.rs
 //
 // Reusable centered placeholder: an icon above a hint text.

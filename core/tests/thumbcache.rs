@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/tests/thumbcache.rs
 //
 // Integration tests for the freedesktop thumbnail cache.

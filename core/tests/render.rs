@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/tests/render.rs
 //
 // Integration tests for the UI-independent render engine (raster/SVG).

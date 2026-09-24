@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // ui/cosmic/src/widget/scroll_zoom.rs
 //
 // Wraps scrollable content to turn Ctrl+wheel into a zoom message while

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/tests/browser.rs
 //
 // Integration tests for browser mode folder listing.

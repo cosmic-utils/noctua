@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/pdfium_ops/bindings.rs
 //
 // Process-wide Pdfium instance. pdfium's library is process-global;

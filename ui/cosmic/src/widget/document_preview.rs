@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // ui/cosmic/src/widget/document_preview.rs
 //
 // Reusable continuous multi-page preview of a PDF inside a folder tab.

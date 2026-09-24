@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // ui/cosmic/src/widget/viewport.rs
 //
 // Viewport math shared by the image viewer and, later, the annotation

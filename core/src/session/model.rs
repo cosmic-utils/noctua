@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/session/model.rs
 //
 // Data model for a session. A session remembers the application state:

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/tests/pdfium_ops.rs
 //
 // Integration tests for PDF operations: bind, insert, delete, move,

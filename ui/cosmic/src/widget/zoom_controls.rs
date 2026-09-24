@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // ui/cosmic/src/widget/zoom_controls.rs
 //
 // Footer zoom controls: zoom out/in buttons and a percentage menu with

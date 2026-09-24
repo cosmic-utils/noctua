@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/storage/browser.rs
 //
 // Browser mode helpers: list the supported documents in a folder.

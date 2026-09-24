@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/document.rs
 //
 // Pure document data types. No logic, no UI, no filesystem.

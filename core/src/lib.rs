@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/lib.rs
 //
 // Noctua core: files, folders, PDFs and sessions. No UI concepts.

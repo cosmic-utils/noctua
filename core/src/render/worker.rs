@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/render/worker.rs
 //
 // Single pdfium worker with a priority queue. Pdfium is not thread-safe,

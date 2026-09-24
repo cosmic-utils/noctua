@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/storage/session.rs
 //
 // Loads and saves sessions. The default location follows freedesktop

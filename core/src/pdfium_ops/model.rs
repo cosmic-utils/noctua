@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/pdfium_ops/model.rs
 //
 // Data types for PDF operations. Pure data, no logic.

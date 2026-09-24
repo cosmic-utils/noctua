@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/storage/mod.rs
 //
 // Central storage module for file I/O operations and error handling.

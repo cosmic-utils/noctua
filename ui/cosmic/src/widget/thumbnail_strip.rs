@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // ui/cosmic/src/widget/thumbnail_strip.rs
 //
 // Reusable thumbnail strip: a fixed-width, scrollable column of tiles that

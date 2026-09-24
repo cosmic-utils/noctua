@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/storage/error.rs
 //
 // Central error type for all storage-related operations (I/O, serialization, thumbnails).

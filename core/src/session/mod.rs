@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-only
 // core/src/session/mod.rs
 //
 // Application state: which tabs were open. Pure data, no logic.
