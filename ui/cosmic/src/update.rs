@@ -318,8 +318,11 @@ impl AppModel {
                     page_sizes: sizes,
                     pages,
                     zoom: 1.0,
+                    rotation: 0,
+                    flip_h: false,
                     scroll: 0.0,
                     viewport_height: 800.0,
+                    viewport_width: 800.0,
                     full_order: Vec::new(),
                     requested: None,
                 });
@@ -408,7 +411,8 @@ impl AppModel {
     fn preview_visible_range(preview: &DocumentPreview) -> Option<(u32, u32)> {
         let mut visible: Option<(u32, u32)> = None;
         let mut y = 0.0f32;
-        for (index, (_, height)) in preview.page_sizes.iter().enumerate() {
+        for index in 0..preview.page_sizes.len() {
+            let (_, height) = preview.effective_page_size(index);
             let bottom = y + height * preview.zoom;
             if bottom >= preview.scroll && y <= preview.scroll + preview.viewport_height {
                 let page = index as u32 + 1;
@@ -720,7 +724,8 @@ impl AppModel {
         // The page whose top is currently at or above the viewport top.
         let mut current = 0usize;
         let mut top = 0.0;
-        for (index, (_, height)) in preview.page_sizes.iter().enumerate() {
+        for index in 0..preview.page_sizes.len() {
+            let (_, height) = preview.effective_page_size(index);
             let bottom = top + height * preview.zoom;
             if bottom > preview.scroll + 1.0 {
                 current = index;
@@ -731,9 +736,8 @@ impl AppModel {
 
         let last = preview.page_sizes.len() - 1;
         let target = (current as i32 + direction).clamp(0, last as i32) as usize;
-        let target_y = preview.page_sizes[..target]
-            .iter()
-            .map(|(_, height)| height * preview.zoom)
+        let target_y = (0..target)
+            .map(|index| preview.effective_page_size(index).1 * preview.zoom)
             .sum();
 
         scroll_to::<Message>(
@@ -791,21 +795,55 @@ impl AppModel {
         }
     }
 
-    /// Fit the current target to the viewport (single images only).
-    fn set_fit(&mut self) {
+    /// Fit the current target to the viewport. Single images use the viewer's
+    /// scale-down fit; the PDF preview fits its pages to the viewport width.
+    fn set_fit(&mut self) -> iced::Task<cosmic::Action<Message>> {
         let Some(target) = self.current_target.clone() else {
-            return;
+            return iced::Task::none();
         };
         if let CurrentTarget::File { path } = &target
             && self.has_preview(path)
         {
-            return;
+            return self.fit_preview(path);
         }
         let state = self.zoom_states.entry(target).or_default();
         state.fit = true;
         state.scale = 1.0;
         state.offset_x = 0.0;
         state.offset_y = 0.0;
+        iced::Task::none()
+    }
+
+    /// Fit the preview pages to the viewport width and re-render.
+    fn fit_preview(&mut self, path: &PathBuf) -> iced::Task<cosmic::Action<Message>> {
+        let Some(tab) = self.active_tab() else {
+            return iced::Task::none();
+        };
+        let Some(state) = self.tab_ui.get(&tab) else {
+            return iced::Task::none();
+        };
+        let Some(preview) = state.preview.as_ref() else {
+            return iced::Task::none();
+        };
+        if preview.path != *path {
+            return iced::Task::none();
+        }
+        // Fit the widest page to the viewport width (minus the preview's
+        // horizontal padding); rotation is irrelevant because fit-to-width
+        // targets the displayed width.
+        let max_width = preview
+            .page_sizes
+            .iter()
+            .map(|(w, _)| *w)
+            .fold(0.0, f32::max);
+        let padding = 2.0 * f32::from(cosmic::theme::spacing().space_m);
+        let available = (preview.viewport_width - padding).max(0.0);
+        let zoom = if max_width > 0.0 && available > 0.0 {
+            (available / max_width).clamp(0.05, 8.0)
+        } else {
+            1.0
+        };
+        self.render_preview_at(path, zoom)
     }
 
     /// Open the system folder dialog.
@@ -1018,6 +1056,75 @@ impl AppModel {
             state.offset_x = 0.0;
             state.offset_y = 0.0;
         }
+    }
+
+    /// Apply a rotate/flip operation to the current document. Single images
+    /// are transformed in place; the PDF preview updates its cumulative view
+    /// transform and re-renders.
+    fn transform_view(
+        &mut self,
+        rotation: u16,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        if let Some(CurrentTarget::File { path }) = &self.current_target
+            && self.has_preview(path)
+        {
+            return self.transform_preview(path.clone(), rotation, flip_h, flip_v);
+        }
+        self.transform_current_image(rotation, flip_h, flip_v);
+        iced::Task::none()
+    }
+
+    /// Compose the given operation into the preview's cumulative view
+    /// transform, drop the rendered pages and re-render the visible window.
+    fn transform_preview(
+        &mut self,
+        path: PathBuf,
+        rotation: u16,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let visible = {
+            let Some(tab) = self.active_tab() else {
+                return iced::Task::none();
+            };
+            let Some(state) = self.tab_ui.get_mut(&tab) else {
+                return iced::Task::none();
+            };
+            let Some(preview) = state.preview.as_mut() else {
+                return iced::Task::none();
+            };
+            if preview.path != path {
+                return iced::Task::none();
+            }
+
+            // The (rotation, flip_h) pair represents the eight dihedral
+            // symmetries; vertical flip folds into rotation == 180 plus
+            // flip_h. Compose the single operation on the right.
+            if flip_v {
+                if preview.flip_h {
+                    preview.rotation = (preview.rotation + 180) % 360;
+                    preview.flip_h = false;
+                } else {
+                    preview.rotation = (180 + 360 - preview.rotation) % 360;
+                    preview.flip_h = true;
+                }
+            } else if flip_h {
+                preview.rotation = (360 - preview.rotation) % 360;
+                preview.flip_h = !preview.flip_h;
+            } else {
+                preview.rotation = (preview.rotation + rotation) % 360;
+            }
+
+            preview.full_order.clear();
+            preview.requested = None;
+            for slot in preview.pages.iter_mut() {
+                *slot = PageSlot::Empty;
+            }
+            Self::preview_visible_range(preview)
+        };
+        self.request_preview_window(&path, visible)
     }
 
     /// Handles messages emitted by the application and its widgets.
@@ -1251,11 +1358,17 @@ impl AppModel {
                     return iced::Task::none();
                 }
 
+                // Apply the cumulative view transform to every incoming page.
+                let rotation = preview.rotation;
+                let flip_h = preview.flip_h;
+
                 for (page, width, height, rgba) in pages {
                     let index = page as usize - 1;
                     if index >= preview.pages.len() {
                         continue;
                     }
+                    let (width, height, rgba) =
+                        transform_rgba(width, height, rgba, rotation, flip_h, false);
                     let handle = cosmic::widget::image::Handle::from_rgba(width, height, rgba);
                     if is_thumb {
                         if matches!(preview.pages[index], PageSlot::Empty) {
@@ -1282,6 +1395,7 @@ impl AppModel {
                 path,
                 offset_y,
                 viewport_height,
+                viewport_width,
             } => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
@@ -1298,6 +1412,7 @@ impl AppModel {
                     }
                     preview.scroll = offset_y;
                     preview.viewport_height = viewport_height;
+                    preview.viewport_width = viewport_width;
                     let visible = Self::preview_visible_range(preview);
                     // Re-request only when the visible window changed; plain
                     // scroll ticks within one window must stay quiet.
@@ -1378,32 +1493,28 @@ impl AppModel {
                 return self.set_zoom(1.0);
             }
 
-            Message::SetZoom(scale) => {
-                return self.set_zoom(scale);
-            }
-
             Message::ModifiersChanged(modifiers) => {
                 self.keyboard_modifiers = modifiers;
             }
 
             Message::ZoomToFit => {
-                self.set_fit();
+                return self.set_fit();
             }
 
             Message::RotateClockwise => {
-                self.transform_current_image(90, false, false);
+                return self.transform_view(90, false, false);
             }
 
             Message::RotateCounterClockwise => {
-                self.transform_current_image(270, false, false);
+                return self.transform_view(270, false, false);
             }
 
             Message::FlipHorizontal => {
-                self.transform_current_image(0, true, false);
+                return self.transform_view(0, true, false);
             }
 
             Message::FlipVertical => {
-                self.transform_current_image(0, false, true);
+                return self.transform_view(0, false, true);
             }
 
             Message::ToggleFullscreen => {

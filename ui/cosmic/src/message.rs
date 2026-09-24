@@ -69,11 +69,12 @@ pub enum Message {
         pages: Vec<(u32, u32, u32, Vec<u8>)>,
     },
     /// The preview was scrolled; carries absolute content offset and the
-    /// viewport height to compute the visible page window.
+    /// viewport size to compute the visible page window.
     PreviewScrolled {
         path: PathBuf,
         offset_y: f32,
         viewport_height: f32,
+        viewport_width: f32,
     },
     /// The mouse wheel scrolled over a PDF preview; Ctrl turns it into a zoom.
     PreviewWheel {
@@ -109,8 +110,6 @@ pub enum Message {
     ZoomOut,
     Zoom100,
     ZoomToFit,
-    /// Set the zoom of the current single image to an absolute scale.
-    SetZoom(f32),
     /// Rotate the current single image 90° clockwise.
     RotateClockwise,
     /// Rotate the current single image 90° counter-clockwise.
@@ -139,9 +138,6 @@ pub enum MenuAction {
     ZoomOut,
     Zoom100,
     ZoomToFit,
-    Zoom50,
-    Zoom200,
-    Zoom400,
     RotateClockwise,
     RotateCounterClockwise,
     FlipHorizontal,
@@ -163,9 +159,6 @@ impl menu::action::MenuAction for MenuAction {
             MenuAction::ZoomOut => Message::ZoomOut,
             MenuAction::Zoom100 => Message::Zoom100,
             MenuAction::ZoomToFit => Message::ZoomToFit,
-            MenuAction::Zoom50 => Message::SetZoom(0.5),
-            MenuAction::Zoom200 => Message::SetZoom(2.0),
-            MenuAction::Zoom400 => Message::SetZoom(4.0),
             MenuAction::RotateClockwise => Message::RotateClockwise,
             MenuAction::RotateCounterClockwise => Message::RotateCounterClockwise,
             MenuAction::FlipHorizontal => Message::FlipHorizontal,

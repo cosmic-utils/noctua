@@ -25,11 +25,7 @@ pub(crate) fn document_preview<'a>(
         .padding(space.space_m);
 
     for (index, slot) in preview.pages.iter().enumerate() {
-        let (_, height) = preview
-            .page_sizes
-            .get(index)
-            .copied()
-            .unwrap_or((600.0, 800.0));
+        let (_, height) = preview.effective_page_size(index);
         let box_height = height * preview.zoom;
         let page: Element<'_, Message> = match slot {
             PageSlot::Empty => widget::space()
@@ -56,11 +52,14 @@ pub(crate) fn document_preview<'a>(
         });
 
     widget::scrollable(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
         .id(widget::Id::new(PREVIEW_SCROLL_ID))
         .on_scroll(|viewport| Message::PreviewScrolled {
             path: preview.path.clone(),
             offset_y: viewport.absolute_offset().y,
             viewport_height: viewport.bounds().height,
+            viewport_width: viewport.bounds().width,
         })
         .into()
 }

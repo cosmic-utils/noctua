@@ -148,18 +148,7 @@ impl cosmic::Application for AppModel {
         .item_height(menu::ItemHeight::Dynamic(40))
         .item_width(menu::ItemWidth::Uniform(360));
 
-        let nav = widget::row::with_capacity(2)
-            .spacing(cosmic::theme::spacing().space_xxs)
-            .push(
-                widget::button::icon(widget::icon::from_name("go-previous-symbolic"))
-                    .on_press(Message::PrevEntry),
-            )
-            .push(
-                widget::button::icon(widget::icon::from_name("go-next-symbolic"))
-                    .on_press(Message::NextEntry),
-            );
-
-        vec![menu_bar.into(), nav.into()]
+        vec![menu_bar.into()]
     }
 
     /// Display a context drawer if the context page is requested.

@@ -11,13 +11,12 @@ use noctua_core::storage;
 
 use crate::fl;
 use crate::message::Message;
-use crate::model::{AppModel, CurrentTarget};
+use crate::model::{AppModel, CurrentTarget, DocumentPreview};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
 use crate::widget::image_viewer::Viewer;
 use crate::widget::thumbnail_strip::thumbnail_strip;
 use crate::widget::toolbar::ResponsiveToolbar;
-use crate::widget::zoom_controls::zoom_controls;
 
 /// Describes the interface based on the current state of the application model.
 ///
@@ -46,12 +45,17 @@ pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
         if app.show_nav_panel {
             row = row.push(strip_view(app));
         }
-        // Content side: the view toolbar sits above the viewer.
+        // Content side: the view toolbar floats bottom-center like
+        // cosmic-viewer's, below the viewer.
         let mut content = widget::column::with_capacity(2).spacing(space.space_xxs);
-        if app.current_target.is_some() {
-            content = content.push(view_toolbar());
-        }
         content = content.push(content_view(app));
+        if app.current_target.is_some() {
+            content = content.push(
+                widget::container(view_toolbar(app))
+                    .center_x(Length::Fill)
+                    .padding([space.space_xxs, 0, space.space_xxs, 0]),
+            );
+        }
         row = row.push(content.width(Length::Fill).height(Length::Fill));
         column = column.push(row.height(Length::Fill));
     }
@@ -76,37 +80,98 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
     thumbnail_strip(&state.strip, state.selected, state.expanded.as_ref(), tab)
 }
 
-/// A toolbar icon button that publishes the given message when pressed.
-fn icon_button(name: &'static str, message: Message) -> Element<'static, Message> {
+/// The active tab's continuous PDF preview, if it matches the current target.
+fn active_preview(app: &AppModel) -> Option<&DocumentPreview> {
+    let tab = app.active_tab()?;
+    let state = app.tab_ui.get(&tab)?;
+    let preview = state.preview.as_ref()?;
+    matches!(&app.current_target, Some(CurrentTarget::File { path }) if path == &preview.path)
+        .then_some(preview)
+}
+
+/// A toolbar icon button with a tooltip, publishing the message when pressed.
+fn icon_button(name: &'static str, tooltip: String, message: Message) -> Element<'static, Message> {
     widget::button::icon(widget::icon::from_name(name))
+        .tooltip(tooltip)
         .on_press(message)
         .into()
 }
 
-/// The view toolbar: transform (rotate/flip) and zoom actions for the active
-/// document. Pure UI — every button is a message routed to the core.
-fn view_toolbar() -> Element<'static, Message> {
+/// The view toolbar: navigation, transform (rotate/flip) and zoom actions for
+/// the active document, matching cosmic-viewer's bottom-center panel. Pure UI
+/// — every button is a message routed to the core. The panel is identical for
+/// single images and the continuous PDF preview.
+fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
+    let space = cosmic::theme::spacing();
+    let (fit, scale) = current_zoom(app);
+    let zoom_label = if fit {
+        fl!("fit")
+    } else {
+        format!("{:.0}%", scale * 100.0)
+    };
+
     ResponsiveToolbar::new()
         .start(icon_button(
+            "go-previous-symbolic",
+            fl!("previous"),
+            Message::PrevEntry,
+        ))
+        .start(icon_button(
+            "go-next-symbolic",
+            fl!("next"),
+            Message::NextEntry,
+        ))
+        .start(icon_button(
             "object-rotate-left-symbolic",
+            fl!("rotate-counter-clockwise"),
             Message::RotateCounterClockwise,
         ))
         .start(icon_button(
             "object-rotate-right-symbolic",
+            fl!("rotate-clockwise"),
             Message::RotateClockwise,
         ))
         .start(icon_button(
             "object-flip-horizontal-symbolic",
+            fl!("flip-horizontal"),
             Message::FlipHorizontal,
         ))
         .start(icon_button(
             "object-flip-vertical-symbolic",
+            fl!("flip-vertical"),
             Message::FlipVertical,
         ))
-        .center(icon_button("zoom-out-symbolic", Message::ZoomOut))
-        .center(icon_button("zoom-in-symbolic", Message::ZoomIn))
-        .end(icon_button("zoom-fit-best-symbolic", Message::ZoomToFit))
-        .end(icon_button("zoom-original-symbolic", Message::Zoom100))
+        .center(
+            widget::row::with_capacity(3)
+                .spacing(space.space_xxs)
+                .align_y(Alignment::Center)
+                .push(icon_button(
+                    "zoom-out-symbolic",
+                    fl!("zoom-out"),
+                    Message::ZoomOut,
+                ))
+                .push(widget::text::body(zoom_label))
+                .push(icon_button(
+                    "zoom-in-symbolic",
+                    fl!("zoom-in"),
+                    Message::ZoomIn,
+                )),
+        )
+        .end(icon_button(
+            "view-actual-size-symbolic",
+            fl!("zoom-100"),
+            Message::Zoom100,
+        ))
+        .end(icon_button(
+            "view-fit-symbolic",
+            fl!("zoom-fit"),
+            Message::ZoomToFit,
+        ))
+        .end(icon_button(
+            "view-fullscreen-symbolic",
+            fl!("fullscreen"),
+            Message::ToggleFullscreen,
+        ))
         .view()
 }
 
@@ -123,11 +188,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
     }
 
     // Continuous preview of the selected multi-page PDF.
-    if let Some(tab) = app.active_tab()
-        && let Some(state) = app.tab_ui.get(&tab)
-        && let Some(preview) = state.preview.as_ref()
-        && matches!(&app.current_target, Some(CurrentTarget::File { path }) if path == &preview.path)
-    {
+    if let Some(preview) = active_preview(app) {
         return document_preview(preview, app.keyboard_modifiers);
     }
 
@@ -204,12 +265,11 @@ fn status_bar(app: &AppModel) -> Element<'_, Message> {
         info = info.push(widget::text::body(storage::document::format_size(size)));
     }
 
-    let row = widget::row::with_capacity(3)
+    let row = widget::row::with_capacity(2)
         .spacing(space.space_s)
         .align_y(Alignment::Center)
         .push(widget::space().width(Length::Fill))
-        .push(info)
-        .push(zoom_controls_view(app));
+        .push(info);
 
     widget::container(row)
         .width(Length::Fill)
@@ -260,10 +320,4 @@ fn current_zoom(app: &AppModel) -> (bool, f32) {
 
     let state = app.zoom_states.get(target).copied().unwrap_or_default();
     (state.fit, state.scale)
-}
-
-/// Zoom controls reflecting the current zoom of the active target.
-fn zoom_controls_view(app: &AppModel) -> Element<'_, Message> {
-    let (fit, scale) = current_zoom(app);
-    zoom_controls(fit, scale, &app.key_binds)
 }

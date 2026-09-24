@@ -140,15 +140,39 @@ pub(crate) struct DocumentPreview {
     pub(crate) pages: Vec<PageSlot>,
     /// Zoom the full pages were rendered at.
     pub(crate) zoom: f32,
+    /// Cumulative view rotation in degrees (0/90/180/270).
+    pub(crate) rotation: u16,
+    /// Cumulative horizontal flip. Vertical flip is `rotation == 180` with
+    /// `flip_h` set, so this pair represents all eight dihedral symmetries.
+    pub(crate) flip_h: bool,
     /// Content scroll offset in logical pixels, restored on tab switch.
     pub(crate) scroll: f32,
     /// Height of the visible viewport, for the visible-window calculation.
     pub(crate) viewport_height: f32,
+    /// Width of the visible viewport, for fit-to-width.
+    pub(crate) viewport_width: f32,
     /// Insertion order of full pages, oldest first, for the LRU cap.
     pub(crate) full_order: Vec<u32>,
     /// Last requested full-render window; scroll events re-request only
     /// when the visible window actually changes.
     pub(crate) requested: Option<(u32, u32)>,
+}
+
+impl DocumentPreview {
+    /// Displayed page size in pixels, accounting for the cumulative view
+    /// rotation: 90°/270° swap width and height.
+    pub(crate) fn effective_page_size(&self, index: usize) -> (f32, f32) {
+        let (w, h) = self
+            .page_sizes
+            .get(index)
+            .copied()
+            .unwrap_or((600.0, 800.0));
+        if self.rotation.is_multiple_of(180) {
+            (w, h)
+        } else {
+            (h, w)
+        }
+    }
 }
 
 /// Volatile per-tab UI state: strip entries, selection and the preview.
