@@ -8,4 +8,5 @@ pub(crate) mod empty_state;
 pub(crate) mod image_viewer;
 pub(crate) mod scroll_zoom;
 pub(crate) mod thumbnail_strip;
+pub(crate) mod viewport;
 pub(crate) mod zoom_controls;

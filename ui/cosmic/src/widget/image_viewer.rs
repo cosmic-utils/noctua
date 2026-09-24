@@ -472,13 +472,7 @@ impl Default for State {
 impl State {
     /// The current offset clamped to the visible image bounds.
     fn offset(&self, bounds: Rectangle, image_size: Size) -> Vector {
-        let hidden_width = (image_size.width - bounds.width / 2.0).max(0.0).round();
-        let hidden_height = (image_size.height - bounds.height / 2.0).max(0.0).round();
-
-        Vector::new(
-            self.current_offset.x.clamp(-hidden_width, hidden_width),
-            self.current_offset.y.clamp(-hidden_height, hidden_height),
-        )
+        crate::widget::viewport::clamp_offset(self.current_offset, bounds.size(), image_size)
     }
 
     /// Whether the cursor is currently grabbed by the [`Viewer`].
