@@ -1048,15 +1048,30 @@ impl AppModel {
     }
 
     fn apply_image(&mut self, rgba: Option<(u32, u32, Vec<u8>)>) {
-        self.current_image = rgba.map(|(width, height, data)| CurrentImage {
+        let Some((width, height, data)) = rgba else {
+            self.current_image = None;
+            return;
+        };
+
+        // Re-apply the remembered view transform (rotate/flip) to the fresh
+        // render, so it survives re-selection and tab switches.
+        let (rotation, flip_h) = self
+            .current_target
+            .as_ref()
+            .and_then(|target| self.zoom_states.get(target))
+            .map(|state| (state.rotation, state.flip_h))
+            .unwrap_or((0, false));
+        let (width, height, data) = transform_rgba(width, height, data, rotation, flip_h, false);
+
+        self.current_image = Some(CurrentImage {
             handle: cosmic::widget::image::Handle::from_rgba(width, height, data.clone()),
             rgba: (width, height, data),
         });
     }
 
     /// Rotate and/or flip the current single image in place, rebuilding the
-    /// display handle from the transformed pixels. The view is recentered
-    /// because the dimensions may have swapped.
+    /// display handle from the transformed pixels. The cumulative transform is
+    /// remembered per target and re-applied when the image is re-rendered.
     fn transform_current_image(&mut self, rotation: u16, flip_h: bool, flip_v: bool) {
         let Some(image) = &self.current_image else {
             return;
@@ -1074,9 +1089,15 @@ impl AppModel {
             rgba: (width, height, data),
         });
 
+        // Remember the cumulative transform; the pan offset is reset because
+        // the dimensions may have swapped.
         if let Some(target) = self.current_target.clone()
             && let Some(state) = self.zoom_states.get_mut(&target)
         {
+            let (new_rotation, new_flip_h) =
+                compose_view_transform(state.rotation, state.flip_h, rotation, flip_h, flip_v);
+            state.rotation = new_rotation;
+            state.flip_h = new_flip_h;
             state.offset_x = 0.0;
             state.offset_y = 0.0;
         }

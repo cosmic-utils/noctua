@@ -93,7 +93,7 @@ pub enum CurrentTarget {
     Page { path: PathBuf, page: u32 },
 }
 
-/// Per-image zoom/pan state remembered across selections.
+/// Per-image view state (zoom, pan, rotate, flip) remembered across selections.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ZoomState {
     /// Whether the image is shown fitted to the viewport.
@@ -103,6 +103,11 @@ pub(crate) struct ZoomState {
     /// Pan offset in logical pixels.
     pub(crate) offset_x: f32,
     pub(crate) offset_y: f32,
+    /// Cumulative view rotation in degrees (0/90/180/270).
+    pub(crate) rotation: u16,
+    /// Cumulative horizontal flip; vertical flip folds into `rotation == 180`
+    /// plus `flip_h`, so the pair covers all eight dihedral symmetries.
+    pub(crate) flip_h: bool,
 }
 
 impl Default for ZoomState {
@@ -112,6 +117,8 @@ impl Default for ZoomState {
             scale: 1.0,
             offset_x: 0.0,
             offset_y: 0.0,
+            rotation: 0,
+            flip_h: false,
         }
     }
 }
@@ -219,7 +226,7 @@ pub struct AppModel {
     pub(crate) current_target: Option<CurrentTarget>,
     /// Rendered single-page content for the current target.
     pub(crate) current_image: Option<CurrentImage>,
-    /// Zoom/pan state per image, keyed by the current target.
+    /// View state per image (zoom/pan/rotate/flip), keyed by the current target.
     pub(crate) zoom_states: HashMap<CurrentTarget, ZoomState>,
     /// Current keyboard modifiers, tracked so widgets know the state at
     /// creation time (e.g. Ctrl already held).
