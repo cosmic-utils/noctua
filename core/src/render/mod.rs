@@ -60,7 +60,7 @@ fn load_raster(path: &Path) -> Result<LoadedContent, RenderError> {
     use image::GenericImageView;
 
     let data = std::fs::read(path).map_err(|e| RenderError::Storage(e.into()))?;
-    let img = image::load_from_memory(&data)
+    let img = decode_raster(&data, path)
         .map_err(|e| RenderError::Other(format!("Failed to decode raster: {e}")))?;
     let (width, height) = img.dimensions();
     let rgba_data = img.to_rgba8().into_raw();
@@ -69,6 +69,13 @@ fn load_raster(path: &Path) -> Result<LoadedContent, RenderError> {
         width,
         height,
     })
+}
+
+/// Decode a raster image, sniffing the format from magic bytes with an
+/// extension fallback for formats without a signature (TGA).
+fn decode_raster(data: &[u8], path: &Path) -> image::ImageResult<image::DynamicImage> {
+    let format = image::guess_format(data).or_else(|_| image::ImageFormat::from_path(path))?;
+    image::load_from_memory_with_format(data, format)
 }
 
 /// Parse an SVG file into a resvg tree for rendering.

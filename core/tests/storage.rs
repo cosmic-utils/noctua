@@ -21,6 +21,28 @@ fn detects_raster_png() {
 }
 
 #[test]
+fn detects_raster_qoi() {
+    let dir = common::temp_dir("detect-qoi");
+    let qoi = common::make_qoi(&dir, "img.qoi", 32, 32);
+
+    let info = storage::document::load(&qoi).unwrap();
+    assert!(matches!(info.kind, Kind::Raster(_)));
+    assert_eq!(info.number_of_pages, 1);
+    common::remove_dir(&dir);
+}
+
+#[test]
+fn detects_raster_tga() {
+    let dir = common::temp_dir("detect-tga");
+    let tga = common::make_tga(&dir, "img.tga", 32, 32);
+
+    let info = storage::document::load(&tga).unwrap();
+    assert!(matches!(info.kind, Kind::Raster(_)));
+    assert_eq!(info.number_of_pages, 1);
+    common::remove_dir(&dir);
+}
+
+#[test]
 fn detects_vector_svg() {
     let dir = common::temp_dir("detect-svg");
     let svg = common::make_svg(&dir, "vec.svg");

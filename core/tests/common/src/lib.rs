@@ -64,6 +64,26 @@ pub fn make_svg(dir: &Path, name: &str) -> PathBuf {
     path
 }
 
+/// Generate a simple QOI image (detected by magic bytes).
+pub fn make_qoi(dir: &Path, name: &str, width: u32, height: u32) -> PathBuf {
+    let path = dir.join(name);
+    let img = image::RgbaImage::from_pixel(width, height, image::Rgba([0, 255, 0, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&path, image::ImageFormat::Qoi)
+        .expect("save qoi");
+    path
+}
+
+/// Generate a simple TGA image (no magic bytes; exercises extension detection).
+pub fn make_tga(dir: &Path, name: &str, width: u32, height: u32) -> PathBuf {
+    let path = dir.join(name);
+    let img = image::RgbaImage::from_pixel(width, height, image::Rgba([255, 0, 0, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&path, image::ImageFormat::Tga)
+        .expect("save tga");
+    path
+}
+
 /// Generate a small PDF with the given number of pages via pdfium.
 /// Each page contains one text object, so pages are non-empty.
 pub fn make_pdf(

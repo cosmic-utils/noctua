@@ -113,12 +113,43 @@ fn detect_format(path: &Path, first_bytes: &[u8]) -> Format {
         {
             return Format::Raster;
         }
+        // ICO
+        if first_bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
+            return Format::Raster;
+        }
+        // QOI
+        if first_bytes.starts_with(b"qoif") {
+            return Format::Raster;
+        }
+        // DDS
+        if first_bytes.starts_with(b"DDS ") {
+            return Format::Raster;
+        }
+        // Radiance HDR
+        if first_bytes.starts_with(b"#?") {
+            return Format::Raster;
+        }
+        // OpenEXR
+        if first_bytes.starts_with(&[0x76, 0x2F, 0x31, 0x01]) {
+            return Format::Raster;
+        }
+        // Farbfeld
+        if first_bytes.starts_with(b"farbfeld") {
+            return Format::Raster;
+        }
+        // PNM (PBM/PGM/PPM/PAM)
+        if first_bytes[0] == b'P' && (b'1'..=b'7').contains(&first_bytes[1]) {
+            return Format::Raster;
+        }
     }
 
-    // Fall back to extension if magic bytes inconclusive
+    // Fall back to extension if magic bytes inconclusive. TGA has no magic
+    // bytes, so it is detected by extension only.
     match ext.as_deref() {
         Some("png") | Some("jpg") | Some("jpeg") | Some("gif") | Some("bmp") | Some("tiff")
-        | Some("tif") | Some("webp") => Format::Raster,
+        | Some("tif") | Some("webp") | Some("ico") | Some("qoi") | Some("tga") | Some("dds")
+        | Some("hdr") | Some("exr") | Some("ff") | Some("pbm") | Some("pgm") | Some("ppm")
+        | Some("pnm") | Some("pam") => Format::Raster,
         Some("pdf") => Format::Pdf,
         Some("svg") => Format::Svg,
         _ => Format::Unknown,
