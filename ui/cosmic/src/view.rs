@@ -16,6 +16,7 @@ use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
 use crate::widget::image_viewer::Viewer;
 use crate::widget::thumbnail_strip::thumbnail_strip;
+use crate::widget::toolbar::ResponsiveToolbar;
 use crate::widget::zoom_controls::zoom_controls;
 
 /// Describes the interface based on the current state of the application model.
@@ -45,7 +46,13 @@ pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
         if app.show_nav_panel {
             row = row.push(strip_view(app));
         }
-        row = row.push(content_view(app));
+        // Content side: the view toolbar sits above the viewer.
+        let mut content = widget::column::with_capacity(2).spacing(space.space_xxs);
+        if app.current_target.is_some() {
+            content = content.push(view_toolbar());
+        }
+        content = content.push(content_view(app));
+        row = row.push(content.width(Length::Fill).height(Length::Fill));
         column = column.push(row.height(Length::Fill));
     }
 
@@ -67,6 +74,40 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
     };
 
     thumbnail_strip(&state.strip, state.selected, state.expanded.as_ref(), tab)
+}
+
+/// A toolbar icon button that publishes the given message when pressed.
+fn icon_button(name: &'static str, message: Message) -> Element<'static, Message> {
+    widget::button::icon(widget::icon::from_name(name))
+        .on_press(message)
+        .into()
+}
+
+/// The view toolbar: transform (rotate/flip) and zoom actions for the active
+/// document. Pure UI — every button is a message routed to the core.
+fn view_toolbar() -> Element<'static, Message> {
+    ResponsiveToolbar::new()
+        .start(icon_button(
+            "object-rotate-left-symbolic",
+            Message::RotateCounterClockwise,
+        ))
+        .start(icon_button(
+            "object-rotate-right-symbolic",
+            Message::RotateClockwise,
+        ))
+        .start(icon_button(
+            "object-flip-horizontal-symbolic",
+            Message::FlipHorizontal,
+        ))
+        .start(icon_button(
+            "object-flip-vertical-symbolic",
+            Message::FlipVertical,
+        ))
+        .center(icon_button("zoom-out-symbolic", Message::ZoomOut))
+        .center(icon_button("zoom-in-symbolic", Message::ZoomIn))
+        .end(icon_button("zoom-fit-best-symbolic", Message::ZoomToFit))
+        .end(icon_button("zoom-original-symbolic", Message::Zoom100))
+        .view()
 }
 
 /// The content area view.
