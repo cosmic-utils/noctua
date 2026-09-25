@@ -14,6 +14,7 @@ use crate::message::Message;
 use crate::model::{AppModel, CurrentTarget, DocumentPreview};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
+use crate::widget::fresh_image::FreshImage;
 use crate::widget::image_viewer::Viewer;
 use crate::widget::thumbnail_strip::thumbnail_strip;
 use crate::widget::toolbar::ResponsiveToolbar;
@@ -215,7 +216,9 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                 (state.scale, state.offset_x, state.offset_y)
             };
 
-            widget::container(
+            let handle_id = image.handle.id();
+
+            widget::container(FreshImage::new(
                 Viewer::new(image.handle.clone())
                     .content_fit(content_fit)
                     .modifiers(app.keyboard_modifiers)
@@ -230,7 +233,8 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                             offset_y,
                         }
                     }),
-            )
+                handle_id,
+            ))
             .padding(space.space_m)
             .into()
         }
