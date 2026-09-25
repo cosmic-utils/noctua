@@ -1519,6 +1519,13 @@ impl AppModel {
 
             Message::ZoomOut => return self.zoom_by(-1.0),
 
+            Message::ZoomBy(steps) => {
+                if steps == 0.0 {
+                    return iced::Task::none();
+                }
+                return self.zoom_by(steps);
+            }
+
             Message::Zoom100 => {
                 return self.set_zoom(1.0);
             }

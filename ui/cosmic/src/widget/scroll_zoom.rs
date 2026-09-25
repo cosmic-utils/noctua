@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // ui/cosmic/src/widget/scroll_zoom.rs
 //
-// Wraps scrollable content to turn Ctrl+wheel into a zoom message while
-// leaving plain wheel to the surrounding scrollable.
+// Wraps content to turn wheel scrolling into a zoom message. By default Ctrl
+// must be held; with `require_ctrl(false)` any wheel over the widget zooms.
 
 use cosmic::iced::advanced::layout;
 use cosmic::iced::advanced::renderer;
@@ -16,12 +16,16 @@ use cosmic::{Element, Renderer, Theme};
 
 use crate::message::Message;
 
-/// Wraps a widget and intercepts Ctrl+wheel, publishing a zoom message. Other
-/// events (including plain wheel) pass through to the wrapped content.
+/// Wraps a widget and intercepts the wheel, publishing a zoom message. By
+/// default Ctrl must be held; with `require_ctrl(false)` any wheel zooms.
+/// Other events pass through to the wrapped content.
 pub(crate) struct ScrollZoom<'a> {
     content: Element<'a, Message>,
     /// Current keyboard modifiers, synced from the app.
     modifiers: Modifiers,
+    /// Whether Ctrl must be held for the wheel to zoom. When false, any wheel
+    /// over the widget zooms (used for the zoom label).
+    require_ctrl: bool,
     on_zoom: Option<Box<dyn Fn(mouse::ScrollDelta) -> Message + 'a>>,
 }
 
@@ -31,6 +35,7 @@ impl<'a> ScrollZoom<'a> {
         Self {
             content: content.into(),
             modifiers: Modifiers::default(),
+            require_ctrl: true,
             on_zoom: None,
         }
     }
@@ -41,7 +46,13 @@ impl<'a> ScrollZoom<'a> {
         self
     }
 
-    /// Sets the callback notified on Ctrl+wheel.
+    /// Sets whether Ctrl must be held for the wheel to zoom.
+    pub(crate) fn require_ctrl(mut self, require: bool) -> Self {
+        self.require_ctrl = require;
+        self
+    }
+
+    /// Sets the callback notified on the zoom wheel.
     pub(crate) fn on_zoom<F>(mut self, f: F) -> Self
     where
         F: 'a + Fn(mouse::ScrollDelta) -> Message,
@@ -87,7 +98,7 @@ impl Widget<Message, Theme, Renderer> for ScrollZoom<'_> {
         viewport: &Rectangle,
     ) {
         if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
-            && self.modifiers.control()
+            && (!self.require_ctrl || self.modifiers.control())
             && cursor.position_over(layout.bounds()).is_some()
         {
             if let Some(on_zoom) = &self.on_zoom {

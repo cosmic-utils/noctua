@@ -110,6 +110,9 @@ pub enum Message {
     ZoomOut,
     Zoom100,
     ZoomToFit,
+    /// Zoom by the given number of steps (positive in, negative out), produced
+    /// by a wheel scroll over the zoom label.
+    ZoomBy(f32),
     /// Rotate the current single image 90° clockwise.
     RotateClockwise,
     /// Rotate the current single image 90° counter-clockwise.

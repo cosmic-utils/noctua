@@ -3,6 +3,7 @@
 //
 // Pure view: builds widgets from the application model. Never changes state.
 
+use cosmic::iced::mouse;
 use cosmic::iced::{Alignment, ContentFit, Length};
 use cosmic::prelude::*;
 use cosmic::widget::{self, tab_bar};
@@ -16,6 +17,7 @@ use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
 use crate::widget::fresh_image::FreshImage;
 use crate::widget::image_viewer::Viewer;
+use crate::widget::scroll_zoom::ScrollZoom;
 use crate::widget::thumbnail_strip::thumbnail_strip;
 use crate::widget::toolbar::ResponsiveToolbar;
 
@@ -151,7 +153,15 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
                     fl!("zoom-out"),
                     Message::ZoomOut,
                 ))
-                .push(widget::text::body(zoom_label))
+                .push(
+                    ScrollZoom::new(
+                        widget::button::custom(widget::text::body(zoom_label))
+                            .class(widget::button::ButtonClass::Icon)
+                            .force_enabled(true),
+                    )
+                    .require_ctrl(false)
+                    .on_zoom(|delta| Message::ZoomBy(scroll_steps(delta))),
+                )
                 .push(icon_button(
                     "zoom-in-symbolic",
                     fl!("zoom-in"),
@@ -324,4 +334,12 @@ fn current_zoom(app: &AppModel) -> (bool, f32) {
 
     let state = app.zoom_states.get(target).copied().unwrap_or_default();
     (state.fit, state.scale)
+}
+
+/// Convert a wheel scroll delta into zoom steps (lines; ~50 px per line).
+fn scroll_steps(delta: mouse::ScrollDelta) -> f32 {
+    match delta {
+        mouse::ScrollDelta::Lines { y, .. } => y,
+        mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
+    }
 }
