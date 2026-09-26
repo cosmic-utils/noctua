@@ -55,6 +55,46 @@ pub enum Message {
         save_target: Option<PathBuf>,
         dirty: bool,
     },
+    /// Page sizes of an annotation document arrived.
+    AnnotationSizesKnown {
+        tab: Entity,
+        sizes: Option<Vec<(f32, f32)>>,
+    },
+    /// Thumbnails of an annotation document arrived.
+    AnnotationThumbsReady {
+        tab: Entity,
+        thumbs: Vec<(u32, Option<Rgba>)>,
+    },
+    /// A full-resolution page of an annotation document was rendered.
+    AnnotationPageRendered {
+        tab: Entity,
+        page: u32,
+        rgba: Option<Rgba>,
+    },
+    /// The user selected a page of an annotation tab (1-based).
+    AnnotationPageSelected {
+        tab: Entity,
+        page: u32,
+    },
+    /// The annotation viewer reported a zoom/pan state change.
+    AnnotationViewerStateChanged {
+        tab: Entity,
+        scale: f32,
+        offset_x: f32,
+        offset_y: f32,
+    },
+    /// Save the active annotation; choose a target first if it has none yet.
+    SaveAnnotation,
+    /// Save the active annotation to a new target.
+    SaveAnnotationAs,
+    /// The save-target chooser returned a result.
+    SaveTargetChosen(Option<PathBuf>),
+    /// Saving an annotation finished; carries the tab, target and outcome.
+    AnnotationSaved {
+        tab: Entity,
+        path: PathBuf,
+        ok: bool,
+    },
     /// The folder content was listed.
     FolderListed {
         dir: PathBuf,
@@ -153,6 +193,8 @@ pub enum MenuAction {
     OpenFolder,
     NewAnnotation,
     OpenAnnotationFile,
+    SavePdf,
+    SavePdfAs,
     CloseTab,
     ZoomIn,
     ZoomOut,
@@ -176,6 +218,8 @@ impl menu::action::MenuAction for MenuAction {
             MenuAction::OpenFolder => Message::OpenFolder,
             MenuAction::NewAnnotation => Message::NewAnnotation,
             MenuAction::OpenAnnotationFile => Message::OpenAnnotationFile,
+            MenuAction::SavePdf => Message::SaveAnnotation,
+            MenuAction::SavePdfAs => Message::SaveAnnotationAs,
             MenuAction::CloseTab => Message::CloseTab,
             MenuAction::ZoomIn => Message::ZoomIn,
             MenuAction::ZoomOut => Message::ZoomOut,

@@ -3,6 +3,8 @@
 //
 // Pure view: builds widgets from the application model. Never changes state.
 
+use cosmic::iced::alignment::{Horizontal, Vertical};
+use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
 use cosmic::iced::{Alignment, ContentFit, Length};
 use cosmic::prelude::*;
@@ -12,7 +14,7 @@ use noctua_core::storage;
 
 use crate::fl;
 use crate::message::Message;
-use crate::model::{AppModel, CurrentTarget, DocumentPreview, TabContent};
+use crate::model::{AppModel, CurrentTarget, DocumentPreview, TabContent, ZoomState};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
 use crate::widget::fresh_image::FreshImage;
@@ -49,10 +51,15 @@ pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
             row = row.push(strip_view(app));
         }
         // Content side: the view toolbar floats bottom-center like
-        // cosmic-viewer's, below the viewer.
+        // cosmic-viewer's, below the viewer. Shown for a selected folder
+        // entry or an active annotation tab.
+        let has_toolbar = app.current_target.is_some()
+            || app.active_tab().is_some_and(|tab| {
+                matches!(app.tabs.get(&tab), Some(TabContent::Annotation { .. }))
+            });
         let mut content = widget::column::with_capacity(2).spacing(space.space_xxs);
         content = content.push(content_view(app));
-        if app.current_target.is_some() {
+        if has_toolbar {
             content = content.push(
                 widget::container(view_toolbar(app))
                     .center_x(Length::Fill)
@@ -76,11 +83,140 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
     let Some(tab) = app.active_tab() else {
         return widget::container(widget::text::body("")).into();
     };
+    if matches!(app.tabs.get(&tab), Some(TabContent::Annotation { .. })) {
+        return annotation_strip(app);
+    }
     let Some(state) = app.tab_ui.get(&tab) else {
         return widget::container(widget::text::body("")).into();
     };
 
     thumbnail_strip(&state.strip, state.selected, state.expanded.as_ref(), tab)
+}
+
+/// Tile and panel size of the annotation page strip, matching the folder strip.
+const ANNOTATION_TILE_SIZE: f32 = 136.0;
+const ANNOTATION_PANEL_WIDTH: f32 = 168.0;
+
+/// The page list of an annotation tab: one tile per page, with its number.
+fn annotation_strip(app: &AppModel) -> Element<'_, Message> {
+    let space = cosmic::theme::spacing();
+    let Some(tab) = app.active_tab() else {
+        return widget::container(widget::text::body("")).into();
+    };
+    let Some(state) = app.annotation_ui.get(&tab) else {
+        return widget::container(widget::text::body("")).into();
+    };
+
+    let mut column = widget::column::with_capacity(state.page_sizes.len())
+        .spacing(space.space_xxs)
+        .padding(space.space_xxs)
+        .align_x(Horizontal::Center);
+
+    for (index, _) in state.page_sizes.iter().enumerate() {
+        let page = index as u32 + 1;
+        let is_selected = state.selected == page;
+
+        let tile: Element<'_, Message> = match state.thumbs.get(index).cloned().flatten() {
+            Some(handle) => widget::Image::new(handle)
+                .content_fit(ContentFit::ScaleDown)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            None => widget::text::caption(page.to_string())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+        };
+
+        let tile = widget::container(tile)
+            .width(Length::Fixed(ANNOTATION_TILE_SIZE))
+            .height(Length::Fixed(ANNOTATION_TILE_SIZE))
+            .padding(space.space_xxs)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .class(if is_selected {
+                cosmic::style::Container::Primary
+            } else {
+                cosmic::style::Container::Card
+            });
+
+        let entry: Element<'_, Message> = widget::container(
+            widget::column::with_capacity(2)
+                .spacing(space.space_xxs)
+                .push(tile)
+                .push(widget::text::caption(page.to_string())),
+        )
+        .into();
+
+        column = column.push(
+            widget::mouse_area(entry).on_release(Message::AnnotationPageSelected { tab, page }),
+        );
+    }
+
+    widget::container(widget::scrollable(column))
+        .width(Length::Fixed(ANNOTATION_PANEL_WIDTH))
+        .height(Length::Fill)
+        .into()
+}
+
+/// Build the fitted/zoomable viewer for a rendered image, sharing the
+/// `Viewer` wiring between single images and annotation pages.
+fn viewer_element(
+    handle: &widget::image::Handle,
+    view: ZoomState,
+    modifiers: Modifiers,
+    on_state_change: impl Fn(f32, f32, f32) -> Message + 'static,
+) -> Element<'static, Message> {
+    let space = cosmic::theme::spacing();
+    let content_fit = if view.fit {
+        ContentFit::ScaleDown
+    } else {
+        ContentFit::None
+    };
+    let (scale, offset_x, offset_y) = if view.fit {
+        (1.0, 0.0, 0.0)
+    } else {
+        (view.scale, view.offset_x, view.offset_y)
+    };
+
+    let handle_id = handle.id();
+    widget::container(FreshImage::new(
+        Viewer::new(handle.clone())
+            .content_fit(content_fit)
+            .modifiers(modifiers)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .with_state(scale, offset_x, offset_y)
+            .on_state_change(on_state_change),
+        handle_id,
+    ))
+    .padding(space.space_m)
+    .into()
+}
+
+/// The content view of an annotation tab: the selected page, fitted.
+fn annotation_view(app: &AppModel) -> Element<'_, Message> {
+    let Some(tab) = app.active_tab() else {
+        return empty_state("image-x-generic-symbolic", fl!("select-hint"));
+    };
+    let Some(state) = app.annotation_ui.get(&tab) else {
+        return empty_state("image-x-generic-symbolic", fl!("select-hint"));
+    };
+    let Some(current) = state.current.as_ref() else {
+        return empty_state("image-x-generic-symbolic", fl!("select-hint"));
+    };
+
+    viewer_element(
+        &current.handle,
+        state.view,
+        app.keyboard_modifiers,
+        move |scale, offset_x, offset_y| Message::AnnotationViewerStateChanged {
+            tab,
+            scale,
+            offset_x,
+            offset_y,
+        },
+    )
 }
 
 /// The active tab's continuous PDF preview, if it matches the current target.
@@ -188,8 +324,6 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
 
 /// The content area view.
 fn content_view(app: &AppModel) -> Element<'_, Message> {
-    let space = cosmic::theme::spacing();
-
     if app.tabs.is_empty() {
         let hint = match &app.start_error {
             Some(path) => fl!("start-error", path = path),
@@ -198,11 +332,11 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
         return empty_state("folder-open-symbolic", hint);
     }
 
-    // Annotation tab: a minimal placeholder until page rendering is wired.
+    // Annotation tab: render its pages.
     if let Some(tab) = app.active_tab()
-        && let Some(TabContent::Annotation { name, .. }) = app.tabs.get(&tab)
+        && matches!(app.tabs.get(&tab), Some(TabContent::Annotation { .. }))
     {
-        return empty_state("document-edit-symbolic", name.clone());
+        return annotation_view(app);
     }
 
     // Continuous preview of the selected multi-page PDF.
@@ -221,39 +355,17 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                 return empty_state("image-x-generic-symbolic", fl!("select-hint"));
             };
             let state = app.zoom_states.get(&target).copied().unwrap_or_default();
-
-            let content_fit = if state.fit {
-                ContentFit::ScaleDown
-            } else {
-                ContentFit::None
-            };
-            let (scale, offset_x, offset_y) = if state.fit {
-                (1.0, 0.0, 0.0)
-            } else {
-                (state.scale, state.offset_x, state.offset_y)
-            };
-
-            let handle_id = image.handle.id();
-
-            widget::container(FreshImage::new(
-                Viewer::new(image.handle.clone())
-                    .content_fit(content_fit)
-                    .modifiers(app.keyboard_modifiers)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .with_state(scale, offset_x, offset_y)
-                    .on_state_change(move |scale, offset_x, offset_y| {
-                        Message::ViewerStateChanged {
-                            target: target.clone(),
-                            scale,
-                            offset_x,
-                            offset_y,
-                        }
-                    }),
-                handle_id,
-            ))
-            .padding(space.space_m)
-            .into()
+            viewer_element(
+                &image.handle,
+                state,
+                app.keyboard_modifiers,
+                move |scale, offset_x, offset_y| Message::ViewerStateChanged {
+                    target: target.clone(),
+                    scale,
+                    offset_x,
+                    offset_y,
+                },
+            )
         }
         None => empty_state("image-x-generic-symbolic", fl!("select-hint")),
     }
@@ -321,6 +433,13 @@ fn position_label(app: &AppModel) -> String {
 
 /// The current zoom of the active target: `(fit, scale)`.
 fn current_zoom(app: &AppModel) -> (bool, f32) {
+    if let Some(tab) = app.active_tab()
+        && matches!(app.tabs.get(&tab), Some(TabContent::Annotation { .. }))
+        && let Some(state) = app.annotation_ui.get(&tab)
+    {
+        return (state.view.fit, state.view.scale);
+    }
+
     let Some(target) = &app.current_target else {
         return (true, 1.0);
     };

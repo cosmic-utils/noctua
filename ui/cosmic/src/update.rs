@@ -27,9 +27,10 @@ use noctua_core::storage::thumbcache::ThumbSize;
 use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{
-    AppModel, CurrentImage, CurrentTarget, DocumentPreview, MAX_SCALE, MIN_SCALE, NavEntry,
-    PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, Rgba, SESSION_NAME,
-    STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent, TabUiState, ZOOM_STEP,
+    AnnotationUiState, AppModel, CurrentImage, CurrentTarget, DocumentPreview, MAX_SCALE,
+    MIN_SCALE, NavEntry, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, Rgba,
+    SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent, TabUiState, ZOOM_STEP,
+    ZoomState,
 };
 
 /// Estimated strip tile height including spacing, for lazy thumbnails.
@@ -112,6 +113,50 @@ async fn open_source(
     }
 }
 
+/// Open the save-target chooser for an annotation, defaulting the file name.
+fn save_annotation_dialog(name: String) -> iced::Task<cosmic::Action<Message>> {
+    cosmic::task::future(async move {
+        let path = cosmic::dialog::file_chooser::save::Dialog::new()
+            .file_name(name)
+            .save_file()
+            .await
+            .ok()
+            .and_then(|response| response.url().and_then(|url| url.to_file_path().ok()));
+        Message::SaveTargetChosen(path)
+    })
+}
+
+/// Rotate/flip a rendered image in place and update its cumulative view
+/// transform. Shared by single images and annotation pages.
+fn transform_viewable(
+    image: &mut CurrentImage,
+    state: &mut ZoomState,
+    rotation: u16,
+    flip_h: bool,
+    flip_v: bool,
+) {
+    let (width, height, data) = transform_rgba(
+        image.rgba.0,
+        image.rgba.1,
+        image.rgba.2.clone(),
+        rotation,
+        flip_h,
+        flip_v,
+    );
+    *image = CurrentImage {
+        handle: cosmic::widget::image::Handle::from_rgba(width, height, data.clone()),
+        rgba: (width, height, data),
+    };
+
+    // The pan offset resets because the dimensions may have swapped.
+    let (new_rotation, new_flip_h) =
+        compose_view_transform(state.rotation, state.flip_h, rotation, flip_h, flip_v);
+    state.rotation = new_rotation;
+    state.flip_h = new_flip_h;
+    state.offset_x = 0.0;
+    state.offset_y = 0.0;
+}
+
 impl AppModel {
     /// Register the menu key bindings.
     pub(crate) fn key_binds() -> HashMap<menu::KeyBind, MenuAction> {
@@ -130,6 +175,16 @@ impl AppModel {
                 &[Modifier::Ctrl],
                 Key::Character("o".into()),
                 MenuAction::OpenFolder,
+            ),
+            bind(
+                &[Modifier::Ctrl],
+                Key::Character("s".into()),
+                MenuAction::SavePdf,
+            ),
+            bind(
+                &[Modifier::Ctrl, Modifier::Shift],
+                Key::Character("s".into()),
+                MenuAction::SavePdfAs,
             ),
             bind(
                 &[Modifier::Ctrl],
@@ -199,6 +254,51 @@ impl AppModel {
     pub(crate) fn active_tab(&self) -> Option<Entity> {
         let entity = self.tab_model.active();
         self.tabs.contains_key(&entity).then_some(entity)
+    }
+
+    /// The active tab's entity, if it is an annotation tab.
+    fn active_annotation(&self) -> Option<Entity> {
+        let tab = self.active_tab()?;
+        matches!(self.tabs.get(&tab), Some(TabContent::Annotation { .. })).then_some(tab)
+    }
+
+    /// The active viewable's zoom state. Single images and annotation pages
+    /// share `ZoomState`; the continuous PDF preview manages its own zoom and
+    /// is excluded here.
+    fn active_zoom_state(&mut self) -> Option<&mut ZoomState> {
+        if let Some(tab) = self.active_annotation() {
+            return self
+                .annotation_ui
+                .get_mut(&tab)
+                .map(|state| &mut state.view);
+        }
+        let target = self.current_target.clone()?;
+        if let CurrentTarget::File { path } = &target
+            && self.has_preview(path)
+        {
+            return None;
+        }
+        Some(self.zoom_states.entry(target).or_default())
+    }
+
+    /// The active viewable's image plus zoom state. As with
+    /// [`Self::active_zoom_state`], the continuous PDF preview is excluded.
+    fn active_viewable(&mut self) -> Option<(&mut CurrentImage, &mut ZoomState)> {
+        if let Some(tab) = self.active_annotation() {
+            let state = self.annotation_ui.get_mut(&tab)?;
+            let AnnotationUiState { current, view, .. } = state;
+            let image = current.as_mut()?;
+            return Some((image, view));
+        }
+        let target = self.current_target.clone()?;
+        if let CurrentTarget::File { path } = &target
+            && self.has_preview(path)
+        {
+            return None;
+        }
+        let image = self.current_image.as_mut()?;
+        let state = self.zoom_states.entry(target).or_default();
+        Some((image, state))
     }
 
     /// Rebuild the thumbnail strip of a tab. The selection survives when
@@ -832,68 +932,58 @@ impl AppModel {
         .map(cosmic::Action::from)
     }
 
-    /// Change the zoom by `steps` (signed). Single images are scaled by the
-    /// viewer; PDF previews re-render at the new zoom.
+    /// Change the zoom by `steps` (signed). Single images and annotation pages
+    /// are scaled by the viewer; the PDF preview re-renders at the new zoom.
     fn zoom_by(&mut self, steps: f32) -> iced::Task<cosmic::Action<Message>> {
-        let Some(target) = self.current_target.clone() else {
+        if let Some(state) = self.active_zoom_state() {
+            if state.fit {
+                // Leave fit. Zoom in lands on native 100 %; zoom out starts
+                // one step below native.
+                state.fit = false;
+                state.scale = if steps > 0.0 { 1.0 } else { 1.0 / ZOOM_STEP };
+            } else {
+                state.scale = (state.scale * ZOOM_STEP.powf(steps)).clamp(MIN_SCALE, MAX_SCALE);
+            }
+            return iced::Task::none();
+        }
+        // Continuous PDF preview: re-render at the new zoom.
+        let Some(CurrentTarget::File { path }) = self.current_target.clone() else {
             return iced::Task::none();
         };
-        match target {
-            CurrentTarget::File { path } if self.has_preview(&path) => {
-                self.zoom_preview(&path, steps)
-            }
-            target => {
-                let state = self.zoom_states.entry(target).or_default();
-                if state.fit {
-                    // Leave fit. Zoom in lands on native 100 %; zoom out
-                    // starts one step below native.
-                    state.fit = false;
-                    state.scale = if steps > 0.0 { 1.0 } else { 1.0 / ZOOM_STEP };
-                } else {
-                    state.scale = (state.scale * ZOOM_STEP.powf(steps)).clamp(MIN_SCALE, MAX_SCALE);
-                }
-                iced::Task::none()
-            }
-        }
+        self.zoom_preview(&path, steps)
     }
 
     /// Set the zoom of the current target to `scale` (1.0 = 100 %).
     fn set_zoom(&mut self, scale: f32) -> iced::Task<cosmic::Action<Message>> {
-        let Some(target) = self.current_target.clone() else {
+        if let Some(state) = self.active_zoom_state() {
+            state.fit = false;
+            state.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
+            state.offset_x = 0.0;
+            state.offset_y = 0.0;
+            return iced::Task::none();
+        }
+        // Continuous PDF preview: re-render at the requested zoom.
+        let Some(CurrentTarget::File { path }) = self.current_target.clone() else {
             return iced::Task::none();
         };
-        match target {
-            CurrentTarget::File { path } if self.has_preview(&path) => {
-                self.render_preview_at(&path, scale)
-            }
-            target => {
-                let state = self.zoom_states.entry(target).or_default();
-                state.fit = false;
-                state.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
-                state.offset_x = 0.0;
-                state.offset_y = 0.0;
-                iced::Task::none()
-            }
-        }
+        self.render_preview_at(&path, scale)
     }
 
-    /// Fit the current target to the viewport. Single images use the viewer's
-    /// scale-down fit; the PDF preview fits its pages to the viewport width.
+    /// Fit the current target to the viewport. Single images and annotation
+    /// pages use the viewer's scale-down fit; the PDF preview fits its pages
+    /// to the viewport width.
     fn set_fit(&mut self) -> iced::Task<cosmic::Action<Message>> {
-        let Some(target) = self.current_target.clone() else {
+        if let Some(state) = self.active_zoom_state() {
+            state.fit = true;
+            state.scale = 1.0;
+            state.offset_x = 0.0;
+            state.offset_y = 0.0;
+            return iced::Task::none();
+        }
+        let Some(CurrentTarget::File { path }) = self.current_target.clone() else {
             return iced::Task::none();
         };
-        if let CurrentTarget::File { path } = &target
-            && self.has_preview(path)
-        {
-            return self.fit_preview(path);
-        }
-        let state = self.zoom_states.entry(target).or_default();
-        state.fit = true;
-        state.scale = 1.0;
-        state.offset_x = 0.0;
-        state.offset_y = 0.0;
-        iced::Task::none()
+        self.fit_preview(&path)
     }
 
     /// Fit the preview pages to the viewport width and re-render.
@@ -985,11 +1075,163 @@ impl AppModel {
             },
         );
         self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
+        self.annotation_ui.insert(tab, AnnotationUiState::default());
 
         self.tab_model.activate(tab);
         let activate = self.activate_tab();
         let title = self.update_title();
-        cosmic::task::batch(vec![activate, title])
+        let sizes = self.request_annotation_sizes(tab, document);
+        cosmic::task::batch(vec![activate, title, sizes])
+    }
+
+    /// Ask the worker for the page sizes of an annotation document.
+    fn request_annotation_sizes(
+        &self,
+        tab: Entity,
+        document: DocumentId,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let worker = self.worker.clone();
+        cosmic::task::future(async move {
+            let (_, result) = worker.op(Some(document), Command::PageSizes).await;
+            let sizes = match result {
+                CommandResult::PageSizes(sizes) => Some(sizes),
+                _ => None,
+            };
+            Message::AnnotationSizesKnown { tab, sizes }
+        })
+    }
+
+    /// Render one page of an annotation document at native resolution.
+    fn render_annotation_page(
+        &self,
+        tab: Entity,
+        document: DocumentId,
+        page: u32,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let worker = self.worker.clone();
+        cosmic::task::future(async move {
+            let (_, result) = worker
+                .op(Some(document), Command::RenderPage { page, zoom: 1.0 })
+                .await;
+            let rgba = match result {
+                CommandResult::Rendered {
+                    width,
+                    height,
+                    rgba_data,
+                } => Some((width, height, rgba_data)),
+                _ => None,
+            };
+            Message::AnnotationPageRendered { tab, page, rgba }
+        })
+    }
+
+    /// Render thumbnails for every page of an annotation document.
+    fn render_annotation_thumbs(
+        &self,
+        tab: Entity,
+        document: DocumentId,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let worker = self.worker.clone();
+        let page_count = self
+            .annotation_ui
+            .get(&tab)
+            .map(|state| state.page_sizes.len() as u32)
+            .unwrap_or(0);
+        cosmic::task::future(async move {
+            let mut thumbs = Vec::new();
+            for page in 1..=page_count {
+                let (_, result) = worker
+                    .op(
+                        Some(document),
+                        Command::RenderThumbnail { page, max_px: 128 },
+                    )
+                    .await;
+                let rgba = match result {
+                    CommandResult::Rendered {
+                        width,
+                        height,
+                        rgba_data,
+                    } => Some((width, height, rgba_data)),
+                    _ => None,
+                };
+                thumbs.push((page, rgba));
+            }
+            Message::AnnotationThumbsReady { tab, thumbs }
+        })
+    }
+
+    /// Select a page of an annotation tab and render it into the content view.
+    fn annotation_select_page(
+        &mut self,
+        tab: Entity,
+        page: u32,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let document = match self.tabs.get(&tab) {
+            Some(TabContent::Annotation { document, .. }) => *document,
+            _ => return iced::Task::none(),
+        };
+        if let Some(state) = self.annotation_ui.get_mut(&tab) {
+            state.selected = page;
+            state.current = None;
+        }
+        self.render_annotation_page(tab, document, page)
+    }
+
+    /// Move the annotation selection by `delta` pages and render the new page.
+    fn annotation_step(&mut self, tab: Entity, delta: i32) -> iced::Task<cosmic::Action<Message>> {
+        let Some(state) = self.annotation_ui.get(&tab) else {
+            return iced::Task::none();
+        };
+        let count = state.page_sizes.len() as i32;
+        if count == 0 {
+            return iced::Task::none();
+        }
+        let selected = state.selected as i32;
+        let target = (selected + delta).clamp(1, count) as u32;
+        self.annotation_select_page(tab, target)
+    }
+
+    /// Save the active annotation. `force_choose` opens the target chooser
+    /// even when a target already exists (Save As).
+    fn save_active_annotation(&self, force_choose: bool) -> iced::Task<cosmic::Action<Message>> {
+        let Some(tab) = self.active_tab() else {
+            return iced::Task::none();
+        };
+        let Some(TabContent::Annotation {
+            document,
+            save_target,
+            name,
+            ..
+        }) = self.tabs.get(&tab)
+        else {
+            return iced::Task::none();
+        };
+
+        if !force_choose && let Some(target) = save_target {
+            return self.save_annotation_to(tab, *document, target.clone());
+        }
+
+        save_annotation_dialog(name.clone())
+    }
+
+    /// Serialize an annotation document and write it to the target path.
+    fn save_annotation_to(
+        &self,
+        tab: Entity,
+        document: DocumentId,
+        path: PathBuf,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let worker = self.worker.clone();
+        cosmic::task::future(async move {
+            let (_, result) = worker
+                .op(Some(document), Command::SaveAs { path: path.clone() })
+                .await;
+            let ok = match result {
+                CommandResult::Saved { data } => storage::document::save(&path, &data).is_ok(),
+                _ => false,
+            };
+            Message::AnnotationSaved { tab, path, ok }
+        })
     }
 
     /// Start listing a folder and open a tab for it.
@@ -1078,6 +1320,7 @@ impl AppModel {
         self.tab_model.remove(tab);
         self.tabs.remove(&tab);
         self.tab_ui.remove(&tab);
+        self.annotation_ui.remove(&tab);
 
         let activate = if was_active {
             if let Some(first) = self.tab_model.entity_at(0) {
@@ -1198,55 +1441,24 @@ impl AppModel {
         });
     }
 
-    /// Rotate and/or flip the current single image in place, rebuilding the
-    /// display handle from the transformed pixels. The cumulative transform is
-    /// remembered per target and re-applied when the image is re-rendered.
-    fn transform_current_image(&mut self, rotation: u16, flip_h: bool, flip_v: bool) {
-        let Some(image) = &self.current_image else {
-            return;
-        };
-        let (width, height, data) = transform_rgba(
-            image.rgba.0,
-            image.rgba.1,
-            image.rgba.2.clone(),
-            rotation,
-            flip_h,
-            flip_v,
-        );
-        self.current_image = Some(CurrentImage {
-            handle: cosmic::widget::image::Handle::from_rgba(width, height, data.clone()),
-            rgba: (width, height, data),
-        });
-
-        // Remember the cumulative transform; the pan offset is reset because
-        // the dimensions may have swapped.
-        if let Some(target) = self.current_target.clone()
-            && let Some(state) = self.zoom_states.get_mut(&target)
-        {
-            let (new_rotation, new_flip_h) =
-                compose_view_transform(state.rotation, state.flip_h, rotation, flip_h, flip_v);
-            state.rotation = new_rotation;
-            state.flip_h = new_flip_h;
-            state.offset_x = 0.0;
-            state.offset_y = 0.0;
-        }
-    }
-
     /// Apply a rotate/flip operation to the current document. Single images
-    /// are transformed in place; the PDF preview updates its cumulative view
-    /// transform and re-renders.
+    /// and annotation pages are transformed in place; the PDF preview updates
+    /// its cumulative view transform and re-renders.
     fn transform_view(
         &mut self,
         rotation: u16,
         flip_h: bool,
         flip_v: bool,
     ) -> iced::Task<cosmic::Action<Message>> {
-        if let Some(CurrentTarget::File { path }) = &self.current_target
-            && self.has_preview(path)
-        {
-            return self.transform_preview(path.clone(), rotation, flip_h, flip_v);
+        if let Some((image, state)) = self.active_viewable() {
+            transform_viewable(image, state, rotation, flip_h, flip_v);
+            return iced::Task::none();
         }
-        self.transform_current_image(rotation, flip_h, flip_v);
+        if let Some(CurrentTarget::File { path }) = self.current_target.clone()
+            && self.has_preview(&path)
+        {
+            return self.transform_preview(path, rotation, flip_h, flip_v);
+        }
         iced::Task::none()
     }
 
@@ -1337,6 +1549,9 @@ impl AppModel {
             }
 
             Message::PrevEntry => {
+                if let Some(tab) = self.active_annotation() {
+                    return self.annotation_step(tab, -1);
+                }
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -1362,6 +1577,9 @@ impl AppModel {
             }
 
             Message::NextEntry => {
+                if let Some(tab) = self.active_annotation() {
+                    return self.annotation_step(tab, 1);
+                }
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -1386,10 +1604,20 @@ impl AppModel {
             }
 
             Message::PrevPage => {
+                if let Some(tab) = self.active_tab()
+                    && matches!(self.tabs.get(&tab), Some(TabContent::Annotation { .. }))
+                {
+                    return self.annotation_step(tab, -1);
+                }
                 return self.scroll_preview_page(-1);
             }
 
             Message::NextPage => {
+                if let Some(tab) = self.active_tab()
+                    && matches!(self.tabs.get(&tab), Some(TabContent::Annotation { .. }))
+                {
+                    return self.annotation_step(tab, 1);
+                }
                 return self.scroll_preview_page(1);
             }
 
@@ -1474,6 +1702,124 @@ impl AppModel {
                 if let Some(document) = document {
                     return self.open_annotation_tab(document, name, save_target, dirty);
                 }
+            }
+
+            Message::AnnotationSizesKnown { tab, sizes } => {
+                let Some(sizes) = sizes else {
+                    tracing::error!("failed to read annotation page sizes");
+                    return iced::Task::none();
+                };
+                let document = match self.tabs.get(&tab) {
+                    Some(TabContent::Annotation { document, .. }) => *document,
+                    _ => return iced::Task::none(),
+                };
+                let page_count = sizes.len();
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    state.page_sizes = sizes;
+                    state.thumbs = vec![None; page_count];
+                    state.selected = 1;
+                    state.current = None;
+                }
+                let thumbs = self.render_annotation_thumbs(tab, document);
+                let page = self.render_annotation_page(tab, document, 1);
+                return cosmic::task::batch(vec![thumbs, page]);
+            }
+
+            Message::AnnotationThumbsReady { tab, thumbs } => {
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    for (page, rgba) in thumbs {
+                        if let Some((width, height, rgba)) = rgba {
+                            let handle =
+                                cosmic::widget::image::Handle::from_rgba(width, height, rgba);
+                            if let Some(slot) = state.thumbs.get_mut(page as usize - 1) {
+                                *slot = Some(handle);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Message::AnnotationPageRendered { tab, page, rgba } => {
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    if state.selected != page {
+                        // A stale render raced a page change; drop it.
+                        return iced::Task::none();
+                    }
+                    let (rotation, flip_h) = (state.view.rotation, state.view.flip_h);
+                    state.current = rgba.map(|(width, height, data)| {
+                        let (width, height, data) =
+                            transform_rgba(width, height, data, rotation, flip_h, false);
+                        CurrentImage {
+                            handle: cosmic::widget::image::Handle::from_rgba(
+                                width,
+                                height,
+                                data.clone(),
+                            ),
+                            rgba: (width, height, data),
+                        }
+                    });
+                }
+            }
+
+            Message::AnnotationPageSelected { tab, page } => {
+                return self.annotation_select_page(tab, page);
+            }
+
+            Message::AnnotationViewerStateChanged {
+                tab,
+                scale,
+                offset_x,
+                offset_y,
+            } => {
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    state.view.fit = false;
+                    state.view.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
+                    state.view.offset_x = offset_x;
+                    state.view.offset_y = offset_y;
+                }
+            }
+
+            Message::SaveAnnotation => {
+                return self.save_active_annotation(false);
+            }
+
+            Message::SaveAnnotationAs => {
+                return self.save_active_annotation(true);
+            }
+
+            Message::SaveTargetChosen(path) => {
+                let Some(path) = path else {
+                    return iced::Task::none();
+                };
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let document = match self.tabs.get(&tab) {
+                    Some(TabContent::Annotation { document, .. }) => *document,
+                    _ => return iced::Task::none(),
+                };
+                return self.save_annotation_to(tab, document, path);
+            }
+
+            Message::AnnotationSaved { tab, path, ok } => {
+                if ok {
+                    if let Some(TabContent::Annotation {
+                        name,
+                        save_target,
+                        dirty,
+                        ..
+                    }) = self.tabs.get_mut(&tab)
+                    {
+                        *save_target = Some(path.clone());
+                        *dirty = false;
+                        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                            *name = file_name.to_string();
+                        }
+                    }
+                } else {
+                    tracing::error!("failed to save annotation to {path:?}");
+                }
+                return self.update_title();
             }
 
             Message::FolderListed { dir, result } => {

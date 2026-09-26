@@ -27,6 +27,16 @@ pub fn open(path: &Path) -> Result<Vec<u8>, StorageError> {
     Ok(bytes)
 }
 
+/// Write raw document bytes to disk, replacing any existing file.
+///
+/// This is the single write path for generated documents (e.g. saved
+/// annotations). The caller supplies the serialized bytes; `storage` owns
+/// the actual file I/O.
+pub fn save(path: &Path, data: &[u8]) -> Result<(), StorageError> {
+    fs::write(path, data)?;
+    Ok(())
+}
+
 /// Retrieves basic file metadata (size, modification time).
 pub fn metadata(path: &Path) -> Result<FileMetadata, StorageError> {
     let meta = fs::metadata(path)?;

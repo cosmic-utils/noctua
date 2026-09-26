@@ -209,6 +209,34 @@ impl TabUiState {
     }
 }
 
+/// Volatile view state of an annotation tab: page list, thumbnails and the
+/// currently shown page. The document itself lives in the worker, keyed by
+/// the tab's `DocumentId`.
+pub(crate) struct AnnotationUiState {
+    /// Native page sizes in points (≈ px at 72 dpi).
+    pub(crate) page_sizes: Vec<(f32, f32)>,
+    /// 1-based index of the selected page.
+    pub(crate) selected: u32,
+    /// Per-page thumbnail handles; `None` until rendered.
+    pub(crate) thumbs: Vec<Option<widget::image::Handle>>,
+    /// Full-resolution pixels of the selected page, for the content view.
+    pub(crate) current: Option<CurrentImage>,
+    /// View transform (zoom/pan/rotate/flip), like single images.
+    pub(crate) view: ZoomState,
+}
+
+impl Default for AnnotationUiState {
+    fn default() -> Self {
+        Self {
+            page_sizes: Vec::new(),
+            selected: 1,
+            thumbs: Vec::new(),
+            current: None,
+            view: ZoomState::default(),
+        }
+    }
+}
+
 /// The application model stores app-specific state used to describe its interface and
 /// drive its logic.
 pub struct AppModel {
@@ -224,6 +252,8 @@ pub struct AppModel {
     pub(crate) tabs: HashMap<Entity, TabContent>,
     /// UI state per tab: thumbnail strip, selection and preview.
     pub(crate) tab_ui: HashMap<Entity, TabUiState>,
+    /// View state of annotation tabs: page thumbnails and the current page.
+    pub(crate) annotation_ui: HashMap<Entity, AnnotationUiState>,
     /// Entry currently shown in the content area (active tab).
     pub(crate) current_target: Option<CurrentTarget>,
     /// Rendered single-page content for the current target.
