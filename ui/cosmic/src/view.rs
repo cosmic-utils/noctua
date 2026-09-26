@@ -12,7 +12,7 @@ use noctua_core::storage;
 
 use crate::fl;
 use crate::message::Message;
-use crate::model::{AppModel, CurrentTarget, DocumentPreview};
+use crate::model::{AppModel, CurrentTarget, DocumentPreview, TabContent};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
 use crate::widget::fresh_image::FreshImage;
@@ -196,6 +196,13 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
             None => fl!("open-folder-hint"),
         };
         return empty_state("folder-open-symbolic", hint);
+    }
+
+    // Annotation tab: a minimal placeholder until page rendering is wired.
+    if let Some(tab) = app.active_tab()
+        && let Some(TabContent::Annotation { name, .. }) = app.tabs.get(&tab)
+    {
+        return empty_state("document-edit-symbolic", name.clone());
     }
 
     // Continuous preview of the selected multi-page PDF.

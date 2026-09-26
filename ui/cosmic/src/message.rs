@@ -10,6 +10,7 @@ use cosmic::iced::mouse;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::Entity;
 
+use noctua_core::render::worker::DocumentId;
 use noctua_core::storage::browser::BrowserEntry;
 
 use crate::model::{CurrentTarget, Rgba};
@@ -40,6 +41,20 @@ pub enum Message {
     OpenFolder,
     /// The folder dialog returned a result.
     FolderChosen(Option<PathBuf>),
+    /// Create a new, empty annotation tab.
+    NewAnnotation,
+    /// Open the annotation-file chooser.
+    OpenAnnotationFile,
+    /// The annotation-file chooser returned a result.
+    AnnotationFileChosen(Option<PathBuf>),
+    /// A new annotation tab was opened in the worker. `document` is `None`
+    /// when opening failed; no tab is created in that case.
+    AnnotationOpened {
+        document: Option<DocumentId>,
+        name: String,
+        save_target: Option<PathBuf>,
+        dirty: bool,
+    },
     /// The folder content was listed.
     FolderListed {
         dir: PathBuf,
@@ -127,6 +142,8 @@ pub enum Message {
     ToggleNavPanel,
     ToggleAbout,
     LaunchUrl(String),
+    /// Internal no-op: lets a fire-and-forget task return a message.
+    Noop,
     Quit,
 }
 
@@ -134,6 +151,8 @@ pub enum Message {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum MenuAction {
     OpenFolder,
+    NewAnnotation,
+    OpenAnnotationFile,
     CloseTab,
     ZoomIn,
     ZoomOut,
@@ -155,6 +174,8 @@ impl menu::action::MenuAction for MenuAction {
     fn message(&self) -> Self::Message {
         match self {
             MenuAction::OpenFolder => Message::OpenFolder,
+            MenuAction::NewAnnotation => Message::NewAnnotation,
+            MenuAction::OpenAnnotationFile => Message::OpenAnnotationFile,
             MenuAction::CloseTab => Message::CloseTab,
             MenuAction::ZoomIn => Message::ZoomIn,
             MenuAction::ZoomOut => Message::ZoomOut,

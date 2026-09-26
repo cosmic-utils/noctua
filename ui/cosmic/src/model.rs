@@ -12,7 +12,7 @@ use cosmic::widget::about::About;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::{Entity, SingleSelectModel};
 
-use noctua_core::render::worker::SharedWorker;
+use noctua_core::render::worker::{DocumentId, SharedWorker};
 use noctua_core::storage::browser::BrowserEntry;
 
 use crate::message::MenuAction;
@@ -56,14 +56,16 @@ pub(crate) enum TabContent {
         path: PathBuf,
         entries: Vec<BrowserEntry>,
     },
-}
-
-impl TabContent {
-    pub(crate) fn path(&self) -> &PathBuf {
-        match self {
-            TabContent::Folder { path, .. } => path,
-        }
-    }
+    /// An annotation tab: an independent PDF edit state held by the worker.
+    Annotation {
+        document: DocumentId,
+        /// Display name (the file name); changes when saved to a new target.
+        name: String,
+        /// Target path once saved; `None` until the first save.
+        save_target: Option<PathBuf>,
+        /// Whether the edit state has unsaved changes.
+        dirty: bool,
+    },
 }
 
 /// What a strip entry points to.

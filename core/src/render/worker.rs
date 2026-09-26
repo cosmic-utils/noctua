@@ -5,7 +5,7 @@
 // so every pdfium access (rendering, thumbnails, PDF operations) goes
 // through this worker. Visible pages have priority over thumbnails.
 
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -13,8 +13,13 @@ use std::thread::{self, JoinHandle};
 
 use tokio::sync::oneshot;
 
-use crate::pdfium_ops::{Command, CommandResult, PdfOpsManager};
+use crate::pdfium_ops::{Command, CommandResult, PdfOpsError, PdfOpsManager};
 use crate::storage::thumbcache::ThumbSize;
+
+/// Identifies an open PDF document held by the worker. Each annotation tab
+/// owns exactly one document; the id is stable for the tab's lifetime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DocumentId(u64);
 
 /// Priority of a job. Higher values run first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -30,8 +35,13 @@ pub enum Priority {
 /// A job for the pdfium worker.
 #[derive(Debug)]
 pub enum Job {
-    /// Execute a PDF editing command on the shared document.
-    Op(Command),
+    /// Execute a PDF editing command. `document` is `None` for open-like
+    /// commands (`Open`, `New`, `Bind`) that create a new document, and
+    /// `Some(id)` for commands operating on an existing document.
+    Op {
+        document: Option<DocumentId>,
+        command: Command,
+    },
     /// Render a raster, SVG, or PDF file at the given zoom. `page` is only
     /// relevant for PDFs (`None` renders page 1). The worker dispatches by
     /// document format, so callers never branch on the type.
@@ -60,8 +70,12 @@ pub enum Job {
 /// Result of a finished job.
 #[derive(Debug)]
 pub enum JobResult {
-    /// Result of a PDF editing command.
-    Op(CommandResult),
+    /// Result of a PDF editing command. `document` is the id of the document
+    /// the command addressed; open-like commands return their fresh id here.
+    Op {
+        document: Option<DocumentId>,
+        result: CommandResult,
+    },
     /// A rendered page as RGBA pixels.
     Rendered {
         width: u32,
@@ -267,10 +281,29 @@ impl SharedWorker {
             _ => None,
         }
     }
+
+    /// Execute a PDF editing command. `document` is `None` for open-like
+    /// commands that create a new document, and `Some(id)` to operate on an
+    /// existing one. Returns the addressed document id (fresh id on open)
+    /// together with the command result.
+    pub async fn op(
+        &self,
+        document: Option<DocumentId>,
+        command: Command,
+    ) -> (Option<DocumentId>, CommandResult) {
+        match self
+            .execute(Priority::Command, Job::Op { document, command })
+            .await
+        {
+            Ok(JobResult::Op { document, result }) => (document, result),
+            _ => (None, CommandResult::Error(PdfOpsError::NoDocumentOpen)),
+        }
+    }
 }
 
 fn run(receiver: Receiver<QueuedJob>) {
-    let mut manager = PdfOpsManager::new();
+    let mut documents: HashMap<DocumentId, PdfOpsManager> = HashMap::new();
+    let mut next_id: u64 = 0;
 
     loop {
         // Wait for at least one job; then drain all currently queued jobs
@@ -289,7 +322,7 @@ fn run(receiver: Receiver<QueuedJob>) {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     // Finish remaining jobs, then exit.
                     while let Some(job) = heap.pop() {
-                        run_job(&mut manager, job);
+                        run_job(&mut documents, &mut next_id, job);
                     }
                     return;
                 }
@@ -297,12 +330,12 @@ fn run(receiver: Receiver<QueuedJob>) {
         }
 
         while let Some(job) = heap.pop() {
-            run_job(&mut manager, job);
+            run_job(&mut documents, &mut next_id, job);
         }
     }
 }
 
-fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
+fn run_job(documents: &mut HashMap<DocumentId, PdfOpsManager>, next_id: &mut u64, job: QueuedJob) {
     // The span carries the job description and its duration; the worker
     // is a single thread, so its timeline shows up directly in traces.
     let _span = tracing::debug_span!("worker_job", ?job.job, priority = ?job.priority).entered();
@@ -310,7 +343,10 @@ fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
     // panics when libpdfium.so is missing, and a dead worker would make
     // every later job fail silently.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job.job {
-        Job::Op(command) => JobResult::Op(manager.execute(command)),
+        Job::Op { document, command } => {
+            let (document, result) = run_op(documents, next_id, document, command);
+            JobResult::Op { document, result }
+        }
         Job::Render { path, page, zoom } => render_file(&path, page, zoom),
         Job::RenderPageThumbs { path, pages, zoom } => render_page_thumbs(&path, &pages, zoom),
         Job::FilePageCount { path } => file_page_count(&path),
@@ -322,6 +358,42 @@ fn run_job(manager: &mut PdfOpsManager, job: QueuedJob) {
         JobResult::Error("worker job panicked".to_string())
     });
     let _ = job.reply.send(result);
+}
+
+/// Route a PDF editing command to the document it addresses. Open-like
+/// commands (`Open`, `New`, `Bind`) create a fresh document and return its
+/// id; `Close` releases the document from the registry.
+fn run_op(
+    documents: &mut HashMap<DocumentId, PdfOpsManager>,
+    next_id: &mut u64,
+    document: Option<DocumentId>,
+    command: Command,
+) -> (Option<DocumentId>, CommandResult) {
+    match document {
+        Some(id) => {
+            let is_close = matches!(&command, Command::Close);
+            let result = match documents.get_mut(&id) {
+                Some(manager) => manager.execute(command),
+                None => CommandResult::Error(PdfOpsError::NoDocumentOpen),
+            };
+            if is_close {
+                documents.remove(&id);
+            }
+            (Some(id), result)
+        }
+        None => {
+            let mut manager = PdfOpsManager::new();
+            let result = manager.execute(command);
+            if manager.has_document() {
+                let id = DocumentId(*next_id);
+                *next_id += 1;
+                documents.insert(id, manager);
+                (Some(id), result)
+            } else {
+                (None, result)
+            }
+        }
+    }
 }
 
 /// Render a raster, SVG, or PDF file at the given zoom. PDFs go through

@@ -57,6 +57,11 @@ impl PdfOpsManager {
         self.path.as_deref()
     }
 
+    /// Whether a document is currently open.
+    pub fn has_document(&self) -> bool {
+        self.document.is_some()
+    }
+
     /// Execute a command on the open document.
     pub fn execute(&mut self, command: Command) -> CommandResult {
         match command {

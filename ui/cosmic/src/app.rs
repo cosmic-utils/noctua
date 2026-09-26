@@ -103,6 +103,14 @@ impl cosmic::Application for AppModel {
                     &self.key_binds,
                     vec![
                         menu::Item::Button(fl!("open-folder"), None, MenuAction::OpenFolder),
+                        menu::Item::Divider,
+                        menu::Item::Button(fl!("new-annotation"), None, MenuAction::NewAnnotation),
+                        menu::Item::Button(
+                            fl!("open-annotation-file"),
+                            None,
+                            MenuAction::OpenAnnotationFile,
+                        ),
+                        menu::Item::Divider,
                         menu::Item::Button(fl!("close-tab"), None, MenuAction::CloseTab),
                         menu::Item::Divider,
                         menu::Item::Button(fl!("quit"), None, MenuAction::Quit),

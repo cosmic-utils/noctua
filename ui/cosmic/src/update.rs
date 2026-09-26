@@ -6,7 +6,7 @@
 // directly (all I/O goes through noctua-core).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::key::Named;
@@ -17,8 +17,9 @@ use cosmic::widget::menu::key_bind::Modifier;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::{iced, prelude::*};
 
+use noctua_core::pdfium_ops::{BindSource, Command, CommandResult};
 use noctua_core::render::transform_rgba;
-use noctua_core::render::worker::{Job, JobResult, Priority};
+use noctua_core::render::worker::{DocumentId, Job, JobResult, Priority, SharedWorker};
 use noctua_core::session::Session;
 use noctua_core::storage;
 use noctua_core::storage::thumbcache::ThumbSize;
@@ -55,6 +56,59 @@ fn compose_view_transform(
         ((360 - rotation) % 360, !flip_h)
     } else {
         ((rotation + rotate_by) % 360, flip_h)
+    }
+}
+
+/// Open a source document for editing. PDFs open directly; raster and SVG
+/// are bound into a fresh, single-page PDF. Returns the worker document id
+/// plus the tab metadata (`name`, `save_target`, `dirty`).
+async fn open_source(
+    worker: &SharedWorker,
+    path: &Path,
+) -> Result<(DocumentId, String, Option<PathBuf>, bool), String> {
+    let data = storage::document::open(path).map_err(|e| e.to_string())?;
+    let format = storage::document::format(path).map_err(|e| e.to_string())?;
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    match format {
+        storage::document::Format::Pdf => {
+            let (document, result) = worker
+                .op(
+                    None,
+                    Command::Open {
+                        data,
+                        path: path.to_path_buf(),
+                    },
+                )
+                .await;
+            match document {
+                Some(document) => Ok((document, name, Some(path.to_path_buf()), false)),
+                None => Err(format!("failed to open PDF: {result:?}")),
+            }
+        }
+        _ => {
+            let (document, result) = worker.op(None, Command::New).await;
+            let Some(document) = document else {
+                return Err(format!("failed to create PDF: {result:?}"));
+            };
+            let source = BindSource {
+                name: name.clone(),
+                data,
+                format,
+                pages: None,
+            };
+            let (_, result) = worker
+                .op(Some(document), Command::InsertPages { source, at: 1 })
+                .await;
+            if let CommandResult::Error(err) = result {
+                return Err(format!("failed to bind source: {err:?}"));
+            }
+            Ok((document, name, None, true))
+        }
     }
 }
 
@@ -165,6 +219,9 @@ impl AppModel {
                     )
                 })
                 .collect(),
+            // Annotation tabs have no folder strip; their page list is built
+            // separately and never goes through `rebuild_strip`.
+            TabContent::Annotation { .. } => return,
         };
 
         let previous = self.tab_ui.remove(&tab);
@@ -215,6 +272,7 @@ impl AppModel {
         // strip on first activation.
         let has_content = match self.tabs.get(&tab) {
             Some(TabContent::Folder { entries, .. }) => !entries.is_empty(),
+            Some(TabContent::Annotation { .. }) => false,
             None => false,
         };
         if has_content
@@ -907,6 +965,33 @@ impl AppModel {
         (tab, list)
     }
 
+    /// Create an annotation tab for an already-open worker document and
+    /// activate it.
+    fn open_annotation_tab(
+        &mut self,
+        document: DocumentId,
+        name: String,
+        save_target: Option<PathBuf>,
+        dirty: bool,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let tab = self.tab_model.insert().text(name.clone()).closable().id();
+        self.tabs.insert(
+            tab,
+            TabContent::Annotation {
+                document,
+                name,
+                save_target,
+                dirty,
+            },
+        );
+        self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
+
+        self.tab_model.activate(tab);
+        let activate = self.activate_tab();
+        let title = self.update_title();
+        cosmic::task::batch(vec![activate, title])
+    }
+
     /// Start listing a folder and open a tab for it.
     fn open_folder(&mut self, dir: PathBuf) -> iced::Task<cosmic::Action<Message>> {
         let (tab, list) = self.open_folder_tab(dir);
@@ -975,23 +1060,44 @@ impl AppModel {
     /// Close a tab; activates a neighbor when the active tab was closed.
     fn close_tab(&mut self, tab: Entity) -> iced::Task<cosmic::Action<Message>> {
         let was_active = self.active_tab() == Some(tab);
+
+        // Closing an annotation tab releases its worker document, whose
+        // lifetime matches the tab's (see §8).
+        let release = match self.tabs.get(&tab) {
+            Some(TabContent::Annotation { document, .. }) => {
+                let worker = self.worker.clone();
+                let document = *document;
+                Some(cosmic::task::future(async move {
+                    let _ = worker.op(Some(document), Command::Close).await;
+                    Message::Noop
+                }))
+            }
+            _ => None,
+        };
+
         self.tab_model.remove(tab);
         self.tabs.remove(&tab);
         self.tab_ui.remove(&tab);
 
-        if !was_active {
-            return iced::Task::none();
-        }
+        let activate = if was_active {
+            if let Some(first) = self.tab_model.entity_at(0) {
+                self.tab_model.activate(first);
+            }
+            self.activate_tab()
+        } else {
+            iced::Task::none()
+        };
 
-        if let Some(first) = self.tab_model.entity_at(0) {
-            self.tab_model.activate(first);
+        match release {
+            Some(release) => cosmic::task::batch(vec![release, activate]),
+            None => activate,
         }
-        self.activate_tab()
     }
 
     /// Build the session from the open tabs, in tab order.
     fn build_session(&mut self) -> Session {
         let mut browser_tabs = Vec::new();
+        let mut annotation_tabs = Vec::new();
         let mut active_tab = 0;
         let active = self.tab_model.active();
 
@@ -1003,14 +1109,29 @@ impl AppModel {
                 if entity == active {
                     active_tab = index;
                 }
-                browser_tabs.push(content.path().clone());
-                index += 1;
+                // `active_tab` is a flat index into
+                // `browser_tabs ++ annotation_tabs`, so only pushable tabs
+                // advance it. Unsaved annotations are not restorable.
+                match content {
+                    TabContent::Folder { path, .. } => {
+                        browser_tabs.push(path.clone());
+                        index += 1;
+                    }
+                    TabContent::Annotation {
+                        save_target: Some(path),
+                        ..
+                    } => {
+                        annotation_tabs.push(path.clone());
+                        index += 1;
+                    }
+                    TabContent::Annotation { .. } => {}
+                }
             }
         }
 
         Session {
             browser_tabs,
-            annotation_tabs: Vec::new(),
+            annotation_tabs,
             active_tab,
         }
     }
@@ -1034,8 +1155,16 @@ impl AppModel {
         if let Some(entity) = self.active_tab()
             && let Some(content) = self.tabs.get(&entity)
         {
-            let path = content.path();
-            let name = storage::browser::display_name(path);
+            let name = match content {
+                TabContent::Folder { path, .. } => storage::browser::display_name(path),
+                TabContent::Annotation { name, dirty, .. } => {
+                    if *dirty {
+                        format!("{name} *")
+                    } else {
+                        name.clone()
+                    }
+                }
+            };
             window_title.push_str(" — ");
             window_title.push_str(&name);
         }
@@ -1271,6 +1400,79 @@ impl AppModel {
             Message::FolderChosen(path) => {
                 if let Some(dir) = path {
                     return self.open_folder(dir);
+                }
+            }
+
+            Message::NewAnnotation => {
+                let worker = self.worker.clone();
+                return cosmic::task::future(async move {
+                    let (document, result) = worker.op(None, Command::New).await;
+                    match document {
+                        Some(document) => Message::AnnotationOpened {
+                            document: Some(document),
+                            name: String::from("Untitled"),
+                            save_target: None,
+                            dirty: true,
+                        },
+                        None => {
+                            tracing::error!("failed to create annotation: {result:?}");
+                            Message::AnnotationOpened {
+                                document: None,
+                                name: String::new(),
+                                save_target: None,
+                                dirty: false,
+                            }
+                        }
+                    }
+                });
+            }
+
+            Message::OpenAnnotationFile => {
+                return cosmic::task::future(async move {
+                    let path = cosmic::dialog::file_chooser::open::Dialog::new()
+                        .open_file()
+                        .await
+                        .ok()
+                        .and_then(|response| response.url().to_file_path().ok());
+                    Message::AnnotationFileChosen(path)
+                });
+            }
+
+            Message::AnnotationFileChosen(path) => {
+                let Some(path) = path else {
+                    return iced::Task::none();
+                };
+                let worker = self.worker.clone();
+                return cosmic::task::future(async move {
+                    let opened = open_source(&worker, &path).await;
+                    match opened {
+                        Ok((document, name, save_target, dirty)) => Message::AnnotationOpened {
+                            document: Some(document),
+                            name,
+                            save_target,
+                            dirty,
+                        },
+                        Err(err) => {
+                            tracing::error!("failed to open annotation file: {err}");
+                            Message::AnnotationOpened {
+                                document: None,
+                                name: String::new(),
+                                save_target: None,
+                                dirty: false,
+                            }
+                        }
+                    }
+                });
+            }
+
+            Message::AnnotationOpened {
+                document,
+                name,
+                save_target,
+                dirty,
+            } => {
+                if let Some(document) = document {
+                    return self.open_annotation_tab(document, name, save_target, dirty);
                 }
             }
 
@@ -1574,6 +1776,8 @@ impl AppModel {
                     tracing::error!("failed to open {url:?}: {err}");
                 }
             },
+
+            Message::Noop => {}
 
             Message::Quit => {
                 self.save_session();
