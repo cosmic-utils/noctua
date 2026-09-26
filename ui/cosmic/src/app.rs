@@ -19,7 +19,7 @@ use noctua_core::storage;
 
 use crate::fl;
 use crate::message::{MenuAction, Message};
-use crate::model::AppModel;
+use crate::model::{AppModel, TabContent};
 
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 const APP_ICON: &[u8] =
@@ -97,29 +97,53 @@ impl cosmic::Application for AppModel {
 
     /// Elements to pack at the start of the header bar.
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
+        // Build the File menu items dynamically so the "Add to Annotation"
+        // submenu lists the currently open annotation tabs.
+        let mut file_items: Vec<menu::Item<MenuAction, String>> = vec![
+            menu::Item::Button(fl!("open-folder"), None, MenuAction::OpenFolder),
+            menu::Item::Divider,
+            menu::Item::Button(fl!("new-annotation"), None, MenuAction::NewAnnotation),
+            menu::Item::Button(
+                fl!("open-annotation-file"),
+                None,
+                MenuAction::OpenAnnotationFile,
+            ),
+            menu::Item::Button(fl!("open-for-editing"), None, MenuAction::OpenForEditing),
+        ];
+
+        let annotation_tabs: Vec<menu::Item<MenuAction, String>> = self
+            .tabs
+            .values()
+            .filter_map(|content| match content {
+                TabContent::Annotation { name, document, .. } => Some(menu::Item::Button(
+                    name.clone(),
+                    None,
+                    MenuAction::AddToAnnotation(*document),
+                )),
+                _ => None,
+            })
+            .collect();
+        if !annotation_tabs.is_empty() {
+            file_items.push(menu::Item::Folder(
+                fl!("add-to-annotation"),
+                annotation_tabs,
+            ));
+        }
+
+        file_items.extend([
+            menu::Item::Divider,
+            menu::Item::Button(fl!("save-pdf"), None, MenuAction::SavePdf),
+            menu::Item::Button(fl!("save-pdf-as"), None, MenuAction::SavePdfAs),
+            menu::Item::Divider,
+            menu::Item::Button(fl!("close-tab"), None, MenuAction::CloseTab),
+            menu::Item::Divider,
+            menu::Item::Button(fl!("quit"), None, MenuAction::Quit),
+        ]);
+
         let menu_bar = menu::bar(vec![
             menu::Tree::with_children(
                 menu::root(fl!("file")).apply(Element::from),
-                menu::items(
-                    &self.key_binds,
-                    vec![
-                        menu::Item::Button(fl!("open-folder"), None, MenuAction::OpenFolder),
-                        menu::Item::Divider,
-                        menu::Item::Button(fl!("new-annotation"), None, MenuAction::NewAnnotation),
-                        menu::Item::Button(
-                            fl!("open-annotation-file"),
-                            None,
-                            MenuAction::OpenAnnotationFile,
-                        ),
-                        menu::Item::Divider,
-                        menu::Item::Button(fl!("save-pdf"), None, MenuAction::SavePdf),
-                        menu::Item::Button(fl!("save-pdf-as"), None, MenuAction::SavePdfAs),
-                        menu::Item::Divider,
-                        menu::Item::Button(fl!("close-tab"), None, MenuAction::CloseTab),
-                        menu::Item::Divider,
-                        menu::Item::Button(fl!("quit"), None, MenuAction::Quit),
-                    ],
-                ),
+                menu::items(&self.key_binds, file_items),
             ),
             menu::Tree::with_children(
                 menu::root(fl!("view")).apply(Element::from),

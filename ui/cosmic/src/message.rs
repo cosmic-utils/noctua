@@ -47,6 +47,17 @@ pub enum Message {
     OpenAnnotationFile,
     /// The annotation-file chooser returned a result.
     AnnotationFileChosen(Option<PathBuf>),
+    /// Open the currently shown document for editing: create an annotation tab.
+    OpenForEditing,
+    /// Insert the currently shown document into an existing annotation tab.
+    AddToAnnotation {
+        document: DocumentId,
+    },
+    /// Adding a source to an annotation finished.
+    AnnotationPagesAdded {
+        document: DocumentId,
+        ok: bool,
+    },
     /// A new annotation tab was opened in the worker. `document` is `None`
     /// when opening failed; no tab is created in that case.
     AnnotationOpened {
@@ -193,6 +204,8 @@ pub enum MenuAction {
     OpenFolder,
     NewAnnotation,
     OpenAnnotationFile,
+    OpenForEditing,
+    AddToAnnotation(DocumentId),
     SavePdf,
     SavePdfAs,
     CloseTab,
@@ -218,6 +231,10 @@ impl menu::action::MenuAction for MenuAction {
             MenuAction::OpenFolder => Message::OpenFolder,
             MenuAction::NewAnnotation => Message::NewAnnotation,
             MenuAction::OpenAnnotationFile => Message::OpenAnnotationFile,
+            MenuAction::OpenForEditing => Message::OpenForEditing,
+            MenuAction::AddToAnnotation(document) => Message::AddToAnnotation {
+                document: *document,
+            },
             MenuAction::SavePdf => Message::SaveAnnotation,
             MenuAction::SavePdfAs => Message::SaveAnnotationAs,
             MenuAction::CloseTab => Message::CloseTab,

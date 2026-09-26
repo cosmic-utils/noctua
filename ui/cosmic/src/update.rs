@@ -113,6 +113,49 @@ async fn open_source(
     }
 }
 
+/// Insert a source document as pages at the end of an open annotation
+/// document. Returns an error string on failure.
+async fn add_source_to_document(
+    worker: &SharedWorker,
+    document: DocumentId,
+    source: &Path,
+) -> Result<(), String> {
+    let data = storage::document::open(source).map_err(|e| e.to_string())?;
+    let format = storage::document::format(source).map_err(|e| e.to_string())?;
+    let name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    let (_, result) = worker.op(Some(document), Command::PageCount).await;
+    let page_count = match result {
+        CommandResult::PageCount(n) => n,
+        _ => return Err("failed to read page count".to_string()),
+    };
+
+    let source = BindSource {
+        name,
+        data,
+        format,
+        pages: None,
+    };
+    let (_, result) = worker
+        .op(
+            Some(document),
+            Command::InsertPages {
+                source,
+                at: page_count + 1,
+            },
+        )
+        .await;
+    match result {
+        CommandResult::Ok => Ok(()),
+        CommandResult::Error(err) => Err(format!("{err:?}")),
+        _ => Err("unexpected insert result".to_string()),
+    }
+}
+
 /// Open the save-target chooser for an annotation, defaulting the file name.
 fn save_annotation_dialog(name: String) -> iced::Task<cosmic::Action<Message>> {
     cosmic::task::future(async move {
@@ -1084,6 +1127,46 @@ impl AppModel {
         cosmic::task::batch(vec![activate, title, sizes])
     }
 
+    /// Open a source document for editing and, on success, create an
+    /// annotation tab for it.
+    fn open_annotation_task(&self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
+        let worker = self.worker.clone();
+        cosmic::task::future(async move {
+            match open_source(&worker, &path).await {
+                Ok((document, name, save_target, dirty)) => Message::AnnotationOpened {
+                    document: Some(document),
+                    name,
+                    save_target,
+                    dirty,
+                },
+                Err(err) => {
+                    tracing::error!("failed to open {path:?} for editing: {err}");
+                    Message::AnnotationOpened {
+                        document: None,
+                        name: String::new(),
+                        save_target: None,
+                        dirty: false,
+                    }
+                }
+            }
+        })
+    }
+
+    /// Insert the given source document at the end of an annotation document.
+    fn add_to_annotation(
+        &self,
+        document: DocumentId,
+        source: PathBuf,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let worker = self.worker.clone();
+        cosmic::task::future(async move {
+            let ok = add_source_to_document(&worker, document, &source)
+                .await
+                .is_ok();
+            Message::AnnotationPagesAdded { document, ok }
+        })
+    }
+
     /// Ask the worker for the page sizes of an annotation document.
     fn request_annotation_sizes(
         &self,
@@ -1670,27 +1753,47 @@ impl AppModel {
                 let Some(path) = path else {
                     return iced::Task::none();
                 };
-                let worker = self.worker.clone();
-                return cosmic::task::future(async move {
-                    let opened = open_source(&worker, &path).await;
-                    match opened {
-                        Ok((document, name, save_target, dirty)) => Message::AnnotationOpened {
-                            document: Some(document),
-                            name,
-                            save_target,
-                            dirty,
-                        },
-                        Err(err) => {
-                            tracing::error!("failed to open annotation file: {err}");
-                            Message::AnnotationOpened {
-                                document: None,
-                                name: String::new(),
-                                save_target: None,
-                                dirty: false,
-                            }
-                        }
-                    }
-                });
+                return self.open_annotation_task(path);
+            }
+
+            Message::OpenForEditing => {
+                let Some(target) = self.current_target.clone() else {
+                    return iced::Task::none();
+                };
+                let path = match target {
+                    CurrentTarget::File { path } | CurrentTarget::Page { path, .. } => path,
+                };
+                return self.open_annotation_task(path);
+            }
+
+            Message::AddToAnnotation { document } => {
+                let Some(target) = self.current_target.clone() else {
+                    return iced::Task::none();
+                };
+                let source = match target {
+                    CurrentTarget::File { path } | CurrentTarget::Page { path, .. } => path,
+                };
+                return self.add_to_annotation(document, source);
+            }
+
+            Message::AnnotationPagesAdded { document, ok } => {
+                if !ok {
+                    tracing::error!("failed to add source to annotation {document:?}");
+                    return iced::Task::none();
+                }
+                let Some(tab) = self.tabs.iter().find_map(|(tab, content)| {
+                    matches!(
+                        content,
+                        TabContent::Annotation { document: d, .. } if *d == document
+                    )
+                    .then_some(*tab)
+                }) else {
+                    return iced::Task::none();
+                };
+                if let Some(TabContent::Annotation { dirty, .. }) = self.tabs.get_mut(&tab) {
+                    *dirty = true;
+                }
+                return self.request_annotation_sizes(tab, document);
             }
 
             Message::AnnotationOpened {
