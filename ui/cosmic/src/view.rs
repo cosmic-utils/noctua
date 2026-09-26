@@ -8,12 +8,15 @@ use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
 use cosmic::iced::{Alignment, ContentFit, Length};
 use cosmic::prelude::*;
-use cosmic::widget::{self, tab_bar};
+use cosmic::widget::{self, menu, tab_bar};
+
+use std::collections::HashMap;
+use std::path::Path;
 
 use noctua_core::storage;
 
 use crate::fl;
-use crate::message::Message;
+use crate::message::{MenuAction, Message};
 use crate::model::{AppModel, CurrentTarget, DocumentPreview, TabContent, ZoomState};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
@@ -90,7 +93,13 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
         return widget::container(widget::text::body("")).into();
     };
 
-    thumbnail_strip(&state.strip, state.selected, state.expanded.as_ref(), tab)
+    thumbnail_strip(
+        &state.strip,
+        state.selected,
+        state.expanded.as_ref(),
+        tab,
+        &|_| file_context_menu(app),
+    )
 }
 
 /// Tile and panel size of the annotation page strip, matching the folder strip.
@@ -192,6 +201,55 @@ fn viewer_element(
     ))
     .padding(space.space_m)
     .into()
+}
+
+/// Build the right-click context menu for a source file: open it for editing
+/// or add it to an open annotation tab.
+fn file_context_menu(app: &AppModel) -> Option<Vec<menu::Tree<Message>>> {
+    let mut items: Vec<menu::Item<MenuAction, String>> = vec![menu::Item::Button(
+        fl!("open-for-editing"),
+        None,
+        MenuAction::OpenForEditing,
+    )];
+
+    let annotation_tabs: Vec<menu::Item<MenuAction, String>> = app
+        .tabs
+        .values()
+        .filter_map(|content| match content {
+            TabContent::Annotation { name, document, .. } => Some(menu::Item::Button(
+                name.clone(),
+                None,
+                MenuAction::AddToAnnotation(*document),
+            )),
+            _ => None,
+        })
+        .collect();
+    if !annotation_tabs.is_empty() {
+        items.push(menu::Item::Folder(
+            fl!("add-to-annotation"),
+            annotation_tabs,
+        ));
+    }
+
+    let empty_binds: HashMap<menu::KeyBind, MenuAction> = HashMap::new();
+    Some(menu::items(&empty_binds, items))
+}
+
+/// Wrap `content` in a right-click context menu for `path`, if applicable.
+fn with_file_context_menu<'a>(
+    app: &AppModel,
+    path: &Path,
+    content: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let Some(menu) = file_context_menu(app) else {
+        return content;
+    };
+    cosmic::widget::context_menu(content, Some(menu))
+        .on_open(Message::ContextOpened {
+            path: path.to_path_buf(),
+        })
+        .on_surface_action(Message::Surface)
+        .into()
 }
 
 /// The content view of an annotation tab: the selected page, fitted.
@@ -341,7 +399,9 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
 
     // Continuous preview of the selected multi-page PDF.
     if let Some(preview) = active_preview(app) {
-        return document_preview(preview, app.keyboard_modifiers);
+        let path = preview.path.clone();
+        let viewer = document_preview(preview, app.keyboard_modifiers);
+        return with_file_context_menu(app, &path, viewer);
     }
 
     match &app.current_image {
@@ -354,8 +414,11 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
             let Some(target) = app.current_target.clone() else {
                 return empty_state("image-x-generic-symbolic", fl!("select-hint"));
             };
+            let path = match &target {
+                CurrentTarget::File { path } | CurrentTarget::Page { path, .. } => path.clone(),
+            };
             let state = app.zoom_states.get(&target).copied().unwrap_or_default();
-            viewer_element(
+            let viewer = viewer_element(
                 &image.handle,
                 state,
                 app.keyboard_modifiers,
@@ -365,7 +428,8 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                     offset_x,
                     offset_y,
                 },
-            )
+            );
+            with_file_context_menu(app, &path, viewer)
         }
         None => empty_state("image-x-generic-symbolic", fl!("select-hint")),
     }

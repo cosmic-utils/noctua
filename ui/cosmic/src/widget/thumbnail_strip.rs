@@ -5,13 +5,13 @@
 // selects (click) or expands (double-click) an entry. Expanded multi-page
 // PDFs list their pages as indented, smaller, page-numbered tiles.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cosmic::iced::alignment::{Horizontal, Vertical};
 use cosmic::iced::{ContentFit, Length};
 use cosmic::prelude::*;
-use cosmic::widget;
 use cosmic::widget::segmented_button::Entity;
+use cosmic::widget::{self, menu};
 
 use crate::message::Message;
 use crate::model::{NavEntry, StripEntry};
@@ -32,12 +32,14 @@ const PANEL_WIDTH: f32 = 168.0;
 const SCROLL_ID: &str = "strip-scroll";
 
 /// Build the thumbnail strip for one tab. Emits `Message::StripActivated`,
-/// `Message::StripDoubleClicked` and `Message::StripScrolled`.
+/// `Message::StripDoubleClicked` and `Message::StripScrolled`. File entries
+/// are wrapped in a right-click context menu built by `file_menu`.
 pub(crate) fn thumbnail_strip<'a>(
     entries: &[StripEntry],
     selected: Option<usize>,
     expanded: Option<&PathBuf>,
     tab: Entity,
+    file_menu: &dyn Fn(&Path) -> Option<Vec<menu::Tree<Message>>>,
 ) -> Element<'a, Message> {
     let space = cosmic::theme::spacing();
 
@@ -108,11 +110,22 @@ pub(crate) fn thumbnail_strip<'a>(
         // Select on release so a double-click does not fire the activation
         // twice (`mouse_area::on_press` runs on every press, also the second
         // one of a double-click).
-        column = column.push(
-            widget::mouse_area(entry_widget)
-                .on_release(Message::StripActivated(index))
-                .on_double_click(Message::StripDoubleClicked(index)),
-        );
+        let interactive: Element<'_, Message> = widget::mouse_area(entry_widget)
+            .on_release(Message::StripActivated(index))
+            .on_double_click(Message::StripDoubleClicked(index))
+            .into();
+
+        // File entries offer a right-click context menu.
+        let interactive: Element<'_, Message> = if let NavEntry::File { path, .. } = &entry.target {
+            cosmic::widget::context_menu(interactive, file_menu(path))
+                .on_open(Message::ContextOpened { path: path.clone() })
+                .on_surface_action(Message::Surface)
+                .into()
+        } else {
+            interactive
+        };
+
+        column = column.push(interactive);
     }
 
     let strip_scroll = widget::scrollable(column)

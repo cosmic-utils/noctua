@@ -49,6 +49,10 @@ pub enum Message {
     AnnotationFileChosen(Option<PathBuf>),
     /// Open the currently shown document for editing: create an annotation tab.
     OpenForEditing,
+    /// The context menu opened on a source file; marks the right-clicked path.
+    ContextOpened {
+        path: PathBuf,
+    },
     /// Insert the currently shown document into an existing annotation tab.
     AddToAnnotation {
         document: DocumentId,
@@ -195,6 +199,8 @@ pub enum Message {
     LaunchUrl(String),
     /// Internal no-op: lets a fire-and-forget task return a message.
     Noop,
+    /// A surface (popup/submenu) request, routed back to libcosmic.
+    Surface(cosmic::surface::Action<Message>),
     Quit,
 }
 

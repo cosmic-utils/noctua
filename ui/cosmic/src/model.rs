@@ -269,6 +269,8 @@ pub struct AppModel {
     pub(crate) worker: SharedWorker,
     /// File size of the current target, for the status bar.
     pub(crate) current_size: Option<u64>,
+    /// Path of the file the right-click context menu was opened on.
+    pub(crate) context_target: Option<PathBuf>,
     /// When a start argument is a file, its nav entry is selected
     /// after the parent folder has been listed.
     pub(crate) pending_select: Option<PathBuf>,

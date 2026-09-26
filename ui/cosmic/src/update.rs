@@ -1757,13 +1757,23 @@ impl AppModel {
             }
 
             Message::OpenForEditing => {
-                let Some(target) = self.current_target.clone() else {
-                    return iced::Task::none();
-                };
-                let path = match target {
-                    CurrentTarget::File { path } | CurrentTarget::Page { path, .. } => path,
+                // Prefer the right-clicked file; fall back to the shown one.
+                let path = match self.context_target.take() {
+                    Some(path) => path,
+                    None => {
+                        let Some(target) = self.current_target.clone() else {
+                            return iced::Task::none();
+                        };
+                        match target {
+                            CurrentTarget::File { path } | CurrentTarget::Page { path, .. } => path,
+                        }
+                    }
                 };
                 return self.open_annotation_task(path);
+            }
+
+            Message::ContextOpened { path } => {
+                self.context_target = Some(path);
             }
 
             Message::AddToAnnotation { document } => {
@@ -2227,6 +2237,10 @@ impl AppModel {
             },
 
             Message::Noop => {}
+
+            Message::Surface(action) => {
+                return cosmic::task::message(cosmic::Action::Surface(action));
+            }
 
             Message::Quit => {
                 self.save_session();

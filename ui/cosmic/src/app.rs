@@ -75,6 +75,7 @@ impl cosmic::Application for AppModel {
             show_nav_panel: true,
             worker: SharedWorker::spawn(),
             current_size: None,
+            context_target: None,
             pending_select: None,
             start_error: None,
         };
