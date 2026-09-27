@@ -8,6 +8,7 @@ use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
 use cosmic::iced::{Alignment, ContentFit, Length};
 use cosmic::prelude::*;
+use cosmic::widget::segmented_button::Entity;
 use cosmic::widget::{self, menu, tab_bar};
 
 use std::collections::HashMap;
@@ -157,8 +158,11 @@ fn annotation_strip(app: &AppModel) -> Element<'_, Message> {
         )
         .into();
 
+        let interactive =
+            widget::mouse_area(entry).on_release(Message::AnnotationPageSelected { tab, page });
         column = column.push(
-            widget::mouse_area(entry).on_release(Message::AnnotationPageSelected { tab, page }),
+            cosmic::widget::context_menu(interactive, Some(page_context_menu(tab, page)))
+                .on_surface_action(Message::Surface),
         );
     }
 
@@ -252,6 +256,42 @@ fn with_file_context_menu<'a>(
         .into()
 }
 
+/// Build the right-click context menu for a page of an annotation tab:
+/// rotate, move and delete the page.
+fn page_context_menu(tab: Entity, page: u32) -> Vec<menu::Tree<Message>> {
+    let items: Vec<menu::Item<MenuAction, String>> = vec![
+        menu::Item::Button(
+            fl!("rotate-page-clockwise"),
+            None,
+            MenuAction::RotatePageClockwise { tab, page },
+        ),
+        menu::Item::Button(
+            fl!("rotate-page-counter-clockwise"),
+            None,
+            MenuAction::RotatePageCounterClockwise { tab, page },
+        ),
+        menu::Item::Divider,
+        menu::Item::Button(
+            fl!("move-page-up"),
+            None,
+            MenuAction::MovePageUp { tab, page },
+        ),
+        menu::Item::Button(
+            fl!("move-page-down"),
+            None,
+            MenuAction::MovePageDown { tab, page },
+        ),
+        menu::Item::Divider,
+        menu::Item::Button(
+            fl!("delete-page"),
+            None,
+            MenuAction::DeletePage { tab, page },
+        ),
+    ];
+    let empty_binds: HashMap<menu::KeyBind, MenuAction> = HashMap::new();
+    menu::items(&empty_binds, items)
+}
+
 /// The content view of an annotation tab: the selected page, fitted.
 fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     let Some(tab) = app.active_tab() else {
@@ -307,6 +347,32 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
         format!("{:.0}%", scale * 100.0)
     };
 
+    // In an annotation tab, rotation edits the selected page in the document
+    // (persistent); everywhere else it only turns the view. The flip buttons
+    // stay view-only, since PDF pages have no flip operation.
+    let annotation_page = app.active_tab().and_then(|tab| match app.tabs.get(&tab) {
+        Some(TabContent::Annotation { .. }) => app
+            .annotation_ui
+            .get(&tab)
+            .map(|state| (tab, state.selected)),
+        _ => None,
+    });
+    let (rotate_left, rotate_right) = match annotation_page {
+        Some((tab, page)) => (
+            Message::AnnotationRotatePage {
+                tab,
+                page,
+                clockwise: false,
+            },
+            Message::AnnotationRotatePage {
+                tab,
+                page,
+                clockwise: true,
+            },
+        ),
+        None => (Message::RotateCounterClockwise, Message::RotateClockwise),
+    };
+
     ResponsiveToolbar::new()
         .start(icon_button(
             "go-previous-symbolic",
@@ -321,12 +387,12 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
         .start(icon_button(
             "object-rotate-left-symbolic",
             fl!("rotate-counter-clockwise"),
-            Message::RotateCounterClockwise,
+            rotate_left,
         ))
         .start(icon_button(
             "object-rotate-right-symbolic",
             fl!("rotate-clockwise"),
-            Message::RotateClockwise,
+            rotate_right,
         ))
         .start(icon_button(
             "object-flip-horizontal-symbolic",

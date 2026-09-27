@@ -41,6 +41,11 @@ pub enum Command {
     /// Rotate a 1-based page by 0, 90, 180 or 270 degrees (absolute).
     RotatePage { page: u32, degrees: u16 },
 
+    /// Rotate a 1-based page 90° clockwise or counter-clockwise, relative to
+    /// its current rotation. The manager reads the current rotation itself so
+    /// the UI does not have to track it.
+    RotatePageRelative { page: u32, clockwise: bool },
+
     /// Add a text (pop-up comment) annotation at the given page and position.
     AddTextAnnotation {
         page: u32,

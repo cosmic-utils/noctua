@@ -302,6 +302,62 @@ fn rotate_page() {
 }
 
 #[test]
+fn rotate_page_relative_cycles_orientation() {
+    let Some(pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("rotate-relative");
+    let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
+
+    let sizes = |mgr: &mut PdfOpsManager| match mgr.execute(Command::PageSizes) {
+        CommandResult::PageSizes(sizes) => sizes[0],
+        other => panic!("expected PageSizes, got {other:?}"),
+    };
+
+    // A4 portrait starts wider than it is tall.
+    let (w, h) = sizes(&mut mgr);
+    assert!(h > w);
+
+    assert!(matches!(
+        mgr.execute(Command::RotatePageRelative {
+            page: 1,
+            clockwise: true
+        }),
+        CommandResult::Ok
+    ));
+    let (w, h) = sizes(&mut mgr);
+    assert!(w > h, "clockwise quarter-turn should swap orientation");
+
+    assert!(matches!(
+        mgr.execute(Command::RotatePageRelative {
+            page: 1,
+            clockwise: false
+        }),
+        CommandResult::Ok
+    ));
+    let (w, h) = sizes(&mut mgr);
+    assert!(
+        h > w,
+        "counter-clockwise quarter-turn should restore orientation"
+    );
+
+    assert!(matches!(
+        mgr.execute(Command::RotatePageRelative {
+            page: 0,
+            clockwise: true
+        }),
+        CommandResult::Error(_)
+    ));
+
+    common::remove_dir(&dir);
+}
+
+#[test]
 fn add_annotations_and_save() {
     let Some(pdfium) = pdfium() else {
         eprintln!("SKIP: libpdfium.so not available");

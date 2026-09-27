@@ -1312,6 +1312,22 @@ impl AppModel {
         })
     }
 
+    /// Execute a page mutation on an annotation document and report the
+    /// outcome back as `AnnotationPageMutated`.
+    fn annotation_mutate(
+        &self,
+        tab: Entity,
+        document: DocumentId,
+        command: Command,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let worker = self.worker.clone();
+        cosmic::task::future(async move {
+            let (_, result) = worker.op(Some(document), command).await;
+            let ok = matches!(result, CommandResult::Ok);
+            Message::AnnotationPageMutated { tab, ok }
+        })
+    }
+
     /// Start listing a folder and open a tab for it.
     fn open_folder(&mut self, dir: PathBuf) -> iced::Task<cosmic::Action<Message>> {
         let (tab, list) = self.open_folder_tab(dir);
@@ -1822,14 +1838,20 @@ impl AppModel {
                     _ => return iced::Task::none(),
                 };
                 let page_count = sizes.len();
-                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                let selected = if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     state.page_sizes = sizes;
                     state.thumbs = vec![None; page_count];
-                    state.selected = 1;
+                    // Keep the selection when the page count still covers it
+                    // (a rotation re-render); clamp instead of jumping to the
+                    // first page.
+                    state.selected = state.selected.clamp(1, page_count.max(1) as u32);
                     state.current = None;
-                }
+                    state.selected
+                } else {
+                    1
+                };
                 let thumbs = self.render_annotation_thumbs(tab, document);
-                let page = self.render_annotation_page(tab, document, 1);
+                let page = self.render_annotation_page(tab, document, selected);
                 return cosmic::task::batch(vec![thumbs, page]);
             }
 
@@ -1871,6 +1893,75 @@ impl AppModel {
 
             Message::AnnotationPageSelected { tab, page } => {
                 return self.annotation_select_page(tab, page);
+            }
+
+            Message::AnnotationRotatePage {
+                tab,
+                page,
+                clockwise,
+            } => {
+                let document = match self.tabs.get(&tab) {
+                    Some(TabContent::Annotation { document, .. }) => *document,
+                    _ => return iced::Task::none(),
+                };
+                return self.annotation_mutate(
+                    tab,
+                    document,
+                    Command::RotatePageRelative { page, clockwise },
+                );
+            }
+
+            Message::AnnotationDeletePage { tab, page } => {
+                let document = match self.tabs.get(&tab) {
+                    Some(TabContent::Annotation { document, .. }) => *document,
+                    _ => return iced::Task::none(),
+                };
+                return self.annotation_mutate(
+                    tab,
+                    document,
+                    Command::DeletePages { pages: vec![page] },
+                );
+            }
+
+            Message::AnnotationMovePage { tab, page, up } => {
+                let document = match self.tabs.get(&tab) {
+                    Some(TabContent::Annotation { document, .. }) => *document,
+                    _ => return iced::Task::none(),
+                };
+                let page_count = self
+                    .annotation_ui
+                    .get(&tab)
+                    .map(|state| state.page_sizes.len() as u32)
+                    .unwrap_or(0);
+                if page_count == 0 {
+                    return iced::Task::none();
+                }
+                let to = if up {
+                    page.saturating_sub(1).max(1)
+                } else {
+                    (page + 1).min(page_count)
+                };
+                if to == page {
+                    return iced::Task::none();
+                }
+                return self.annotation_mutate(tab, document, Command::MovePage { from: page, to });
+            }
+
+            Message::AnnotationPageMutated { tab, ok } => {
+                if !ok {
+                    tracing::error!("annotation page mutation failed");
+                    return iced::Task::none();
+                }
+                let document = match self.tabs.get(&tab) {
+                    Some(TabContent::Annotation { document, .. }) => *document,
+                    _ => return iced::Task::none(),
+                };
+                if let Some(TabContent::Annotation { dirty, .. }) = self.tabs.get_mut(&tab) {
+                    *dirty = true;
+                }
+                let sizes = self.request_annotation_sizes(tab, document);
+                let title = self.update_title();
+                return cosmic::task::batch(vec![sizes, title]);
             }
 
             Message::AnnotationViewerStateChanged {

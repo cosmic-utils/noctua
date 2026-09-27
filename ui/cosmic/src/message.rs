@@ -91,6 +91,28 @@ pub enum Message {
         tab: Entity,
         page: u32,
     },
+    /// Rotate a page of an annotation tab 90° clockwise/counter-clockwise.
+    AnnotationRotatePage {
+        tab: Entity,
+        page: u32,
+        clockwise: bool,
+    },
+    /// Delete a page of an annotation tab.
+    AnnotationDeletePage {
+        tab: Entity,
+        page: u32,
+    },
+    /// Move a page of an annotation tab one step toward the beginning or end.
+    AnnotationMovePage {
+        tab: Entity,
+        page: u32,
+        up: bool,
+    },
+    /// A page mutation finished; refresh geometry on success.
+    AnnotationPageMutated {
+        tab: Entity,
+        ok: bool,
+    },
     /// The annotation viewer reported a zoom/pan state change.
     AnnotationViewerStateChanged {
         tab: Entity,
@@ -221,6 +243,11 @@ pub enum MenuAction {
     ZoomToFit,
     RotateClockwise,
     RotateCounterClockwise,
+    RotatePageClockwise { tab: Entity, page: u32 },
+    RotatePageCounterClockwise { tab: Entity, page: u32 },
+    DeletePage { tab: Entity, page: u32 },
+    MovePageUp { tab: Entity, page: u32 },
+    MovePageDown { tab: Entity, page: u32 },
     FlipHorizontal,
     FlipVertical,
     Fullscreen,
@@ -249,6 +276,30 @@ impl menu::action::MenuAction for MenuAction {
             MenuAction::ZoomToFit => Message::ZoomToFit,
             MenuAction::RotateClockwise => Message::RotateClockwise,
             MenuAction::RotateCounterClockwise => Message::RotateCounterClockwise,
+            MenuAction::RotatePageClockwise { tab, page } => Message::AnnotationRotatePage {
+                tab: *tab,
+                page: *page,
+                clockwise: true,
+            },
+            MenuAction::RotatePageCounterClockwise { tab, page } => Message::AnnotationRotatePage {
+                tab: *tab,
+                page: *page,
+                clockwise: false,
+            },
+            MenuAction::DeletePage { tab, page } => Message::AnnotationDeletePage {
+                tab: *tab,
+                page: *page,
+            },
+            MenuAction::MovePageUp { tab, page } => Message::AnnotationMovePage {
+                tab: *tab,
+                page: *page,
+                up: true,
+            },
+            MenuAction::MovePageDown { tab, page } => Message::AnnotationMovePage {
+                tab: *tab,
+                page: *page,
+                up: false,
+            },
             MenuAction::FlipHorizontal => Message::FlipHorizontal,
             MenuAction::FlipVertical => Message::FlipVertical,
             MenuAction::Fullscreen => Message::ToggleFullscreen,

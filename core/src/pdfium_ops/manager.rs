@@ -78,6 +78,9 @@ impl PdfOpsManager {
             Command::DeletePages { pages } => self.delete_pages(&pages).into(),
             Command::MovePage { from, to } => self.move_page(from, to).into(),
             Command::RotatePage { page, degrees } => self.rotate_page(page, degrees).into(),
+            Command::RotatePageRelative { page, clockwise } => {
+                self.rotate_page_relative(page, clockwise).into()
+            }
             Command::AddTextAnnotation {
                 page,
                 text,
@@ -390,6 +393,27 @@ impl PdfOpsManager {
         pdf_page.set_rotation(rotation);
         self.dirty = true;
         Ok(())
+    }
+
+    /// Rotate a page 90° clockwise or counter-clockwise relative to its
+    /// current rotation. Reads the current rotation from pdfium, computes the
+    /// new absolute value and delegates to [`Self::rotate_page`].
+    fn rotate_page_relative(&mut self, page: u32, clockwise: bool) -> Result<(), PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        let current = {
+            let document = self.require_document()?;
+            let pdf_page = document
+                .pages()
+                .get((page - 1) as PdfPageIndex)
+                .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
+            pdf_page.rotation().map_err(pdfium_err)?.as_degrees()
+        };
+        // Counter-clockwise is expressed as three clockwise quarter turns.
+        let delta = if clockwise { 90.0 } else { 270.0 };
+        let new_degrees = ((current + delta) % 360.0) as u16;
+        self.rotate_page(page, new_degrees)
     }
 
     fn add_text_annotation(
