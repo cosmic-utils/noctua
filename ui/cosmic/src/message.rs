@@ -224,7 +224,6 @@ pub enum MenuAction {
     FlipHorizontal,
     FlipVertical,
     Fullscreen,
-    ToggleNavPanel,
     About,
     Quit,
 }
@@ -253,7 +252,6 @@ impl menu::action::MenuAction for MenuAction {
             MenuAction::FlipHorizontal => Message::FlipHorizontal,
             MenuAction::FlipVertical => Message::FlipVertical,
             MenuAction::Fullscreen => Message::ToggleFullscreen,
-            MenuAction::ToggleNavPanel => Message::ToggleNavPanel,
             MenuAction::About => Message::ToggleAbout,
             MenuAction::Quit => Message::Quit,
         }

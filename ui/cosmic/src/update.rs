@@ -282,11 +282,6 @@ impl AppModel {
             bind(&[], Key::Named(Named::F11), MenuAction::Fullscreen),
             bind(
                 &[Modifier::Ctrl],
-                Key::Character("b".into()),
-                MenuAction::ToggleNavPanel,
-            ),
-            bind(
-                &[Modifier::Ctrl],
                 Key::Character("q".into()),
                 MenuAction::Quit,
             ),

@@ -98,6 +98,12 @@ impl cosmic::Application for AppModel {
 
     /// Elements to pack at the start of the header bar.
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
+        // Standard nav-panel toggle, like COSMIC Files.
+        let nav_toggle = cosmic::widget::nav_bar_toggle()
+            .active(self.show_nav_panel)
+            .on_toggle(Message::ToggleNavPanel)
+            .into();
+
         // Build the File menu items dynamically so the "Add to Annotation"
         // submenu lists the currently open annotation tabs.
         let mut file_items: Vec<menu::Item<MenuAction, String>> = vec![
@@ -174,7 +180,6 @@ impl cosmic::Application for AppModel {
                         menu::Item::Button(fl!("flip-vertical"), None, MenuAction::FlipVertical),
                         menu::Item::Divider,
                         menu::Item::Button(fl!("fullscreen"), None, MenuAction::Fullscreen),
-                        menu::Item::Button(fl!("show-nav-panel"), None, MenuAction::ToggleNavPanel),
                         menu::Item::Divider,
                         menu::Item::Button(fl!("about"), None, MenuAction::About),
                     ],
@@ -184,7 +189,7 @@ impl cosmic::Application for AppModel {
         .item_height(menu::ItemHeight::Dynamic(40))
         .item_width(menu::ItemWidth::Uniform(360));
 
-        vec![menu_bar.into()]
+        vec![nav_toggle, menu_bar.into()]
     }
 
     /// Display a context drawer if the context page is requested.
