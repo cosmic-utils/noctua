@@ -209,6 +209,13 @@ impl TabUiState {
     }
 }
 
+/// Annotation tools offered by the annotation mode. Text is implemented
+/// first; the remaining tools follow in later steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationTool {
+    Text,
+}
+
 /// Volatile view state of an annotation tab: page list, thumbnails and the
 /// currently shown page. The document itself lives in the worker, keyed by
 /// the tab's `DocumentId`.
@@ -223,6 +230,13 @@ pub(crate) struct AnnotationUiState {
     pub(crate) current: Option<CurrentImage>,
     /// View transform (zoom/pan/rotate/flip), like single images.
     pub(crate) view: ZoomState,
+    /// Currently active annotation tool; `None` means browse/pan.
+    pub(crate) active_tool: Option<AnnotationTool>,
+    /// Selected free-text font size in points.
+    pub(crate) font_size_pt: f32,
+    /// Page position (points, origin bottom-left) of an in-progress free-text
+    /// placement; `None` when no text is being entered.
+    pub(crate) pending_text: Option<(f32, f32)>,
 }
 
 impl Default for AnnotationUiState {
@@ -233,6 +247,9 @@ impl Default for AnnotationUiState {
             thumbs: Vec::new(),
             current: None,
             view: ZoomState::default(),
+            active_tool: None,
+            font_size_pt: 24.0,
+            pending_text: None,
         }
     }
 }

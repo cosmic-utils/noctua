@@ -4,7 +4,7 @@
 // The language of the annotation mode. All operations on an open PDF
 // document are expressed as commands.
 
-use crate::pdfium_ops::model::{AnnotationColor, BindSource};
+use crate::pdfium_ops::model::{AnnotationColor, BindSource, MarkupKind};
 use std::path::PathBuf;
 
 /// Commands accepted by the PDF operations manager.
@@ -46,10 +46,12 @@ pub enum Command {
     /// the UI does not have to track it.
     RotatePageRelative { page: u32, clockwise: bool },
 
-    /// Add a text (pop-up comment) annotation at the given page and position.
-    AddTextAnnotation {
+    /// Add a visible free-text annotation at the given page and position.
+    /// `font_size` is the text size in points.
+    AddFreeTextAnnotation {
         page: u32,
         text: String,
+        font_size: f32,
         x: f32,
         y: f32,
         width: f32,
@@ -68,9 +70,11 @@ pub enum Command {
         height: f32,
     },
 
-    /// Add a highlight annotation over the given rectangle.
-    AddHighlightAnnotation {
+    /// Add a text markup (highlight/underline/strikeout/squiggly) over the
+    /// given rectangle.
+    AddMarkupAnnotation {
         page: u32,
+        kind: MarkupKind,
         color: AnnotationColor,
         x: f32,
         y: f32,

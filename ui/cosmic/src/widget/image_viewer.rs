@@ -27,6 +27,10 @@ const OFFSET_EPSILON: f32 = 0.01;
 /// Callback for viewer state changes (scale, `offset_x`, `offset_y`).
 type StateChangeCallback<Message> = Box<dyn Fn(f32, f32, f32) -> Message>;
 
+/// Callback notified when the image is clicked. The `Point` is in native
+/// image pixel coordinates (origin top-left).
+type ClickCallback<Message> = Box<dyn Fn(Point) -> Message>;
+
 /// A frame that displays an image with the ability to zoom in/out and pan.
 pub(crate) struct Viewer<Handle, Message> {
     width: Length,
@@ -39,6 +43,8 @@ pub(crate) struct Viewer<Handle, Message> {
     external_state: Option<(f32, Vector)>,
     /// Optional callback to notify the app of state changes.
     on_state_change: Option<StateChangeCallback<Message>>,
+    /// Optional callback notified when the image is clicked (annotation mode).
+    on_click: Option<ClickCallback<Message>>,
 }
 
 impl<Handle, Message> Viewer<Handle, Message> {
@@ -52,6 +58,7 @@ impl<Handle, Message> Viewer<Handle, Message> {
             modifiers: Modifiers::default(),
             external_state: None,
             on_state_change: None,
+            on_click: None,
         }
     }
 
@@ -68,6 +75,16 @@ impl<Handle, Message> Viewer<Handle, Message> {
         F: 'static + Fn(f32, f32, f32) -> Message,
     {
         self.on_state_change = Some(Box::new(f));
+        self
+    }
+
+    /// Sets a callback notified when the image is clicked. While set, a left
+    /// click reports the position instead of starting a pan.
+    pub(crate) fn on_click<F>(mut self, f: F) -> Self
+    where
+        F: 'static + Fn(Point) -> Message,
+    {
+        self.on_click = Some(Box::new(f));
         self
     }
 
@@ -302,6 +319,32 @@ where
                 };
 
                 let state = tree.state.downcast_mut::<State>();
+
+                // In annotation mode a left click reports the position in
+                // native image pixels instead of starting a pan.
+                if let Some(on_click) = &self.on_click {
+                    let final_size = scaled_image_size(
+                        renderer,
+                        &self.handle,
+                        state,
+                        bounds.size(),
+                        self.content_fit,
+                    );
+                    let translation =
+                        image_translation(state, bounds, final_size, self.content_fit);
+                    let native_size = renderer.measure_image(&self.handle).unwrap_or_default();
+                    let native_w = native_size.width as f32;
+                    let native_h = native_size.height as f32;
+                    let image_top_left = bounds.position() + translation;
+                    let native = Point::new(
+                        (cursor_position.x - image_top_left.x) / (final_size.width / native_w),
+                        (cursor_position.y - image_top_left.y) / (final_size.height / native_h),
+                    );
+                    shell.publish(on_click(native));
+                    shell.capture_event();
+                    return;
+                }
+
                 state.cursor_grabbed_at = Some(cursor_position);
                 state.starting_offset = state.current_offset;
 
@@ -412,17 +455,7 @@ where
             self.content_fit,
         );
 
-        let translation = {
-            let diff_w = bounds.width - final_size.width;
-            let diff_h = bounds.height - final_size.height;
-
-            let image_top_left = match self.content_fit {
-                ContentFit::None => Vector::new(diff_w.max(0.0) / 2.0, diff_h.max(0.0) / 2.0),
-                _ => Vector::new(diff_w / 2.0, diff_h / 2.0),
-            };
-
-            image_top_left - state.offset(bounds, final_size)
-        };
+        let translation = image_translation(state, bounds, final_size, self.content_fit);
 
         let drawing_bounds = Rectangle::new(bounds.position(), final_size);
 
@@ -491,6 +524,23 @@ where
     fn from(viewer: Viewer<Handle, Message>) -> Element<'a, Message, Theme, Renderer> {
         Element::new(viewer)
     }
+}
+
+/// The translation applied to the image so it is centered and panned within
+/// the viewer, relative to the viewer's top-left corner.
+fn image_translation(
+    state: &State,
+    bounds: Rectangle,
+    final_size: Size,
+    content_fit: ContentFit,
+) -> Vector {
+    let diff_w = bounds.width - final_size.width;
+    let diff_h = bounds.height - final_size.height;
+    let image_top_left = match content_fit {
+        ContentFit::None => Vector::new(diff_w.max(0.0) / 2.0, diff_h.max(0.0) / 2.0),
+        _ => Vector::new(diff_w / 2.0, diff_h / 2.0),
+    };
+    image_top_left - state.offset(bounds, final_size)
 }
 
 /// The scaled size of the image given the current viewer state.

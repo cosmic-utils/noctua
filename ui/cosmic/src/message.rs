@@ -13,7 +13,7 @@ use cosmic::widget::segmented_button::Entity;
 use noctua_core::render::worker::DocumentId;
 use noctua_core::storage::browser::BrowserEntry;
 
-use crate::model::{CurrentTarget, Rgba};
+use crate::model::{AnnotationTool, CurrentTarget, Rgba};
 
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
@@ -113,6 +113,21 @@ pub enum Message {
         tab: Entity,
         ok: bool,
     },
+    /// Toggle an annotation tool on/off.
+    AnnotationToolToggled(AnnotationTool),
+    /// The free-text font size changed.
+    AnnotationFontSizeChanged(f32),
+    /// A click landed on the annotation page; native image coordinates
+    /// (pixels, origin top-left).
+    AnnotationPointerClicked {
+        tab: Entity,
+        x: f32,
+        y: f32,
+    },
+    /// The in-place free-text input changed; carries the current text.
+    AnnotationTextChanged(String),
+    /// The in-place free-text input was submitted; carries the text.
+    AnnotationTextSubmit(String),
     /// The annotation viewer reported a zoom/pan state change.
     AnnotationViewerStateChanged {
         tab: Entity,

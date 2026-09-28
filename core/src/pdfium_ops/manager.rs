@@ -12,7 +12,7 @@ use pdfium_render::prelude::*;
 use super::bindings::pdfium_or_err;
 use super::command::{Command, CommandResult};
 use super::error::PdfOpsError;
-use super::model::{AnnotationColor, BindSource, PdfMetadata};
+use super::model::{AnnotationColor, BindSource, MarkupKind, PdfMetadata};
 
 use crate::storage::document::Format;
 
@@ -22,6 +22,45 @@ fn pdfium_err(e: PdfiumError) -> PdfOpsError {
 
 fn to_color(c: AnnotationColor) -> PdfColor {
     PdfColor::new(c.red, c.green, c.blue, c.alpha)
+}
+
+/// Set the common position, size and color of a text-markup annotation.
+fn position_markup<A: PdfPageAnnotationCommon>(
+    annotation: &mut A,
+    color: AnnotationColor,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Result<(), PdfOpsError> {
+    annotation
+        .set_position(PdfPoints::new(x), PdfPoints::new(y))
+        .map_err(pdfium_err)?;
+    annotation
+        .set_width(PdfPoints::new(width))
+        .map_err(pdfium_err)?;
+    annotation
+        .set_height(PdfPoints::new(height))
+        .map_err(pdfium_err)?;
+    annotation
+        .set_stroke_color(to_color(color))
+        .map_err(pdfium_err)?;
+    annotation
+        .set_fill_color(to_color(color))
+        .map_err(pdfium_err)?;
+    Ok(())
+}
+
+/// Build the quad points of a markup rectangle. Text-markup annotations are
+/// visible only through these attachment points.
+fn markup_quad(x: f32, y: f32, width: f32, height: f32) -> PdfQuadPoints {
+    let rect = PdfRect::new(
+        PdfPoints::new(y),
+        PdfPoints::new(x),
+        PdfPoints::new(y + height),
+        PdfPoints::new(x + width),
+    );
+    PdfQuadPoints::from_rect(&rect)
 }
 
 /// Manager for PDF editing operations. Owns the currently open document.
@@ -81,15 +120,16 @@ impl PdfOpsManager {
             Command::RotatePageRelative { page, clockwise } => {
                 self.rotate_page_relative(page, clockwise).into()
             }
-            Command::AddTextAnnotation {
+            Command::AddFreeTextAnnotation {
                 page,
                 text,
+                font_size,
                 x,
                 y,
                 width,
                 height,
             } => self
-                .add_text_annotation(page, &text, x, y, width, height)
+                .add_free_text_annotation(page, &text, font_size, (x, y, width, height))
                 .into(),
             Command::AddInkAnnotation {
                 page,
@@ -102,15 +142,16 @@ impl PdfOpsManager {
             } => self
                 .add_ink_annotation(page, color, &points, (x, y, width, height))
                 .into(),
-            Command::AddHighlightAnnotation {
+            Command::AddMarkupAnnotation {
                 page,
+                kind,
                 color,
                 x,
                 y,
                 width,
                 height,
             } => self
-                .add_highlight_annotation(page, color, x, y, width, height)
+                .add_markup_annotation(page, kind, color, (x, y, width, height))
                 .into(),
             Command::Save => self.save().into(),
             Command::SaveAs { path } => self.save_as(&path).into(),
@@ -416,29 +457,60 @@ impl PdfOpsManager {
         self.rotate_page(page, new_degrees)
     }
 
-    fn add_text_annotation(
+    fn add_free_text_annotation(
         &mut self,
         page: u32,
         text: &str,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        font_size: f32,
+        bounds: (f32, f32, f32, f32),
     ) -> Result<(), PdfOpsError> {
-        let mut pdf_page = self.page_mut(page)?;
-        let mut annotation = pdf_page
-            .annotations_mut()
-            .create_text_annotation(text)
-            .map_err(pdfium_err)?;
-        annotation
-            .set_position(PdfPoints::new(x), PdfPoints::new(y))
-            .map_err(pdfium_err)?;
-        annotation
-            .set_width(PdfPoints::new(width))
-            .map_err(pdfium_err)?;
-        annotation
-            .set_height(PdfPoints::new(height))
-            .map_err(pdfium_err)?;
+        let (x, y, width, height) = bounds;
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+
+        // A free-text annotation's font size (and color) live in its `/DA`
+        // (default appearance) string, which pdfium-render does not expose a
+        // setter for. Create the annotation through the raw pdfium API so the
+        // appearance can be controlled directly.
+        {
+            let document = self.require_document()?;
+            let pdf_page = document
+                .pages()
+                .get((page - 1) as PdfPageIndex)
+                .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
+            let bindings = pdfium_or_err()?.bindings();
+            let page_handle = bindings.get_handle_from_page(&pdf_page);
+
+            let annot = bindings.FPDFPage_CreateAnnot(
+                page_handle,
+                PdfPageAnnotationType::FreeText as FPDF_ANNOTATION_SUBTYPE,
+            );
+            if annot.is_null() {
+                return Err(PdfOpsError::Pdfium(
+                    "failed to create free-text annotation".to_string(),
+                ));
+            }
+
+            bindings.FPDFAnnot_SetStringValue_str(annot, "Contents", text);
+            // Black text; the font size is the only option for now. Color is
+            // applied in a later step by extending this appearance string.
+            bindings.FPDFAnnot_SetStringValue_str(
+                annot,
+                "DA",
+                &format!("/Helv {font_size} Tf 0 0 0 rg"),
+            );
+
+            let rect = PdfRect::new(
+                PdfPoints::new(y),
+                PdfPoints::new(x),
+                PdfPoints::new(y + height),
+                PdfPoints::new(x + width),
+            );
+            let fs_rect = bindings.get_fs_rect_from_rect(&rect);
+            bindings.FPDFAnnot_SetRect(annot, &fs_rect);
+        }
+
         self.dirty = true;
         Ok(())
     }
@@ -487,48 +559,62 @@ impl PdfOpsManager {
         Ok(())
     }
 
-    fn add_highlight_annotation(
+    fn add_markup_annotation(
         &mut self,
         page: u32,
+        kind: MarkupKind,
         color: AnnotationColor,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        bounds: (f32, f32, f32, f32),
     ) -> Result<(), PdfOpsError> {
+        let (x, y, width, height) = bounds;
         let mut pdf_page = self.page_mut(page)?;
-        let mut annotation = pdf_page
-            .annotations_mut()
-            .create_highlight_annotation()
-            .map_err(pdfium_err)?;
-        annotation
-            .set_position(PdfPoints::new(x), PdfPoints::new(y))
-            .map_err(pdfium_err)?;
-        annotation
-            .set_width(PdfPoints::new(width))
-            .map_err(pdfium_err)?;
-        annotation
-            .set_height(PdfPoints::new(height))
-            .map_err(pdfium_err)?;
-        annotation
-            .set_stroke_color(to_color(color))
-            .map_err(pdfium_err)?;
-        annotation
-            .set_fill_color(to_color(color))
-            .map_err(pdfium_err)?;
-
-        // A highlight is visible only with attachment points (quad points).
-        let rect = PdfRect::new(
-            PdfPoints::new(y),
-            PdfPoints::new(x),
-            PdfPoints::new(y + height),
-            PdfPoints::new(x + width),
-        );
-        let quad = PdfQuadPoints::from_rect(&rect);
-        annotation
-            .attachment_points_mut()
-            .create_attachment_point_at_end(quad)
-            .map_err(pdfium_err)?;
+        let quad = markup_quad(x, y, width, height);
+        match kind {
+            MarkupKind::Highlight => {
+                let mut annotation = pdf_page
+                    .annotations_mut()
+                    .create_highlight_annotation()
+                    .map_err(pdfium_err)?;
+                position_markup(&mut annotation, color, x, y, width, height)?;
+                annotation
+                    .attachment_points_mut()
+                    .create_attachment_point_at_end(quad)
+                    .map_err(pdfium_err)?;
+            }
+            MarkupKind::Underline => {
+                let mut annotation = pdf_page
+                    .annotations_mut()
+                    .create_underline_annotation()
+                    .map_err(pdfium_err)?;
+                position_markup(&mut annotation, color, x, y, width, height)?;
+                annotation
+                    .attachment_points_mut()
+                    .create_attachment_point_at_end(quad)
+                    .map_err(pdfium_err)?;
+            }
+            MarkupKind::Strikeout => {
+                let mut annotation = pdf_page
+                    .annotations_mut()
+                    .create_strikeout_annotation()
+                    .map_err(pdfium_err)?;
+                position_markup(&mut annotation, color, x, y, width, height)?;
+                annotation
+                    .attachment_points_mut()
+                    .create_attachment_point_at_end(quad)
+                    .map_err(pdfium_err)?;
+            }
+            MarkupKind::Squiggly => {
+                let mut annotation = pdf_page
+                    .annotations_mut()
+                    .create_squiggly_annotation()
+                    .map_err(pdfium_err)?;
+                position_markup(&mut annotation, color, x, y, width, height)?;
+                annotation
+                    .attachment_points_mut()
+                    .create_attachment_point_at_end(quad)
+                    .map_err(pdfium_err)?;
+            }
+        }
 
         self.dirty = true;
         Ok(())

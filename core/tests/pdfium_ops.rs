@@ -6,6 +6,7 @@
 
 use noctua_core_test_common as common;
 
+use noctua_core::pdfium_ops::model::MarkupKind;
 use noctua_core::pdfium_ops::model::palette;
 use noctua_core::pdfium_ops::{BindSource, Command, CommandResult, PdfOpsManager};
 use std::path::{Path, PathBuf};
@@ -371,9 +372,10 @@ fn add_annotations_and_save() {
     let mut mgr = PdfOpsManager::new();
     assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
     assert!(matches!(
-        mgr.execute(Command::AddTextAnnotation {
+        mgr.execute(Command::AddFreeTextAnnotation {
             page: 1,
             text: "test note".to_string(),
+            font_size: 16.0,
             x: 40.0,
             y: 40.0,
             width: 60.0,
@@ -394,11 +396,24 @@ fn add_annotations_and_save() {
         CommandResult::Ok
     ));
     assert!(matches!(
-        mgr.execute(Command::AddHighlightAnnotation {
+        mgr.execute(Command::AddMarkupAnnotation {
             page: 2,
+            kind: MarkupKind::Highlight,
             color: palette::YELLOW,
             x: 200.0,
             y: 300.0,
+            width: 120.0,
+            height: 20.0,
+        }),
+        CommandResult::Ok
+    ));
+    assert!(matches!(
+        mgr.execute(Command::AddMarkupAnnotation {
+            page: 2,
+            kind: MarkupKind::Underline,
+            color: palette::BLUE,
+            x: 200.0,
+            y: 280.0,
             width: 120.0,
             height: 20.0,
         }),

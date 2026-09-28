@@ -6,7 +6,7 @@
 use cosmic::iced::alignment::{Horizontal, Vertical};
 use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
-use cosmic::iced::{Alignment, ContentFit, Length};
+use cosmic::iced::{Alignment, ContentFit, Length, Point};
 use cosmic::prelude::*;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::widget::{self, menu, tab_bar};
@@ -18,7 +18,9 @@ use noctua_core::storage;
 
 use crate::fl;
 use crate::message::{MenuAction, Message};
-use crate::model::{AppModel, CurrentTarget, DocumentPreview, TabContent, ZoomState};
+use crate::model::{
+    AnnotationTool, AppModel, CurrentTarget, DocumentPreview, TabContent, ZoomState,
+};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
 use crate::widget::fresh_image::FreshImage;
@@ -57,12 +59,19 @@ pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
         // Content side: the view toolbar floats bottom-center like
         // cosmic-viewer's, below the viewer. Shown for a selected folder
         // entry or an active annotation tab.
-        let has_toolbar = app.current_target.is_some()
-            || app.active_tab().is_some_and(|tab| {
-                matches!(app.tabs.get(&tab), Some(TabContent::Annotation { .. }))
-            });
-        let mut content = widget::column::with_capacity(2).spacing(space.space_xxs);
+        let is_annotation = app
+            .active_tab()
+            .is_some_and(|tab| matches!(app.tabs.get(&tab), Some(TabContent::Annotation { .. })));
+        let has_toolbar = app.current_target.is_some() || is_annotation;
+        let mut content = widget::column::with_capacity(3).spacing(space.space_xxs);
         content = content.push(content_view(app));
+        if is_annotation {
+            content = content.push(
+                widget::container(annotation_toolbar(app))
+                    .center_x(Length::Fill)
+                    .padding([space.space_xxs, 0, space.space_xxs, 0]),
+            );
+        }
         if has_toolbar {
             content = content.push(
                 widget::container(view_toolbar(app))
@@ -173,12 +182,15 @@ fn annotation_strip(app: &AppModel) -> Element<'_, Message> {
 }
 
 /// Build the fitted/zoomable viewer for a rendered image, sharing the
-/// `Viewer` wiring between single images and annotation pages.
+/// `Viewer` wiring between single images and annotation pages. `on_click` is
+/// set only in annotation mode; it turns a left click into a position report
+/// instead of a pan.
 fn viewer_element(
     handle: &widget::image::Handle,
     view: ZoomState,
     modifiers: Modifiers,
     on_state_change: impl Fn(f32, f32, f32) -> Message + 'static,
+    on_click: Option<Box<dyn Fn(Point) -> Message>>,
 ) -> Element<'static, Message> {
     let space = cosmic::theme::spacing();
     let content_fit = if view.fit {
@@ -193,18 +205,20 @@ fn viewer_element(
     };
 
     let handle_id = handle.id();
-    widget::container(FreshImage::new(
-        Viewer::new(handle.clone())
-            .content_fit(content_fit)
-            .modifiers(modifiers)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .with_state(scale, offset_x, offset_y)
-            .on_state_change(on_state_change),
-        handle_id,
-    ))
-    .padding(space.space_m)
-    .into()
+    let mut viewer = Viewer::new(handle.clone())
+        .content_fit(content_fit)
+        .modifiers(modifiers)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .with_state(scale, offset_x, offset_y)
+        .on_state_change(on_state_change);
+    if let Some(on_click) = on_click {
+        viewer = viewer.on_click(on_click);
+    }
+
+    widget::container(FreshImage::new(viewer, handle_id))
+        .padding(space.space_m)
+        .into()
 }
 
 /// Build the right-click context menu for a source file: open it for editing
@@ -304,7 +318,7 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
         return empty_state("image-x-generic-symbolic", fl!("select-hint"));
     };
 
-    viewer_element(
+    let viewer = viewer_element(
         &current.handle,
         state.view,
         app.keyboard_modifiers,
@@ -314,7 +328,77 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
             offset_x,
             offset_y,
         },
-    )
+        Some(Box::new(move |point| Message::AnnotationPointerClicked {
+            tab,
+            x: point.x,
+            y: point.y,
+        })),
+    );
+
+    if state.pending_text.is_some() {
+        let space = cosmic::theme::spacing();
+        let input = cosmic::widget::text_input(fl!("text-annotation-placeholder"), "")
+            .id(widget::Id::new("annotation-text"))
+            .on_submit(Message::AnnotationTextSubmit)
+            .width(Length::Fixed(280.0));
+        let overlay = widget::container(input)
+            .width(Length::Fill)
+            .align_x(Alignment::Center)
+            .padding([space.space_s, 0, 0, 0]);
+        cosmic::iced::widget::Stack::with_children([viewer, overlay.into()]).into()
+    } else {
+        viewer
+    }
+}
+
+/// Free-text font size presets, in points.
+const FONT_SIZE_PRESETS: [f32; 8] = [12.0, 16.0, 20.0, 24.0, 32.0, 48.0, 64.0, 96.0];
+
+/// The annotation toolbar: tool toggles plus the options of the active tool.
+fn annotation_toolbar(app: &AppModel) -> Element<'_, Message> {
+    let space = cosmic::theme::spacing();
+    let Some(tab) = app.active_tab() else {
+        return widget::container(widget::text::body("")).into();
+    };
+    let Some(state) = app.annotation_ui.get(&tab) else {
+        return widget::container(widget::text::body("")).into();
+    };
+
+    let text_active = state.active_tool == Some(AnnotationTool::Text);
+
+    let mut row = widget::row::with_capacity(2)
+        .spacing(space.space_xxs)
+        .align_y(Alignment::Center);
+
+    row = row.push(
+        widget::button::icon(widget::icon::from_name("insert-text-symbolic"))
+            .tooltip(fl!("text-tool"))
+            .selected(text_active)
+            .on_press(Message::AnnotationToolToggled(AnnotationTool::Text)),
+    );
+
+    if text_active {
+        let labels: Vec<String> = FONT_SIZE_PRESETS
+            .iter()
+            .map(|size| format!("{size:.0} pt"))
+            .collect();
+        let selected = FONT_SIZE_PRESETS
+            .iter()
+            .position(|size| (*size - state.font_size_pt).abs() < f32::EPSILON);
+        row = row.push(cosmic::widget::dropdown(labels, selected, |index| {
+            Message::AnnotationFontSizeChanged(FONT_SIZE_PRESETS[index])
+        }));
+    }
+
+    widget::container(row)
+        .class(cosmic::style::Container::Primary)
+        .padding([
+            space.space_xxs,
+            space.space_s,
+            space.space_xxs,
+            space.space_s,
+        ])
+        .into()
 }
 
 /// The active tab's continuous PDF preview, if it matches the current target.
@@ -494,6 +578,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                     offset_x,
                     offset_y,
                 },
+                None,
             );
             with_file_context_menu(app, &path, viewer)
         }

@@ -27,10 +27,10 @@ use noctua_core::storage::thumbcache::ThumbSize;
 use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{
-    AnnotationUiState, AppModel, CurrentImage, CurrentTarget, DocumentPreview, MAX_SCALE,
-    MIN_SCALE, NavEntry, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, Rgba,
-    SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent, TabUiState, ZOOM_STEP,
-    ZoomState,
+    AnnotationTool, AnnotationUiState, AppModel, CurrentImage, CurrentTarget, DocumentPreview,
+    MAX_SCALE, MIN_SCALE, NavEntry, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID,
+    PageSlot, Rgba, SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent,
+    TabUiState, ZOOM_STEP, ZoomState,
 };
 
 /// Estimated strip tile height including spacing, for lazy thumbnails.
@@ -1328,6 +1328,27 @@ impl AppModel {
         })
     }
 
+    /// Map a click in native image pixels (origin top-left) to the selected
+    /// page's coordinates in points (origin bottom-left). Only valid while the
+    /// page has not been rotated/flipped in the view.
+    fn annotation_page_coords(&self, tab: Entity, x: f32, y: f32) -> Option<(f32, f32)> {
+        let state = self.annotation_ui.get(&tab)?;
+        let current = state.current.as_ref()?;
+        let (image_w, image_h) = (current.rgba.0 as f32, current.rgba.1 as f32);
+        if image_w == 0.0 || image_h == 0.0 {
+            return None;
+        }
+        let (page_w, page_h) = *state.page_sizes.get(state.selected as usize - 1)?;
+        if page_w == 0.0 || page_h == 0.0 {
+            return None;
+        }
+        let scale_x = image_w / page_w;
+        let scale_y = image_h / page_h;
+        let page_x = x / scale_x;
+        let page_y = (image_h - y) / scale_y;
+        Some((page_x, page_y))
+    }
+
     /// Start listing a folder and open a tab for it.
     fn open_folder(&mut self, dir: PathBuf) -> iced::Task<cosmic::Action<Message>> {
         let (tab, list) = self.open_folder_tab(dir);
@@ -1963,6 +1984,87 @@ impl AppModel {
                 let title = self.update_title();
                 return cosmic::task::batch(vec![sizes, title]);
             }
+
+            Message::AnnotationToolToggled(tool) => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let Some(state) = self.annotation_ui.get_mut(&tab) else {
+                    return iced::Task::none();
+                };
+                state.active_tool = if state.active_tool == Some(tool) {
+                    None
+                } else {
+                    Some(tool)
+                };
+                state.pending_text = None;
+            }
+
+            Message::AnnotationFontSizeChanged(size) => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    state.font_size_pt = size;
+                }
+            }
+
+            Message::AnnotationPointerClicked { tab, x, y } => {
+                let is_text = self
+                    .annotation_ui
+                    .get(&tab)
+                    .is_some_and(|state| state.active_tool == Some(AnnotationTool::Text));
+                if !is_text {
+                    return iced::Task::none();
+                }
+                let Some(position) = self.annotation_page_coords(tab, x, y) else {
+                    return iced::Task::none();
+                };
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    state.pending_text = Some(position);
+                }
+            }
+
+            Message::AnnotationTextSubmit(text) => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let (document, page, font_size, position) = {
+                    let state = match self.annotation_ui.get(&tab) {
+                        Some(state) => state,
+                        None => return iced::Task::none(),
+                    };
+                    let Some(position) = state.pending_text else {
+                        return iced::Task::none();
+                    };
+                    let document = match self.tabs.get(&tab) {
+                        Some(TabContent::Annotation { document, .. }) => *document,
+                        _ => return iced::Task::none(),
+                    };
+                    (document, state.selected, state.font_size_pt, position)
+                };
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    state.pending_text = None;
+                }
+                let (x, y) = position;
+                let width = 200.0;
+                let height = font_size * 1.5;
+                return self.annotation_mutate(
+                    tab,
+                    document,
+                    Command::AddFreeTextAnnotation {
+                        page,
+                        text,
+                        font_size,
+                        x,
+                        y,
+                        width,
+                        height,
+                    },
+                );
+            }
+
+            Message::AnnotationTextChanged(_text) => {}
 
             Message::AnnotationViewerStateChanged {
                 tab,

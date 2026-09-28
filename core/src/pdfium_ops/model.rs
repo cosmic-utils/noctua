@@ -36,6 +36,19 @@ pub struct AnnotationColor {
     pub alpha: u8,
 }
 
+/// Kinds of text markup: how a selected text region is marked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkupKind {
+    /// Transparent background behind the text.
+    Highlight,
+    /// A line under the text.
+    Underline,
+    /// A line through the text.
+    Strikeout,
+    /// A wavy line under the text.
+    Squiggly,
+}
+
 impl AnnotationColor {
     pub const fn rgb(red: u8, green: u8, blue: u8) -> Self {
         Self {
