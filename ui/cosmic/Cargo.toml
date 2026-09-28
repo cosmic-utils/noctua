@@ -31,7 +31,7 @@ rust-embed = "8.8.0"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
-rev = "87ab8179e1bd9880239c340855ae8862034bd0e8"
+rev = "03d7dcb832bc6d15bc1bb07327a1aa426b2d5bc0"
 features = [
     "a11y",
     "about",
