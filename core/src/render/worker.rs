@@ -65,6 +65,9 @@ pub enum Job {
     /// Render the first page of a PDF file as a thumbnail and store it
     /// in the freedesktop thumbnail cache.
     RenderThumb { path: PathBuf, size: ThumbSize },
+    /// Render a raster or SVG file downscaled to the display size limit
+    /// (see `render::DISPLAY_MAX_EDGE`) for its GPU texture.
+    Display { path: PathBuf },
 }
 
 /// Result of a finished job.
@@ -223,6 +226,22 @@ impl SharedWorker {
         }
     }
 
+    /// Render a raster or SVG file downscaled so its long edge stays at or
+    /// below `render::DISPLAY_MAX_EDGE`. Returns (width, height, rgba).
+    pub async fn display(&self, path: PathBuf) -> Option<(u32, u32, Vec<u8>)> {
+        match self
+            .execute(Priority::VisiblePage, Job::Display { path })
+            .await
+        {
+            Ok(JobResult::Rendered {
+                width,
+                height,
+                rgba_data,
+            }) => Some((width, height, rgba_data)),
+            _ => None,
+        }
+    }
+
     /// Thumbnail for a file: freedesktop cache first; on a miss the render
     /// happens on the worker thread.
     pub async fn thumbnail(&self, path: PathBuf, size: ThumbSize) -> Option<(u32, u32, Vec<u8>)> {
@@ -348,6 +367,7 @@ fn run_job(documents: &mut HashMap<DocumentId, PdfOpsManager>, next_id: &mut u64
             JobResult::Op { document, result }
         }
         Job::Render { path, page, zoom } => render_file(&path, page, zoom),
+        Job::Display { path } => render_display_job(&path),
         Job::RenderPageThumbs { path, pages, zoom } => render_page_thumbs(&path, &pages, zoom),
         Job::FilePageCount { path } => file_page_count(&path),
         Job::FilePageSizes { path } => file_page_sizes(&path),
@@ -411,6 +431,19 @@ fn render_file(path: &std::path::Path, page: Option<u32>, zoom: f32) -> JobResul
             },
             Err(e) => JobResult::Error(format!("{e:?}")),
         }
+    }
+}
+
+/// Render a raster or SVG file downscaled to the display size limit for its
+/// GPU texture.
+fn render_display_job(path: &std::path::Path) -> JobResult {
+    match crate::render::render_display(path) {
+        Ok(rendered) => JobResult::Rendered {
+            width: rendered.width,
+            height: rendered.height,
+            rgba_data: rendered.rgba_data,
+        },
+        Err(e) => JobResult::Error(format!("{e:?}")),
     }
 }
 

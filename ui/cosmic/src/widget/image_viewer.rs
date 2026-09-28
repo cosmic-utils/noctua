@@ -476,6 +476,12 @@ where
             });
         };
 
+        // Load the image synchronously so it is ready to draw this frame.
+        // draw_image alone renders nothing while the async upload is pending
+        // and its follow-up redraw is unreliable; this matches cosmic-viewer's
+        // canvas, which calls load_image before drawing.
+        let _ = renderer.load_image(&self.handle);
+
         renderer.with_layer(bounds, render);
     }
 }

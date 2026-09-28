@@ -861,12 +861,13 @@ impl AppModel {
         state.strip.splice(start + 1..start + 1, page_entries);
     }
 
-    /// Render a single-image target (raster/SVG, or a single-page PDF) at
-    /// native resolution. The worker dispatches by document format.
+    /// Render a single-image target (raster/SVG) downscaled to the display
+    /// size limit for its GPU texture. Zooming beyond that re-renders; see
+    /// `render::DISPLAY_MAX_EDGE`.
     fn render_file_task(&self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
         let worker = self.worker.clone();
         cosmic::task::future(async move {
-            let rgba = worker.render(path.clone(), None, 1.0).await;
+            let rgba = worker.display(path.clone()).await;
             Message::FileRendered { path, rgba }
         })
     }

@@ -21,7 +21,6 @@ use crate::message::{MenuAction, Message};
 use crate::model::{AnnotationTool, AppModel, CurrentTarget, TabContent, ZoomState};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
-use crate::widget::fresh_image::FreshImage;
 use crate::widget::image_viewer::Viewer;
 use crate::widget::scroll_zoom::ScrollZoom;
 use crate::widget::thumbnail_strip::thumbnail_strip;
@@ -195,7 +194,6 @@ fn viewer_element(
         (view.scale, view.offset_x, view.offset_y)
     };
 
-    let handle_id = handle.id();
     let mut viewer = Viewer::new(handle.clone())
         .content_fit(content_fit)
         .modifiers(modifiers)
@@ -207,9 +205,7 @@ fn viewer_element(
         viewer = viewer.on_click(on_click);
     }
 
-    widget::container(FreshImage::new(viewer, handle_id))
-        .padding(space.space_m)
-        .into()
+    widget::container(viewer).padding(space.space_m).into()
 }
 
 /// Build the right-click context menu for a source file: open it for editing
