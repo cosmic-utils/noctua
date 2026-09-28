@@ -18,9 +18,7 @@ use noctua_core::storage;
 
 use crate::fl;
 use crate::message::{MenuAction, Message};
-use crate::model::{
-    AnnotationTool, AppModel, CurrentTarget, DocumentPreview, TabContent, ZoomState,
-};
+use crate::model::{AnnotationTool, AppModel, CurrentTarget, TabContent, ZoomState};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_state::empty_state;
 use crate::widget::fresh_image::FreshImage;
@@ -65,13 +63,6 @@ pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
         let has_toolbar = app.current_target.is_some() || is_annotation;
         let mut content = widget::column::with_capacity(3).spacing(space.space_xxs);
         content = content.push(content_view(app));
-        if is_annotation {
-            content = content.push(
-                widget::container(annotation_toolbar(app))
-                    .center_x(Length::Fill)
-                    .padding([space.space_xxs, 0, space.space_xxs, 0]),
-            );
-        }
         if has_toolbar {
             content = content.push(
                 widget::container(view_toolbar(app))
@@ -354,62 +345,6 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
 /// Free-text font size presets, in points.
 const FONT_SIZE_PRESETS: [f32; 8] = [12.0, 16.0, 20.0, 24.0, 32.0, 48.0, 64.0, 96.0];
 
-/// The annotation toolbar: tool toggles plus the options of the active tool.
-fn annotation_toolbar(app: &AppModel) -> Element<'_, Message> {
-    let space = cosmic::theme::spacing();
-    let Some(tab) = app.active_tab() else {
-        return widget::container(widget::text::body("")).into();
-    };
-    let Some(state) = app.annotation_ui.get(&tab) else {
-        return widget::container(widget::text::body("")).into();
-    };
-
-    let text_active = state.active_tool == Some(AnnotationTool::Text);
-
-    let mut row = widget::row::with_capacity(2)
-        .spacing(space.space_xxs)
-        .align_y(Alignment::Center);
-
-    row = row.push(
-        widget::button::icon(widget::icon::from_name("insert-text-symbolic"))
-            .tooltip(fl!("text-tool"))
-            .selected(text_active)
-            .on_press(Message::AnnotationToolToggled(AnnotationTool::Text)),
-    );
-
-    if text_active {
-        let labels: Vec<String> = FONT_SIZE_PRESETS
-            .iter()
-            .map(|size| format!("{size:.0} pt"))
-            .collect();
-        let selected = FONT_SIZE_PRESETS
-            .iter()
-            .position(|size| (*size - state.font_size_pt).abs() < f32::EPSILON);
-        row = row.push(cosmic::widget::dropdown(labels, selected, |index| {
-            Message::AnnotationFontSizeChanged(FONT_SIZE_PRESETS[index])
-        }));
-    }
-
-    widget::container(row)
-        .class(cosmic::style::Container::Primary)
-        .padding([
-            space.space_xxs,
-            space.space_s,
-            space.space_xxs,
-            space.space_s,
-        ])
-        .into()
-}
-
-/// The active tab's continuous PDF preview, if it matches the current target.
-fn active_preview(app: &AppModel) -> Option<&DocumentPreview> {
-    let tab = app.active_tab()?;
-    let state = app.tab_ui.get(&tab)?;
-    let preview = state.preview.as_ref()?;
-    matches!(&app.current_target, Some(CurrentTarget::File { path }) if path == &preview.path)
-        .then_some(preview)
-}
-
 /// A toolbar icon button with a tooltip, publishing the message when pressed.
 fn icon_button(name: &'static str, tooltip: String, message: Message) -> Element<'static, Message> {
     widget::button::icon(widget::icon::from_name(name))
@@ -419,9 +354,10 @@ fn icon_button(name: &'static str, tooltip: String, message: Message) -> Element
 }
 
 /// The view toolbar: navigation, transform (rotate/flip) and zoom actions for
-/// the active document, matching cosmic-viewer's bottom-center panel. Pure UI
-/// — every button is a message routed to the core. The panel is identical for
-/// single images and the continuous PDF preview.
+/// the active document, matching cosmic-viewer's bottom-center panel. In
+/// annotation mode it additionally leads with the annotation tools, so a
+/// single toolbar covers both modes instead of a second panel. Pure UI —
+/// every button is a message routed to the core.
 fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
     let space = cosmic::theme::spacing();
     let (fit, scale) = current_zoom(app);
@@ -457,7 +393,35 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
         None => (Message::RotateCounterClockwise, Message::RotateClockwise),
     };
 
-    ResponsiveToolbar::new()
+    let mut toolbar = ResponsiveToolbar::new();
+
+    // Annotation tools (text + font size) lead the toolbar in annotation mode.
+    if let Some(state) = app.active_tab().and_then(|tab| match app.tabs.get(&tab) {
+        Some(TabContent::Annotation { .. }) => app.annotation_ui.get(&tab),
+        _ => None,
+    }) {
+        let text_active = state.active_tool == Some(AnnotationTool::Text);
+        toolbar = toolbar.start(
+            widget::button::icon(widget::icon::from_name("insert-text-symbolic"))
+                .tooltip(fl!("text-tool"))
+                .selected(text_active)
+                .on_press(Message::AnnotationToolToggled(AnnotationTool::Text)),
+        );
+        if text_active {
+            let labels: Vec<String> = FONT_SIZE_PRESETS
+                .iter()
+                .map(|size| format!("{size:.0} pt"))
+                .collect();
+            let selected = FONT_SIZE_PRESETS
+                .iter()
+                .position(|size| (*size - state.font_size_pt).abs() < f32::EPSILON);
+            toolbar = toolbar.start(cosmic::widget::dropdown(labels, selected, |index| {
+                Message::AnnotationFontSizeChanged(FONT_SIZE_PRESETS[index])
+            }));
+        }
+    }
+
+    toolbar = toolbar
         .start(icon_button(
             "go-previous-symbolic",
             fl!("previous"),
@@ -526,8 +490,9 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
             "view-fullscreen-symbolic",
             fl!("fullscreen"),
             Message::ToggleFullscreen,
-        ))
-        .view()
+        ));
+
+    toolbar.view()
 }
 
 /// The content area view.
@@ -548,7 +513,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
     }
 
     // Continuous preview of the selected multi-page PDF.
-    if let Some(preview) = active_preview(app) {
+    if let Some(preview) = app.active_preview() {
         let path = preview.path.clone();
         let viewer = document_preview(preview, app.keyboard_modifiers);
         return with_file_context_menu(app, &path, viewer);

@@ -10,4 +10,3 @@ pub(crate) mod image_viewer;
 pub(crate) mod scroll_zoom;
 pub(crate) mod thumbnail_strip;
 pub(crate) mod toolbar;
-pub(crate) mod viewport;

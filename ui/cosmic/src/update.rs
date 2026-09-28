@@ -310,12 +310,10 @@ impl AppModel {
                 .get_mut(&tab)
                 .map(|state| &mut state.view);
         }
-        let target = self.current_target.clone()?;
-        if let CurrentTarget::File { path } = &target
-            && self.has_preview(path)
-        {
+        if self.active_preview().is_some() {
             return None;
         }
+        let target = self.current_target.clone()?;
         Some(self.zoom_states.entry(target).or_default())
     }
 
@@ -328,12 +326,10 @@ impl AppModel {
             let image = current.as_mut()?;
             return Some((image, view));
         }
-        let target = self.current_target.clone()?;
-        if let CurrentTarget::File { path } = &target
-            && self.has_preview(path)
-        {
+        if self.active_preview().is_some() {
             return None;
         }
+        let target = self.current_target.clone()?;
         let image = self.current_image.as_mut()?;
         let state = self.zoom_states.entry(target).or_default();
         Some((image, state))
@@ -497,15 +493,14 @@ impl AppModel {
         })
     }
 
-    /// Whether the active tab has a built preview for `path`. Only multi-page
-    /// PDFs build a preview, so this is the "is a multi-page PDF" check
-    /// without re-reading file bytes.
-    fn has_preview(&self, path: &PathBuf) -> bool {
-        self.active_tab()
-            .and_then(|tab| self.tab_ui.get(&tab))
-            .and_then(|state| state.preview.as_ref())
-            .map(|preview| preview.path == *path)
-            .unwrap_or(false)
+    /// The active tab's continuous PDF preview, if it matches the current
+    /// target. Only multi-page PDFs build a preview, so this is also the
+    /// "is a multi-page PDF" check without re-reading file bytes.
+    pub(crate) fn active_preview(&self) -> Option<&DocumentPreview> {
+        let tab = self.active_tab()?;
+        let preview = self.tab_ui.get(&tab)?.preview.as_ref()?;
+        matches!(&self.current_target, Some(CurrentTarget::File { path }) if path == &preview.path)
+            .then_some(preview)
     }
 
     /// Build the preview once the page sizes are known and start the
@@ -1569,9 +1564,7 @@ impl AppModel {
             transform_viewable(image, state, rotation, flip_h, flip_v);
             return iced::Task::none();
         }
-        if let Some(CurrentTarget::File { path }) = self.current_target.clone()
-            && self.has_preview(&path)
-        {
+        if let Some(path) = self.active_preview().map(|preview| preview.path.clone()) {
             return self.transform_preview(path, rotation, flip_h, flip_v);
         }
         iced::Task::none()
