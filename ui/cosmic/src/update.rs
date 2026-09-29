@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use cosmic::iced::ContentFit;
+use cosmic::iced::Size;
 use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::mouse;
@@ -333,6 +335,60 @@ impl AppModel {
         let image = self.current_image.as_mut()?;
         let state = self.zoom_states.entry(target).or_default();
         Some((image, state))
+    }
+
+    /// The zoom factor currently displayed for the active view, in native
+    /// pixels (1.0 = 100 %). In fit mode the factor is derived from the
+    /// viewer's reported viewport; the PDF preview owns its own absolute zoom.
+    pub(crate) fn effective_zoom(&self) -> f32 {
+        // The continuous PDF preview manages its own zoom.
+        if let Some(CurrentTarget::File { path }) = &self.current_target
+            && let Some(preview) = self
+                .active_tab()
+                .and_then(|tab| self.tab_ui.get(&tab))
+                .and_then(|state| state.preview.as_ref())
+                .filter(|preview| &preview.path == path)
+        {
+            return preview.zoom;
+        }
+
+        let (image, view) = if let Some(tab) = self.active_annotation() {
+            let Some(state) = self.annotation_ui.get(&tab) else {
+                return 1.0;
+            };
+            let Some(image) = state.current.as_ref() else {
+                return 1.0;
+            };
+            (image, state.view)
+        } else {
+            let Some(target) = self.current_target.as_ref() else {
+                return 1.0;
+            };
+            let Some(image) = self.current_image.as_ref() else {
+                return 1.0;
+            };
+            (
+                image,
+                self.zoom_states.get(target).copied().unwrap_or_default(),
+            )
+        };
+
+        // Outside fit the factor is exactly the stored scale.
+        if !view.fit {
+            return view.scale;
+        }
+
+        // In fit mode it follows from the fitted size. Uses the same
+        // `ContentFit` the viewer draws with, so both agree.
+        let (image_w, image_h) = (image.rgba.0 as f32, image.rgba.1 as f32);
+        let viewport = self.viewer_bounds.get();
+        if image_w <= 0.0 || image_h <= 0.0 || viewport.width <= 0.0 || viewport.height <= 0.0 {
+            return 1.0;
+        }
+        ContentFit::ScaleDown
+            .fit(Size::new(image_w, image_h), viewport)
+            .width
+            / image_w
     }
 
     /// Rebuild the thumbnail strip of a tab. The selection survives when
@@ -969,12 +1025,15 @@ impl AppModel {
     /// Change the zoom by `steps` (signed). Single images and annotation pages
     /// are scaled by the viewer; the PDF preview re-renders at the new zoom.
     fn zoom_by(&mut self, steps: f32) -> iced::Task<cosmic::Action<Message>> {
+        // In fit mode the effective factor lives in the viewer, not in the
+        // model; read it before borrowing the zoom state.
+        let displayed = self.effective_zoom();
         if let Some(state) = self.active_zoom_state() {
             if state.fit {
-                // Leave fit. Zoom in lands on native 100 %; zoom out starts
-                // one step below native.
+                // Leave fit, continuing from the displayed factor (the fit
+                // representation) instead of jumping to 1:1.
                 state.fit = false;
-                state.scale = if steps > 0.0 { 1.0 } else { 1.0 / ZOOM_STEP };
+                state.scale = (displayed * ZOOM_STEP.powf(steps)).clamp(MIN_SCALE, MAX_SCALE);
             } else {
                 state.scale = (state.scale * ZOOM_STEP.powf(steps)).clamp(MIN_SCALE, MAX_SCALE);
             }

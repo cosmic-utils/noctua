@@ -6,13 +6,15 @@
 use cosmic::iced::alignment::{Horizontal, Vertical};
 use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
-use cosmic::iced::{Alignment, ContentFit, Length, Point};
+use cosmic::iced::{Alignment, ContentFit, Length, Point, Size};
 use cosmic::prelude::*;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::widget::{self, menu, tab_bar};
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
 
 use noctua_core::storage;
 
@@ -179,6 +181,7 @@ fn viewer_element(
     handle: &widget::image::Handle,
     view: ZoomState,
     modifiers: Modifiers,
+    reported_bounds: Rc<Cell<Size>>,
     on_state_change: impl Fn(f32, f32, f32) -> Message + 'static,
     on_click: Option<Box<dyn Fn(Point) -> Message>>,
 ) -> Element<'static, Message> {
@@ -197,6 +200,7 @@ fn viewer_element(
     let mut viewer = Viewer::new(handle.clone())
         .content_fit(content_fit)
         .modifiers(modifiers)
+        .reported_bounds(reported_bounds)
         .width(Length::Fill)
         .height(Length::Fill)
         .with_state(scale, offset_x, offset_y)
@@ -309,6 +313,7 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
         &current.handle,
         state.view,
         app.keyboard_modifiers,
+        app.viewer_bounds.clone(),
         move |scale, offset_x, offset_y| Message::AnnotationViewerStateChanged {
             tab,
             scale,
@@ -356,12 +361,7 @@ fn icon_button(name: &'static str, tooltip: String, message: Message) -> Element
 /// every button is a message routed to the core.
 fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
     let space = cosmic::theme::spacing();
-    let (fit, scale) = current_zoom(app);
-    let zoom_label = if fit {
-        fl!("fit")
-    } else {
-        format!("{:.0}%", scale * 100.0)
-    };
+    let zoom_label = format!("{:.0}%", app.effective_zoom() * 100.0);
 
     // In an annotation tab, rotation edits the selected page in the document
     // (persistent); everywhere else it only turns the view. The flip buttons
@@ -528,6 +528,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                 &image.handle,
                 state,
                 app.keyboard_modifiers,
+                app.viewer_bounds.clone(),
                 move |scale, offset_x, offset_y| Message::ViewerStateChanged {
                     target: target.clone(),
                     scale,
@@ -600,37 +601,6 @@ fn position_label(app: &AppModel) -> String {
     };
 
     format!("{} / {total}", position + 1)
-}
-
-/// The current zoom of the active target: `(fit, scale)`.
-fn current_zoom(app: &AppModel) -> (bool, f32) {
-    if let Some(tab) = app.active_tab()
-        && matches!(app.tabs.get(&tab), Some(TabContent::Annotation { .. }))
-        && let Some(state) = app.annotation_ui.get(&tab)
-    {
-        return (state.view.fit, state.view.scale);
-    }
-
-    let Some(target) = &app.current_target else {
-        return (true, 1.0);
-    };
-
-    // PDF previews keep their zoom in the preview itself. A preview exists
-    // only for PDFs, so matching its path is enough — no need to re-read the
-    // file's magic bytes on every frame.
-    if let CurrentTarget::File { path } = target
-        && let Some(zoom) = app
-            .active_tab()
-            .and_then(|tab| app.tab_ui.get(&tab))
-            .and_then(|state| state.preview.as_ref())
-            .filter(|preview| &preview.path == path)
-            .map(|preview| preview.zoom)
-    {
-        return (false, zoom);
-    }
-
-    let state = app.zoom_states.get(target).copied().unwrap_or_default();
-    (state.fit, state.scale)
 }
 
 /// Convert a wheel scroll delta into zoom steps (lines; ~50 px per line).

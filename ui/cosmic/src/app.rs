@@ -4,10 +4,13 @@
 // Application shell: the cosmic::Application implementation. State lives in
 // model.rs, message handling in update.rs and widgets in view.rs.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use cosmic::app::context_drawer;
 use cosmic::cosmic_config::CosmicConfigEntry;
+use cosmic::iced::Size;
 use cosmic::iced::keyboard::key::Named;
 use cosmic::widget::about::About;
 use cosmic::widget::menu::action::MenuAction as _;
@@ -80,6 +83,7 @@ impl cosmic::Application for AppModel {
             current_target: None,
             current_image: None,
             zoom_states: HashMap::new(),
+            viewer_bounds: Rc::new(Cell::new(Size::ZERO)),
             keyboard_modifiers: iced::keyboard::Modifiers::default(),
             show_nav_panel: true,
             worker: SharedWorker::spawn(),

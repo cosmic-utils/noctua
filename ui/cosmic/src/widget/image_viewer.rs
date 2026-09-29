@@ -3,6 +3,9 @@
 //
 // Zoom and pan image viewer with external state control.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use cosmic::iced::advanced::image as img_renderer;
 use cosmic::iced::advanced::layout;
 use cosmic::iced::advanced::renderer;
@@ -45,6 +48,9 @@ pub(crate) struct Viewer<Handle, Message> {
     on_state_change: Option<StateChangeCallback<Message>>,
     /// Optional callback notified when the image is clicked (annotation mode).
     on_click: Option<ClickCallback<Message>>,
+    /// Optional cell the widget writes its viewport into each frame, so the
+    /// app can derive the effective zoom factor (incl. fit mode).
+    reported_bounds: Option<Rc<Cell<Size>>>,
 }
 
 impl<Handle, Message> Viewer<Handle, Message> {
@@ -59,6 +65,7 @@ impl<Handle, Message> Viewer<Handle, Message> {
             external_state: None,
             on_state_change: None,
             on_click: None,
+            reported_bounds: None,
         }
     }
 
@@ -91,6 +98,12 @@ impl<Handle, Message> Viewer<Handle, Message> {
     /// Sets the [`ContentFit`] of the viewer.
     pub(crate) fn content_fit(mut self, content_fit: ContentFit) -> Self {
         self.content_fit = content_fit;
+        self
+    }
+
+    /// Sets the cell the viewer reports its viewport into.
+    pub(crate) fn reported_bounds(mut self, cell: Rc<Cell<Size>>) -> Self {
+        self.reported_bounds = Some(cell);
         self
     }
 
@@ -463,6 +476,13 @@ where
         );
 
         let translation = image_translation(state, bounds, final_size, self.content_fit);
+
+        // Report the viewport so the app can derive the effective zoom factor
+        // (fit included). The viewport is stable across image changes, so the
+        // toolbar never reads a stale value.
+        if let Some(cell) = &self.reported_bounds {
+            cell.set(bounds.size());
+        }
 
         let drawing_bounds = Rectangle::new(bounds.position(), final_size);
 

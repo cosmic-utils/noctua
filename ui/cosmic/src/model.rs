@@ -3,9 +3,12 @@
 //
 // UI state: pure data of the application model. No tasks, no widgets.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 
+use cosmic::iced::Size;
 use cosmic::iced::keyboard::Modifiers;
 use cosmic::widget;
 use cosmic::widget::about::About;
@@ -280,6 +283,11 @@ pub struct AppModel {
     pub(crate) current_image: Option<CurrentImage>,
     /// View state per image (zoom/pan/rotate/flip), keyed by the current target.
     pub(crate) zoom_states: HashMap<CurrentTarget, ZoomState>,
+    /// Viewport of the currently drawn viewer, written by the `Viewer` widget
+    /// each frame. Lets the toolbar show the true percentage and lets
+    /// zoom-from-fit continue from the displayed factor instead of jumping to
+    /// 1:1. The viewport is stable across image changes, so reads never lag.
+    pub(crate) viewer_bounds: Rc<Cell<Size>>,
     /// Current keyboard modifiers, tracked so widgets know the state at
     /// creation time (e.g. Ctrl already held).
     pub(crate) keyboard_modifiers: Modifiers,
