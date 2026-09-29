@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// ui/cosmic/src/widget/empty_state.rs
+// ui/cosmic/src/widget/empty_placeholder.rs
 //
 // Reusable centered placeholder: an icon above a hint text.
 
@@ -11,7 +11,10 @@ use cosmic::widget;
 use crate::message::Message;
 
 /// Build a centered icon + hint placeholder.
-pub(crate) fn empty_state(icon_name: &'static str, hint: String) -> Element<'static, Message> {
+pub(crate) fn empty_placeholder(
+    icon_name: &'static str,
+    hint: String,
+) -> Element<'static, Message> {
     let space = cosmic::theme::spacing();
     widget::container(
         widget::column::with_capacity(2)

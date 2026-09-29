@@ -22,7 +22,7 @@ use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{AnnotationTool, AppModel, CurrentTarget, TabContent, ZoomState};
 use crate::widget::document_preview::document_preview;
-use crate::widget::empty_state::empty_state;
+use crate::widget::empty_placeholder::empty_placeholder;
 use crate::widget::image_viewer::Viewer;
 use crate::widget::scroll_zoom::ScrollZoom;
 use crate::widget::thumbnail_strip::thumbnail_strip;
@@ -300,13 +300,13 @@ fn page_context_menu(tab: Entity, page: u32) -> Vec<menu::Tree<Message>> {
 /// The content view of an annotation tab: the selected page, fitted.
 fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     let Some(tab) = app.active_tab() else {
-        return empty_state("image-x-generic-symbolic", fl!("select-hint"));
+        return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
     };
     let Some(state) = app.annotation_ui.get(&tab) else {
-        return empty_state("image-x-generic-symbolic", fl!("select-hint"));
+        return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
     };
     let Some(current) = state.current.as_ref() else {
-        return empty_state("image-x-generic-symbolic", fl!("select-hint"));
+        return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
     };
 
     let viewer = viewer_element(
@@ -498,7 +498,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
             Some(path) => fl!("start-error", path = path),
             None => fl!("open-folder-hint"),
         };
-        return empty_state("folder-open-symbolic", hint);
+        return empty_placeholder("folder-open-symbolic", hint);
     }
 
     // Annotation tab: render its pages.
@@ -518,7 +518,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
     match &app.current_image {
         Some(image) => {
             let Some(target) = app.current_target.clone() else {
-                return empty_state("image-x-generic-symbolic", fl!("select-hint"));
+                return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
             };
             let path = match &target {
                 CurrentTarget::File { path } | CurrentTarget::Page { path, .. } => path.clone(),
@@ -539,7 +539,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
             );
             with_file_context_menu(app, &path, viewer)
         }
-        None => empty_state("image-x-generic-symbolic", fl!("select-hint")),
+        None => empty_placeholder("image-x-generic-symbolic", fl!("select-hint")),
     }
 }
 
