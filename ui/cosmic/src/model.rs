@@ -129,11 +129,9 @@ impl Default for ZoomState {
 /// A rendered image shown in the content area. The handle is created
 /// once per image so the renderer reuses the uploaded texture instead
 /// of re-uploading it on every frame. The raw pixels are kept so the
-/// view can rotate/flip without re-rendering from disk. The allocation
-/// is held so iced keeps the texture in the atlas and draws it immediately.
+/// view can rotate/flip without re-rendering from disk.
 pub(crate) struct CurrentImage {
     pub(crate) handle: widget::image::Handle,
-    pub(crate) allocation: Option<cosmic::iced::runtime::image::Allocation>,
     pub(crate) rgba: Rgba,
 }
 
@@ -280,9 +278,6 @@ pub struct AppModel {
     pub(crate) current_target: Option<CurrentTarget>,
     /// Rendered single-page content for the current target.
     pub(crate) current_image: Option<CurrentImage>,
-    /// Monotonic counter for single-image allocations; guards against a
-    /// stale `ImageAllocated` result overwriting a newer image.
-    pub(crate) image_generation: u64,
     /// View state per image (zoom/pan/rotate/flip), keyed by the current target.
     pub(crate) zoom_states: HashMap<CurrentTarget, ZoomState>,
     /// Current keyboard modifiers, tracked so widgets know the state at

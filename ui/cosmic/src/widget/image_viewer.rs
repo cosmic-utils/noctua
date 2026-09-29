@@ -447,6 +447,13 @@ where
         let state = tree.state.downcast_ref::<State>();
         let bounds = layout.bounds();
 
+        // Upload the texture before drawing. Without this, a large image is
+        // handed to iced's background uploader and only becomes visible after
+        // a later redraw (which depends on unrelated input events). Blocking
+        // here guarantees the pixels are on the GPU in this same frame, the
+        // way cosmic-viewer's canvas does it.
+        let _ = renderer.load_image(&self.handle);
+
         let final_size = scaled_image_size(
             renderer,
             &self.handle,

@@ -79,7 +79,6 @@ impl cosmic::Application for AppModel {
             annotation_ui: HashMap::new(),
             current_target: None,
             current_image: None,
-            image_generation: 0,
             zoom_states: HashMap::new(),
             keyboard_modifiers: iced::keyboard::Modifiers::default(),
             show_nav_panel: true,

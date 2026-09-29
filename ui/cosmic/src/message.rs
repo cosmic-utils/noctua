@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
-use cosmic::iced::runtime::image;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::Entity;
 
@@ -206,18 +205,6 @@ pub enum Message {
         path: PathBuf,
         page: u32,
         rgba: Option<(u32, u32, Vec<u8>)>,
-    },
-    /// A single-image allocation finished; `generation` guards against a
-    /// stale result overwriting a newer image.
-    ImageAllocated {
-        generation: u64,
-        result: Result<image::Allocation, image::Error>,
-    },
-    /// An annotation page allocation finished.
-    AnnotationImageAllocated {
-        tab: Entity,
-        page: u32,
-        result: Result<image::Allocation, image::Error>,
     },
     /// The image viewer reported a zoom/pan state change.
     ViewerStateChanged {

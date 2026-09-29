@@ -517,11 +517,6 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
 
     match &app.current_image {
         Some(image) => {
-            // Known upstream issue: the iced image atlas splits images
-            // larger than its 2048 px layers into fragments and its
-            // upload bounds check drops the bottom-right fragment, so
-            // such images render with a missing block. Deliberately
-            // not worked around — fix belongs in iced/libcosmic.
             let Some(target) = app.current_target.clone() else {
                 return empty_state("image-x-generic-symbolic", fl!("select-hint"));
             };
