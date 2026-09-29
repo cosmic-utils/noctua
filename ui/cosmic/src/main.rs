@@ -4,6 +4,7 @@
 // Application entry point.
 
 mod app;
+mod config;
 mod i18n;
 mod message;
 mod model;

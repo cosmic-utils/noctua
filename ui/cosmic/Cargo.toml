@@ -29,6 +29,9 @@ i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester
 i18n-embed-fl = "0.10"
 rust-embed = "8.8.0"
 
+# Configuration
+serde = { version = "1", features = ["derive"] }
+
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
 rev = "03d7dcb832bc6d15bc1bb07327a1aa426b2d5bc0"
