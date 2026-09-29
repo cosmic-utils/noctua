@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::mouse;
+use cosmic::iced::runtime::image;
 use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
 use cosmic::widget::menu;
 use cosmic::widget::menu::key_bind::Modifier;
@@ -177,7 +178,7 @@ fn transform_viewable(
     rotation: u16,
     flip_h: bool,
     flip_v: bool,
-) {
+) -> cosmic::widget::image::Handle {
     let (width, height, data) = transform_rgba(
         image.rgba.0,
         image.rgba.1,
@@ -186,8 +187,10 @@ fn transform_viewable(
         flip_h,
         flip_v,
     );
+    let handle = cosmic::widget::image::Handle::from_rgba(width, height, data.clone());
     *image = CurrentImage {
-        handle: cosmic::widget::image::Handle::from_rgba(width, height, data.clone()),
+        handle: handle.clone(),
+        allocation: None,
         rgba: (width, height, data),
     };
 
@@ -198,6 +201,8 @@ fn transform_viewable(
     state.flip_h = new_flip_h;
     state.offset_x = 0.0;
     state.offset_y = 0.0;
+
+    handle
 }
 
 impl AppModel {
@@ -861,13 +866,13 @@ impl AppModel {
         state.strip.splice(start + 1..start + 1, page_entries);
     }
 
-    /// Render a single-image target (raster/SVG) downscaled to the display
-    /// size limit for its GPU texture. Zooming beyond that re-renders; see
-    /// `render::DISPLAY_MAX_EDGE`.
+    /// Render a single-image target (raster/SVG) for display. The configured
+    /// `max_texture_edge` caps the long edge; `None` renders native.
     fn render_file_task(&self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
         let worker = self.worker.clone();
+        let max_edge = self.config.max_texture_edge;
         cosmic::task::future(async move {
-            let rgba = worker.display(path.clone()).await;
+            let rgba = worker.display(path.clone(), max_edge).await;
             Message::FileRendered { path, rgba }
         })
     }
@@ -1530,10 +1535,13 @@ impl AppModel {
         }
     }
 
-    fn apply_image(&mut self, rgba: Option<(u32, u32, Vec<u8>)>) {
+    fn apply_image(
+        &mut self,
+        rgba: Option<(u32, u32, Vec<u8>)>,
+    ) -> iced::Task<cosmic::Action<Message>> {
         let Some((width, height, data)) = rgba else {
             self.current_image = None;
-            return;
+            return iced::Task::none();
         };
 
         // Re-apply the remembered view transform (rotate/flip) to the fresh
@@ -1546,10 +1554,18 @@ impl AppModel {
             .unwrap_or((0, false));
         let (width, height, data) = transform_rgba(width, height, data, rotation, flip_h, false);
 
+        let handle = cosmic::widget::image::Handle::from_rgba(width, height, data.clone());
         self.current_image = Some(CurrentImage {
-            handle: cosmic::widget::image::Handle::from_rgba(width, height, data.clone()),
+            handle: handle.clone(),
+            allocation: None,
             rgba: (width, height, data),
         });
+
+        self.image_generation += 1;
+        let generation = self.image_generation;
+        image::allocate(handle)
+            .map(move |result| Message::ImageAllocated { generation, result })
+            .map(cosmic::Action::from)
     }
 
     /// Apply a rotate/flip operation to the current document. Single images
@@ -1561,10 +1577,31 @@ impl AppModel {
         flip_h: bool,
         flip_v: bool,
     ) -> iced::Task<cosmic::Action<Message>> {
-        if let Some((image, state)) = self.active_viewable() {
-            transform_viewable(image, state, rotation, flip_h, flip_v);
-            return iced::Task::none();
+        // Annotation tab: transform the current page in place and re-allocate.
+        if let Some(tab) = self.active_annotation() {
+            let Some(state) = self.annotation_ui.get_mut(&tab) else {
+                return iced::Task::none();
+            };
+            let Some(image) = state.current.as_mut() else {
+                return iced::Task::none();
+            };
+            let handle = transform_viewable(image, &mut state.view, rotation, flip_h, flip_v);
+            let page = state.selected;
+            return image::allocate(handle)
+                .map(move |result| Message::AnnotationImageAllocated { tab, page, result })
+                .map(cosmic::Action::from);
         }
+
+        // Single image: transform in place and re-allocate.
+        if let Some((image, state)) = self.active_viewable() {
+            let handle = transform_viewable(image, state, rotation, flip_h, flip_v);
+            self.image_generation += 1;
+            let generation = self.image_generation;
+            return image::allocate(handle)
+                .map(move |result| Message::ImageAllocated { generation, result })
+                .map(cosmic::Action::from);
+        }
+
         if let Some(path) = self.active_preview().map(|preview| preview.path.clone()) {
             return self.transform_preview(path, rotation, flip_h, flip_v);
         }
@@ -1891,18 +1928,36 @@ impl AppModel {
                         return iced::Task::none();
                     }
                     let (rotation, flip_h) = (state.view.rotation, state.view.flip_h);
-                    state.current = rgba.map(|(width, height, data)| {
-                        let (width, height, data) =
-                            transform_rgba(width, height, data, rotation, flip_h, false);
-                        CurrentImage {
-                            handle: cosmic::widget::image::Handle::from_rgba(
+                    let handle = match rgba {
+                        Some((width, height, data)) => {
+                            let (width, height, data) =
+                                transform_rgba(width, height, data, rotation, flip_h, false);
+                            let handle = cosmic::widget::image::Handle::from_rgba(
                                 width,
                                 height,
                                 data.clone(),
-                            ),
-                            rgba: (width, height, data),
+                            );
+                            state.current = Some(CurrentImage {
+                                handle: handle.clone(),
+                                allocation: None,
+                                rgba: (width, height, data),
+                            });
+                            Some(handle)
                         }
-                    });
+                        None => {
+                            state.current = None;
+                            None
+                        }
+                    };
+                    if let Some(handle) = handle {
+                        return image::allocate(handle)
+                            .map(move |result| Message::AnnotationImageAllocated {
+                                tab,
+                                page,
+                                result,
+                            })
+                            .map(cosmic::Action::from);
+                    }
                 }
             }
 
@@ -2335,14 +2390,38 @@ impl AppModel {
                 if self.current_target != Some(CurrentTarget::File { path }) {
                     return iced::Task::none();
                 }
-                self.apply_image(rgba);
+                return self.apply_image(rgba);
             }
 
             Message::PageRendered { path, page, rgba } => {
                 if self.current_target != Some(CurrentTarget::Page { path, page }) {
                     return iced::Task::none();
                 }
-                self.apply_image(rgba);
+                return self.apply_image(rgba);
+            }
+
+            Message::ImageAllocated { generation, result } => {
+                if generation != self.image_generation {
+                    return iced::Task::none();
+                }
+                if let Ok(allocation) = result
+                    && let Some(image) = self.current_image.as_mut()
+                {
+                    image.allocation = Some(allocation);
+                }
+            }
+
+            Message::AnnotationImageAllocated { tab, page, result } => {
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    if state.selected != page {
+                        return iced::Task::none();
+                    }
+                    if let Ok(allocation) = result
+                        && let Some(image) = state.current.as_mut()
+                    {
+                        image.allocation = Some(allocation);
+                    }
+                }
             }
 
             Message::ViewerStateChanged {

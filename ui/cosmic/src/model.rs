@@ -15,6 +15,7 @@ use cosmic::widget::segmented_button::{Entity, SingleSelectModel};
 use noctua_core::render::worker::{DocumentId, SharedWorker};
 use noctua_core::storage::browser::BrowserEntry;
 
+use crate::config::NoctuaConfig;
 use crate::message::MenuAction;
 
 /// Session file used for automatic save and restore.
@@ -128,9 +129,11 @@ impl Default for ZoomState {
 /// A rendered image shown in the content area. The handle is created
 /// once per image so the renderer reuses the uploaded texture instead
 /// of re-uploading it on every frame. The raw pixels are kept so the
-/// view can rotate/flip without re-rendering from disk.
+/// view can rotate/flip without re-rendering from disk. The allocation
+/// is held so iced keeps the texture in the atlas and draws it immediately.
 pub(crate) struct CurrentImage {
     pub(crate) handle: widget::image::Handle,
+    pub(crate) allocation: Option<cosmic::iced::runtime::image::Allocation>,
     pub(crate) rgba: Rgba,
 }
 
@@ -259,6 +262,8 @@ impl Default for AnnotationUiState {
 pub struct AppModel {
     /// Application state which is managed by the COSMIC runtime.
     pub(crate) core: cosmic::Core,
+    /// Application settings loaded from cosmic-config.
+    pub(crate) config: NoctuaConfig,
     /// The about page for this app.
     pub(crate) about: About,
     /// Key bindings for the application's menu bar.
@@ -275,6 +280,9 @@ pub struct AppModel {
     pub(crate) current_target: Option<CurrentTarget>,
     /// Rendered single-page content for the current target.
     pub(crate) current_image: Option<CurrentImage>,
+    /// Monotonic counter for single-image allocations; guards against a
+    /// stale `ImageAllocated` result overwriting a newer image.
+    pub(crate) image_generation: u64,
     /// View state per image (zoom/pan/rotate/flip), keyed by the current target.
     pub(crate) zoom_states: HashMap<CurrentTarget, ZoomState>,
     /// Current keyboard modifiers, tracked so widgets know the state at

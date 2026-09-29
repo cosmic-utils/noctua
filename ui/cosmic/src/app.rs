@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use cosmic::app::context_drawer;
+use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::keyboard::key::Named;
 use cosmic::widget::about::About;
 use cosmic::widget::menu::action::MenuAction as _;
@@ -17,6 +18,7 @@ use cosmic::{iced, prelude::*};
 use noctua_core::render::worker::SharedWorker;
 use noctua_core::storage;
 
+use crate::config::NoctuaConfig;
 use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{AppModel, TabContent};
@@ -49,6 +51,12 @@ impl cosmic::Application for AppModel {
 
     /// Initializes the application with any given flags and startup commands.
     fn init(core: cosmic::Core, args: Self::Flags) -> (Self, iced::Task<cosmic::Action<Message>>) {
+        let config = crate::config::config()
+            .ok()
+            .as_ref()
+            .and_then(|handle| NoctuaConfig::get_entry(handle).ok())
+            .unwrap_or_default();
+
         let about = About::default()
             .name(fl!("app-title"))
             .icon(widget::icon::from_svg_bytes(APP_ICON))
@@ -62,6 +70,7 @@ impl cosmic::Application for AppModel {
 
         let mut app = AppModel {
             core,
+            config,
             about,
             key_binds: AppModel::key_binds(),
             tab_model: SingleSelectModel::default(),
@@ -70,6 +79,7 @@ impl cosmic::Application for AppModel {
             annotation_ui: HashMap::new(),
             current_target: None,
             current_image: None,
+            image_generation: 0,
             zoom_states: HashMap::new(),
             keyboard_modifiers: iced::keyboard::Modifiers::default(),
             show_nav_panel: true,
