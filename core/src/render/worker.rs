@@ -65,9 +65,12 @@ pub enum Job {
     /// Render the first page of a PDF file as a thumbnail and store it
     /// in the freedesktop thumbnail cache.
     RenderThumb { path: PathBuf, size: ThumbSize },
-    /// Render a raster or SVG file downscaled to the display size limit
-    /// (see `render::DISPLAY_MAX_EDGE`) for its GPU texture.
-    Display { path: PathBuf },
+    /// Render a raster or SVG file for display. `max_edge` caps the long edge
+    /// in pixels; `None` renders native (see `render::render_display`).
+    Display {
+        path: PathBuf,
+        max_edge: Option<u32>,
+    },
 }
 
 /// Result of a finished job.
@@ -226,11 +229,14 @@ impl SharedWorker {
         }
     }
 
-    /// Render a raster or SVG file downscaled so its long edge stays at or
-    /// below `render::DISPLAY_MAX_EDGE`. Returns (width, height, rgba).
-    pub async fn display(&self, path: PathBuf) -> Option<(u32, u32, Vec<u8>)> {
+    /// Render a raster or SVG file for display, capped to `max_edge` if set.
+    pub async fn display(
+        &self,
+        path: PathBuf,
+        max_edge: Option<u32>,
+    ) -> Option<(u32, u32, Vec<u8>)> {
         match self
-            .execute(Priority::VisiblePage, Job::Display { path })
+            .execute(Priority::VisiblePage, Job::Display { path, max_edge })
             .await
         {
             Ok(JobResult::Rendered {
@@ -367,7 +373,7 @@ fn run_job(documents: &mut HashMap<DocumentId, PdfOpsManager>, next_id: &mut u64
             JobResult::Op { document, result }
         }
         Job::Render { path, page, zoom } => render_file(&path, page, zoom),
-        Job::Display { path } => render_display_job(&path),
+        Job::Display { path, max_edge } => render_display_job(&path, max_edge),
         Job::RenderPageThumbs { path, pages, zoom } => render_page_thumbs(&path, &pages, zoom),
         Job::FilePageCount { path } => file_page_count(&path),
         Job::FilePageSizes { path } => file_page_sizes(&path),
@@ -434,10 +440,9 @@ fn render_file(path: &std::path::Path, page: Option<u32>, zoom: f32) -> JobResul
     }
 }
 
-/// Render a raster or SVG file downscaled to the display size limit for its
-/// GPU texture.
-fn render_display_job(path: &std::path::Path) -> JobResult {
-    match crate::render::render_display(path) {
+/// Render a raster or SVG file for display, capped to `max_edge` if set.
+fn render_display_job(path: &std::path::Path, max_edge: Option<u32>) -> JobResult {
+    match crate::render::render_display(path, max_edge) {
         Ok(rendered) => JobResult::Rendered {
             width: rendered.width,
             height: rendered.height,

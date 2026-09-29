@@ -147,11 +147,6 @@ pub fn render_path(path: &Path, zoom: f32) -> Result<RenderedPage, RenderError> 
     render_page(&content, zoom)
 }
 
-/// Maximum long-edge size (in pixels) of a texture uploaded to the GPU for
-/// display. Matches iced's image-atlas layer size; a larger texture would be
-/// split into atlas fragments, which iced handles unreliably.
-pub const DISPLAY_MAX_EDGE: u32 = 2048;
-
 /// Native pixel dimensions of loaded content.
 fn content_dimensions(content: &LoadedContent) -> (u32, u32) {
     match content {
@@ -161,18 +156,16 @@ fn content_dimensions(content: &LoadedContent) -> (u32, u32) {
     }
 }
 
-/// Render a raster or SVG file downscaled so its long edge stays at or below
-/// `DISPLAY_MAX_EDGE`. Content already at or below that size renders native.
-/// The full-resolution pixels are not returned: zooming beyond the display
-/// resolution re-renders from disk instead of keeping them in memory.
-pub fn render_display(path: &Path) -> Result<RenderedPage, RenderError> {
+/// Render a raster or SVG file for display. `max_edge` caps the long edge in
+/// pixels; `None` renders at native resolution. `Some(2048)` matches iced's
+/// image-atlas layer size and trades 1:1 sharpness for lower memory use.
+pub fn render_display(path: &Path, max_edge: Option<u32>) -> Result<RenderedPage, RenderError> {
     let content = load(path)?;
     let (native_width, native_height) = content_dimensions(&content);
     let long_edge = native_width.max(native_height).max(1);
-    let zoom = if long_edge > DISPLAY_MAX_EDGE {
-        DISPLAY_MAX_EDGE as f32 / long_edge as f32
-    } else {
-        1.0
+    let zoom = match max_edge {
+        Some(edge) if long_edge > edge => edge as f32 / long_edge as f32,
+        _ => 1.0,
     };
     render_page(&content, zoom)
 }
