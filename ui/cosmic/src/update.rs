@@ -173,7 +173,7 @@ fn save_annotation_dialog(name: String) -> iced::Task<cosmic::Action<Message>> {
 
 /// Rotate/flip a rendered image in place and update its cumulative view
 /// transform. Shared by single images and annotation pages.
-fn transform_viewable(
+fn transform_image(
     image: &mut CurrentImage,
     state: &mut ViewState,
     rotation: u16,
@@ -1653,13 +1653,13 @@ impl AppModel {
             let Some(image) = state.current.as_mut() else {
                 return iced::Task::none();
             };
-            transform_viewable(image, &mut state.view, rotation, flip_h, flip_v);
+            transform_image(image, &mut state.view, rotation, flip_h, flip_v);
             return iced::Task::none();
         }
 
         // Single image: transform in place.
         if let Some((image, state)) = self.displayed_image_view_mut() {
-            transform_viewable(image, state, rotation, flip_h, flip_v);
+            transform_image(image, state, rotation, flip_h, flip_v);
             return iced::Task::none();
         }
 
