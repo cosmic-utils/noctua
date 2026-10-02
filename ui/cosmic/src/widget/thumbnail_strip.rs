@@ -14,7 +14,7 @@ use cosmic::widget::segmented_button::Entity;
 use cosmic::widget::{self, menu};
 
 use crate::message::Message;
-use crate::model::{NavEntry, StripEntry};
+use crate::model::{StripEntry, Target};
 
 /// File tile size in logical pixels.
 const TILE_SIZE: f32 = 136.0;
@@ -50,9 +50,8 @@ pub(crate) fn thumbnail_strip<'a>(
 
     for (index, entry) in entries.iter().enumerate() {
         let is_selected = selected == Some(index);
-        let is_page = matches!(entry.target, NavEntry::Page { .. });
-        let is_expanded =
-            matches!(&entry.target, NavEntry::File { path, .. } if expanded == Some(path));
+        let is_page = matches!(entry.target, Target::Page { .. });
+        let is_expanded = matches!(&entry.target, Target::File { path } if expanded == Some(path));
         let tile_size = if is_page { PAGE_TILE_SIZE } else { TILE_SIZE };
 
         let body: Element<'_, Message> = match &entry.thumb {
@@ -116,7 +115,7 @@ pub(crate) fn thumbnail_strip<'a>(
             .into();
 
         // File entries offer a right-click context menu.
-        let interactive: Element<'_, Message> = if let NavEntry::File { path, .. } = &entry.target {
+        let interactive: Element<'_, Message> = if let Target::File { path } = &entry.target {
             cosmic::widget::context_menu(interactive, file_menu(path))
                 .on_open(Message::ContextOpened { path: path.clone() })
                 .on_surface_action(Message::Surface)

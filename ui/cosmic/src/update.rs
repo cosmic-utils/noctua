@@ -29,10 +29,10 @@ use noctua_core::storage::thumbcache::ThumbSize;
 use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{
-    AnnotationTool, AnnotationUiState, AppModel, CurrentImage, CurrentTarget, DocumentPreview,
-    MAX_SCALE, MIN_SCALE, NavEntry, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID,
-    PageSlot, Rgba, SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent,
-    TabUiState, ZOOM_STEP, ZoomState,
+    AnnotationTool, AnnotationUiState, AppModel, CurrentImage, DocumentPreview, MAX_SCALE,
+    MIN_SCALE, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, Rgba,
+    SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent, TabUiState, Target,
+    ViewState, ZOOM_STEP,
 };
 
 /// Estimated strip tile height including spacing, for lazy thumbnails.
@@ -175,7 +175,7 @@ fn save_annotation_dialog(name: String) -> iced::Task<cosmic::Action<Message>> {
 /// transform. Shared by single images and annotation pages.
 fn transform_viewable(
     image: &mut CurrentImage,
-    state: &mut ZoomState,
+    state: &mut ViewState,
     rotation: u16,
     flip_h: bool,
     flip_v: bool,
@@ -302,10 +302,19 @@ impl AppModel {
         matches!(self.tabs.get(&tab), Some(TabContent::Annotation { .. })).then_some(tab)
     }
 
-    /// The active viewable's zoom state. Single images and annotation pages
-    /// share `ZoomState`; the continuous PDF preview manages its own zoom and
-    /// is excluded here.
-    fn active_zoom_state(&mut self) -> Option<&mut ZoomState> {
+    /// The selected strip entry of the active folder tab. Annotation tabs have
+    /// no folder strip; their page list is separate.
+    pub(crate) fn displayed_entry(&self) -> Option<&StripEntry> {
+        let tab = self.active_tab()?;
+        let state = self.tab_ui.get(&tab)?;
+        let index = state.selected?;
+        state.entries.get(index)
+    }
+
+    /// The view state of the displayed image/page. Annotation pages and folder
+    /// entries share `ViewState`; the continuous PDF preview manages its own
+    /// zoom and is excluded here.
+    fn displayed_view_mut(&mut self) -> Option<&mut ViewState> {
         if let Some(tab) = self.active_annotation() {
             return self
                 .annotation_ui
@@ -315,13 +324,15 @@ impl AppModel {
         if self.active_preview().is_some() {
             return None;
         }
-        let target = self.current_target.clone()?;
-        Some(self.zoom_states.entry(target).or_default())
+        let tab = self.active_tab()?;
+        let state = self.tab_ui.get_mut(&tab)?;
+        let index = state.selected?;
+        state.entries.get_mut(index).map(|entry| &mut entry.view)
     }
 
-    /// The active viewable's image plus zoom state. As with
-    /// [`Self::active_zoom_state`], the continuous PDF preview is excluded.
-    fn active_viewable(&mut self) -> Option<(&mut CurrentImage, &mut ZoomState)> {
+    /// The displayed image plus its view state. As with
+    /// [`Self::displayed_view_mut`], the continuous PDF preview is excluded.
+    fn displayed_image_view_mut(&mut self) -> Option<(&mut CurrentImage, &mut ViewState)> {
         if let Some(tab) = self.active_annotation() {
             let state = self.annotation_ui.get_mut(&tab)?;
             let AnnotationUiState { current, view, .. } = state;
@@ -331,10 +342,12 @@ impl AppModel {
         if self.active_preview().is_some() {
             return None;
         }
-        let target = self.current_target.clone()?;
-        let image = self.current_image.as_mut()?;
-        let state = self.zoom_states.entry(target).or_default();
-        Some((image, state))
+        let tab = self.active_tab()?;
+        let image = self.displayed_image.as_mut()?;
+        let state = self.tab_ui.get_mut(&tab)?;
+        let index = state.selected?;
+        let view = &mut state.entries.get_mut(index)?.view;
+        Some((image, view))
     }
 
     /// The zoom factor currently displayed for the active view, in native
@@ -342,7 +355,7 @@ impl AppModel {
     /// viewer's reported viewport; the PDF preview owns its own absolute zoom.
     pub(crate) fn effective_zoom(&self) -> f32 {
         // The continuous PDF preview manages its own zoom.
-        if let Some(CurrentTarget::File { path }) = &self.current_target
+        if let Some(Target::File { path }) = &self.displayed_target
             && let Some(preview) = self
                 .active_tab()
                 .and_then(|tab| self.tab_ui.get(&tab))
@@ -361,16 +374,13 @@ impl AppModel {
             };
             (image, state.view)
         } else {
-            let Some(target) = self.current_target.as_ref() else {
+            let Some(image) = self.displayed_image.as_ref() else {
                 return 1.0;
             };
-            let Some(image) = self.current_image.as_ref() else {
+            let Some(entry) = self.displayed_entry() else {
                 return 1.0;
             };
-            (
-                image,
-                self.zoom_states.get(target).copied().unwrap_or_default(),
-            )
+            (image, entry.view)
         };
 
         // Outside fit the factor is exactly the stored scale.
@@ -391,18 +401,17 @@ impl AppModel {
             / image_w
     }
 
-    /// Rebuild the thumbnail strip of a tab. The selection survives when
-    /// it still points into the new strip; the preview survives only when
-    /// it still matches the selected entry.
+    /// Rebuild the thumbnail strip of a tab. The selection survives when it
+    /// still points into the new strip; the preview survives only when it
+    /// still matches the selected entry.
     fn rebuild_strip(&mut self, tab: Entity) {
-        let entries: Vec<(NavEntry, String, bool)> = match &self.tabs[&tab] {
+        let entries: Vec<(Target, String, bool)> = match &self.tabs[&tab] {
             TabContent::Folder { entries, .. } => entries
                 .iter()
                 .map(|entry| {
                     (
-                        NavEntry::File {
+                        Target::File {
                             path: entry.path.clone(),
-                            is_pdf: entry.is_pdf,
                         },
                         entry.name.clone(),
                         entry.is_pdf,
@@ -415,6 +424,18 @@ impl AppModel {
         };
 
         let previous = self.tab_ui.remove(&tab);
+        // Carry each entry's view state over to the rebuilt strip, keyed by
+        // target, so zoom/pan/rotate survive a folder rescan.
+        let views: HashMap<Target, ViewState> = previous
+            .as_ref()
+            .map(|state| {
+                state
+                    .entries
+                    .iter()
+                    .map(|entry| (entry.target.clone(), entry.view))
+                    .collect()
+            })
+            .unwrap_or_default();
         let selected = previous
             .as_ref()
             .and_then(|state| state.selected)
@@ -423,13 +444,14 @@ impl AppModel {
         let preview = previous.and_then(|state| state.preview).filter(|preview| {
             matches!(
                 selected.and_then(|index| entries.get(index)),
-                Some((NavEntry::File { path, .. }, _, _)) if path == &preview.path
+                Some((Target::File { path }, _, _)) if path == &preview.path
             )
         });
 
-        let strip = entries
+        let nav_items = entries
             .into_iter()
             .map(|(target, name, expandable)| StripEntry {
+                view: views.get(&target).copied().unwrap_or_default(),
                 target,
                 name,
                 thumb: None,
@@ -439,7 +461,7 @@ impl AppModel {
         self.tab_ui.insert(
             tab,
             TabUiState {
-                strip,
+                entries: nav_items,
                 selected,
                 preview,
                 expanded: None,
@@ -450,9 +472,9 @@ impl AppModel {
     /// Activate the current tab: restore its selection, render it and
     /// restore the preview scroll offset. New tabs select their first entry.
     fn activate_tab(&mut self) -> iced::Task<cosmic::Action<Message>> {
-        self.current_target = None;
-        self.current_image = None;
-        self.current_size = None;
+        self.displayed_target = None;
+        self.displayed_image = None;
+        self.displayed_size = None;
 
         let Some(tab) = self.active_tab() else {
             return iced::Task::none();
@@ -469,7 +491,7 @@ impl AppModel {
             && self
                 .tab_ui
                 .get(&tab)
-                .is_none_or(|state| state.strip.is_empty())
+                .is_none_or(|state| state.entries.is_empty())
         {
             self.rebuild_strip(tab);
         }
@@ -477,8 +499,8 @@ impl AppModel {
         let target = self.tab_ui.get(&tab).and_then(|state| {
             state
                 .selected
-                .and_then(|index| state.strip.get(index))
-                .map(|entry| entry.target.clone())
+                .and_then(|index| state.entries.get(index))
+                .map(|entry| (entry.target.clone(), entry.expandable))
         });
         let scroll = self
             .tab_ui
@@ -487,8 +509,8 @@ impl AppModel {
             .map(|preview| preview.scroll);
 
         let mut tasks: Vec<iced::Task<cosmic::Action<Message>>> = Vec::new();
-        if let Some(target) = target {
-            tasks.push(self.activate_target(target));
+        if let Some((target, is_pdf)) = target {
+            tasks.push(self.activate_target(target, is_pdf));
         }
         if let Some(offset_y) = scroll {
             tasks.push(
@@ -507,27 +529,32 @@ impl AppModel {
         cosmic::task::batch(tasks)
     }
 
-    /// Show or render the given strip entry.
-    fn activate_target(&mut self, entry: NavEntry) -> iced::Task<cosmic::Action<Message>> {
-        match entry {
-            NavEntry::File { path, is_pdf } => {
-                self.current_image = None;
-                self.current_size = storage::document::metadata(&path)
+    /// Show or render the given strip entry. `is_pdf` decides between the
+    /// continuous preview and a single rendered image.
+    fn activate_target(
+        &mut self,
+        target: Target,
+        is_pdf: bool,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        match target {
+            Target::File { path } => {
+                self.displayed_image = None;
+                self.displayed_size = storage::document::metadata(&path)
                     .ok()
                     .map(|meta| meta.size_bytes);
                 if is_pdf {
                     self.start_preview(path)
                 } else {
-                    self.current_target = Some(CurrentTarget::File { path: path.clone() });
+                    self.displayed_target = Some(Target::File { path: path.clone() });
                     self.render_file_task(path)
                 }
             }
-            NavEntry::Page { path, page } => {
-                self.current_image = None;
-                self.current_size = storage::document::metadata(&path)
+            Target::Page { path, page } => {
+                self.displayed_image = None;
+                self.displayed_size = storage::document::metadata(&path)
                     .ok()
                     .map(|meta| meta.size_bytes);
-                self.current_target = Some(CurrentTarget::Page {
+                self.displayed_target = Some(Target::Page {
                     path: path.clone(),
                     page,
                 });
@@ -540,7 +567,7 @@ impl AppModel {
     /// sizes; one page is shown as a single image, more pages build the
     /// continuous scroll preview.
     fn start_preview(&mut self, path: PathBuf) -> iced::Task<cosmic::Action<Message>> {
-        self.current_target = Some(CurrentTarget::File { path: path.clone() });
+        self.displayed_target = Some(Target::File { path: path.clone() });
         let worker = self.worker.clone();
         let worker_path = path.clone();
         cosmic::task::future(async move {
@@ -555,7 +582,7 @@ impl AppModel {
     pub(crate) fn active_preview(&self) -> Option<&DocumentPreview> {
         let tab = self.active_tab()?;
         let preview = self.tab_ui.get(&tab)?.preview.as_ref()?;
-        matches!(&self.current_target, Some(CurrentTarget::File { path }) if path == &preview.path)
+        matches!(&self.displayed_target, Some(Target::File { path }) if path == &preview.path)
             .then_some(preview)
     }
 
@@ -742,10 +769,10 @@ impl AppModel {
         tab: Entity,
         range: std::ops::Range<usize>,
     ) -> iced::Task<cosmic::Action<Message>> {
-        let mut wanted: Vec<(usize, NavEntry)> = Vec::new();
+        let mut wanted: Vec<(usize, Target)> = Vec::new();
         if let Some(state) = self.tab_ui.get(&tab) {
             for index in range {
-                if let Some(entry) = state.strip.get(index)
+                if let Some(entry) = state.entries.get(index)
                     && entry.thumb.is_none()
                 {
                     wanted.push((index, entry.target.clone()));
@@ -763,14 +790,14 @@ impl AppModel {
 
             for (index, target) in wanted {
                 match target {
-                    NavEntry::File { path, .. } => {
+                    Target::File { path } => {
                         let thumb = worker.thumbnail(path.clone(), ThumbSize::Normal).await;
                         if thumb.is_none() {
                             tracing::warn!("thumbnail generation failed for {path:?}");
                         }
                         results.push((index, thumb));
                     }
-                    NavEntry::Page { path, page } => {
+                    Target::Page { path, page } => {
                         page_requests.push((index, path, page));
                     }
                 }
@@ -815,24 +842,22 @@ impl AppModel {
         let Some(tab) = self.active_tab() else {
             return iced::Task::none();
         };
-        let (path, is_pdf, already_expanded) = {
-            let Some(state) = self.tab_ui.get(&tab) else {
-                return iced::Task::none();
+        let (path, is_pdf, already_expanded) =
+            {
+                let Some(state) = self.tab_ui.get(&tab) else {
+                    return iced::Task::none();
+                };
+                let Some((path, is_pdf)) = state.entries.get(index).and_then(|entry| match &entry
+                    .target
+                {
+                    Target::File { path } => Some((path.clone(), entry.expandable)),
+                    Target::Page { .. } => None,
+                }) else {
+                    return iced::Task::none();
+                };
+                let already_expanded = state.expanded.as_ref() == Some(&path);
+                (path, is_pdf, already_expanded)
             };
-            let Some((path, is_pdf)) =
-                state
-                    .strip
-                    .get(index)
-                    .and_then(|entry| match &entry.target {
-                        NavEntry::File { path, is_pdf } => Some((path.clone(), *is_pdf)),
-                        NavEntry::Page { .. } => None,
-                    })
-            else {
-                return iced::Task::none();
-            };
-            let already_expanded = state.expanded.as_ref() == Some(&path);
-            (path, is_pdf, already_expanded)
-        };
 
         if !is_pdf {
             return iced::Task::none();
@@ -880,17 +905,18 @@ impl AppModel {
             state.expanded = None;
         }
         let Some(start) = state
-            .strip
+            .entries
             .iter()
-            .position(|entry| matches!(&entry.target, NavEntry::File { path: p, .. } if p == path))
+            .position(|entry| matches!(&entry.target, Target::File { path: p } if p == path))
         else {
             return;
         };
         let mut end = start + 1;
-        while end < state.strip.len() && matches!(state.strip[end].target, NavEntry::Page { .. }) {
+        while end < state.entries.len() && matches!(state.entries[end].target, Target::Page { .. })
+        {
             end += 1;
         }
-        state.strip.drain(start + 1..end);
+        state.entries.drain(start + 1..end);
     }
 
     /// Insert the page entries of an expanded PDF after its file entry.
@@ -899,22 +925,23 @@ impl AppModel {
             return;
         };
         let Some(start) = state
-            .strip
+            .entries
             .iter()
-            .position(|entry| matches!(&entry.target, NavEntry::File { path: p, .. } if p == path))
+            .position(|entry| matches!(&entry.target, Target::File { path: p } if p == path))
         else {
             return;
         };
         let page_entries = (1..=pages).map(|page| StripEntry {
-            target: NavEntry::Page {
+            target: Target::Page {
                 path: path.clone(),
                 page,
             },
             name: fl!("page-num", num = page),
             thumb: None,
             expandable: false,
+            view: ViewState::default(),
         });
-        state.strip.splice(start + 1..start + 1, page_entries);
+        state.entries.splice(start + 1..start + 1, page_entries);
     }
 
     /// Render a single-image target (raster/SVG) for display. The configured
@@ -1028,7 +1055,7 @@ impl AppModel {
         // In fit mode the effective factor lives in the viewer, not in the
         // model; read it before borrowing the zoom state.
         let displayed = self.effective_zoom();
-        if let Some(state) = self.active_zoom_state() {
+        if let Some(state) = self.displayed_view_mut() {
             if state.fit {
                 // Leave fit, continuing from the displayed factor (the fit
                 // representation) instead of jumping to 1:1.
@@ -1040,7 +1067,7 @@ impl AppModel {
             return iced::Task::none();
         }
         // Continuous PDF preview: re-render at the new zoom.
-        let Some(CurrentTarget::File { path }) = self.current_target.clone() else {
+        let Some(Target::File { path }) = self.displayed_target.clone() else {
             return iced::Task::none();
         };
         self.zoom_preview(&path, steps)
@@ -1048,7 +1075,7 @@ impl AppModel {
 
     /// Set the zoom of the current target to `scale` (1.0 = 100 %).
     fn set_zoom(&mut self, scale: f32) -> iced::Task<cosmic::Action<Message>> {
-        if let Some(state) = self.active_zoom_state() {
+        if let Some(state) = self.displayed_view_mut() {
             state.fit = false;
             state.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
             state.offset_x = 0.0;
@@ -1056,7 +1083,7 @@ impl AppModel {
             return iced::Task::none();
         }
         // Continuous PDF preview: re-render at the requested zoom.
-        let Some(CurrentTarget::File { path }) = self.current_target.clone() else {
+        let Some(Target::File { path }) = self.displayed_target.clone() else {
             return iced::Task::none();
         };
         self.render_preview_at(&path, scale)
@@ -1066,14 +1093,14 @@ impl AppModel {
     /// pages use the viewer's scale-down fit; the PDF preview fits its pages
     /// to the viewport width.
     fn set_fit(&mut self) -> iced::Task<cosmic::Action<Message>> {
-        if let Some(state) = self.active_zoom_state() {
+        if let Some(state) = self.displayed_view_mut() {
             state.fit = true;
             state.scale = 1.0;
             state.offset_x = 0.0;
             state.offset_y = 0.0;
             return iced::Task::none();
         }
-        let Some(CurrentTarget::File { path }) = self.current_target.clone() else {
+        let Some(Target::File { path }) = self.displayed_target.clone() else {
             return iced::Task::none();
         };
         self.fit_preview(&path)
@@ -1591,21 +1618,19 @@ impl AppModel {
 
     fn apply_image(&mut self, rgba: Option<(u32, u32, Vec<u8>)>) {
         let Some((width, height, data)) = rgba else {
-            self.current_image = None;
+            self.displayed_image = None;
             return;
         };
 
         // Re-apply the remembered view transform (rotate/flip) to the fresh
         // render, so it survives re-selection and tab switches.
         let (rotation, flip_h) = self
-            .current_target
-            .as_ref()
-            .and_then(|target| self.zoom_states.get(target))
-            .map(|state| (state.rotation, state.flip_h))
+            .displayed_entry()
+            .map(|entry| (entry.view.rotation, entry.view.flip_h))
             .unwrap_or((0, false));
         let (width, height, data) = transform_rgba(width, height, data, rotation, flip_h, false);
 
-        self.current_image = Some(CurrentImage {
+        self.displayed_image = Some(CurrentImage {
             handle: cosmic::widget::image::Handle::from_rgba(width, height, data.clone()),
             rgba: (width, height, data),
         });
@@ -1633,7 +1658,7 @@ impl AppModel {
         }
 
         // Single image: transform in place.
-        if let Some((image, state)) = self.active_viewable() {
+        if let Some((image, state)) = self.displayed_image_view_mut() {
             transform_viewable(image, state, rotation, flip_h, flip_v);
             return iced::Task::none();
         }
@@ -1716,18 +1741,18 @@ impl AppModel {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
-                let Some(target) = self
+                let Some((target, is_pdf)) = self
                     .tab_ui
                     .get(&tab)
-                    .and_then(|state| state.strip.get(index))
-                    .map(|entry| entry.target.clone())
+                    .and_then(|state| state.entries.get(index))
+                    .map(|entry| (entry.target.clone(), entry.expandable))
                 else {
                     return iced::Task::none();
                 };
                 if let Some(state) = self.tab_ui.get_mut(&tab) {
                     state.selected = Some(index);
                 }
-                return self.activate_target(target);
+                return self.activate_target(target, is_pdf);
             }
 
             Message::PrevEntry => {
@@ -1738,7 +1763,7 @@ impl AppModel {
                     return iced::Task::none();
                 };
 
-                let target = {
+                let (target, is_pdf) = {
                     let Some(state) = self.tab_ui.get_mut(&tab) else {
                         return iced::Task::none();
                     };
@@ -1747,15 +1772,15 @@ impl AppModel {
                     else {
                         return iced::Task::none();
                     };
-                    let Some(entry) = state.strip.get(previous) else {
+                    let Some(entry) = state.entries.get(previous) else {
                         return iced::Task::none();
                     };
 
                     state.selected = Some(previous);
-                    entry.target.clone()
+                    (entry.target.clone(), entry.expandable)
                 };
 
-                return self.activate_target(target);
+                return self.activate_target(target, is_pdf);
             }
 
             Message::NextEntry => {
@@ -1766,7 +1791,7 @@ impl AppModel {
                     return iced::Task::none();
                 };
 
-                let target = {
+                let (target, is_pdf) = {
                     let Some(state) = self.tab_ui.get_mut(&tab) else {
                         return iced::Task::none();
                     };
@@ -1774,15 +1799,15 @@ impl AppModel {
                     else {
                         return iced::Task::none();
                     };
-                    let Some(entry) = state.strip.get(next) else {
+                    let Some(entry) = state.entries.get(next) else {
                         return iced::Task::none();
                     };
 
                     state.selected = Some(next);
-                    entry.target.clone()
+                    (entry.target.clone(), entry.expandable)
                 };
 
-                return self.activate_target(target);
+                return self.activate_target(target, is_pdf);
             }
 
             Message::PrevPage => {
@@ -1860,11 +1885,11 @@ impl AppModel {
                 let path = match self.context_target.take() {
                     Some(path) => path,
                     None => {
-                        let Some(target) = self.current_target.clone() else {
+                        let Some(target) = self.displayed_target.clone() else {
                             return iced::Task::none();
                         };
                         match target {
-                            CurrentTarget::File { path } | CurrentTarget::Page { path, .. } => path,
+                            Target::File { path } | Target::Page { path, .. } => path,
                         }
                     }
                 };
@@ -1876,11 +1901,11 @@ impl AppModel {
             }
 
             Message::AddToAnnotation { document } => {
-                let Some(target) = self.current_target.clone() else {
+                let Some(target) = self.displayed_target.clone() else {
                     return iced::Task::none();
                 };
                 let source = match target {
-                    CurrentTarget::File { path } | CurrentTarget::Page { path, .. } => path,
+                    Target::File { path } | Target::Page { path, .. } => path,
                 };
                 return self.add_to_annotation(document, source);
             }
@@ -2211,8 +2236,8 @@ impl AppModel {
                             if let Some(path) = self.pending_select.take()
                                 && let Some(state) = self.tab_ui.get_mut(&tab)
                             {
-                                state.selected = state.strip.iter().position(|entry| {
-                                    matches!(&entry.target, NavEntry::File { path: p, .. } if p == &path)
+                                state.selected = state.entries.iter().position(|entry| {
+                                    matches!(&entry.target, Target::File { path: p } if p == &path)
                                 });
                             }
                             return self.activate_tab();
@@ -2236,12 +2261,12 @@ impl AppModel {
                             let Some(state) = self.tab_ui.get(&tab) else {
                                 return iced::Task::none();
                             };
-                            let Some(start) = state.strip.iter().position(|entry| {
-                                matches!(&entry.target, NavEntry::File { path: p, .. } if p == &path)
+                            let Some(start) = state.entries.iter().position(|entry| {
+                                matches!(&entry.target, Target::File { path: p } if p == &path)
                             }) else {
                                 return iced::Task::none();
                             };
-                            let end = (start + 1 + STRIP_INITIAL_THUMBS).min(state.strip.len());
+                            let end = (start + 1 + STRIP_INITIAL_THUMBS).min(state.entries.len());
                             start + 1..end
                         };
                         return self.request_strip_thumbs(tab, range);
@@ -2256,7 +2281,7 @@ impl AppModel {
             Message::StripThumbsReady { tab, thumbs } => {
                 if let Some(state) = self.tab_ui.get_mut(&tab) {
                     for (index, rgba) in thumbs {
-                        if let Some(entry) = state.strip.get_mut(index)
+                        if let Some(entry) = state.entries.get_mut(index)
                             && let Some((width, height, rgba)) = rgba
                         {
                             entry.thumb = Some(cosmic::widget::image::Handle::from_rgba(
@@ -2269,13 +2294,13 @@ impl AppModel {
 
             Message::PreviewSizesKnown { path, sizes } => {
                 // Only for the target currently shown.
-                if self.current_target != Some(CurrentTarget::File { path: path.clone() }) {
+                if self.displayed_target != Some(Target::File { path: path.clone() }) {
                     return iced::Task::none();
                 }
                 match sizes {
                     Some(sizes) if sizes.len() <= 1 => {
                         // Single-page PDF: display as one image.
-                        self.current_target = Some(CurrentTarget::Page {
+                        self.displayed_target = Some(Target::Page {
                             path: path.clone(),
                             page: 1,
                         });
@@ -2397,12 +2422,12 @@ impl AppModel {
                 let Some(state) = self.tab_ui.get(&tab) else {
                     return iced::Task::none();
                 };
-                if state.strip.is_empty() {
+                if state.entries.is_empty() {
                     return iced::Task::none();
                 }
                 let first = (offset_y / STRIP_TILE).floor() as usize;
                 let last = ((offset_y + viewport_height) / STRIP_TILE).ceil() as usize + 2;
-                return self.request_strip_thumbs(tab, first..last.min(state.strip.len()));
+                return self.request_strip_thumbs(tab, first..last.min(state.entries.len()));
             }
 
             Message::StripDoubleClicked(index) => {
@@ -2410,13 +2435,13 @@ impl AppModel {
             }
 
             Message::FileRendered { path, rgba } => {
-                if self.current_target == Some(CurrentTarget::File { path }) {
+                if self.displayed_target == Some(Target::File { path }) {
                     self.apply_image(rgba);
                 }
             }
 
             Message::PageRendered { path, page, rgba } => {
-                if self.current_target == Some(CurrentTarget::Page { path, page }) {
+                if self.displayed_target == Some(Target::Page { path, page }) {
                     self.apply_image(rgba);
                 }
             }
@@ -2427,11 +2452,15 @@ impl AppModel {
                 offset_x,
                 offset_y,
             } => {
-                let state = self.zoom_states.entry(target).or_default();
-                state.fit = false;
-                state.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
-                state.offset_x = offset_x;
-                state.offset_y = offset_y;
+                // Only apply when the reported target is still displayed.
+                if self.displayed_target.as_ref() == Some(&target)
+                    && let Some(view) = self.displayed_view_mut()
+                {
+                    view.fit = false;
+                    view.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
+                    view.offset_x = offset_x;
+                    view.offset_y = offset_y;
+                }
             }
 
             Message::ZoomIn => return self.zoom_by(1.0),

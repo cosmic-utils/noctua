@@ -13,7 +13,7 @@ use cosmic::widget::segmented_button::Entity;
 use noctua_core::render::worker::DocumentId;
 use noctua_core::storage::browser::BrowserEntry;
 
-use crate::model::{AnnotationTool, CurrentTarget, Rgba};
+use crate::model::{AnnotationTool, Rgba, Target};
 
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
@@ -26,8 +26,8 @@ pub enum Message {
     CloseTab,
     /// An entry of the thumbnail strip was activated (0-based index).
     StripActivated(usize),
-    /// An entry of the thumbnail strip was double-clicked: toggle the
-    /// in-strip page expansion of a multi-page PDF.
+    /// An entry of the thumbnail strip was double-clicked: toggle the in-strip
+    /// page expansion of a multi-page PDF.
     StripDoubleClicked(usize),
     /// Move to the previous strip entry.
     PrevEntry,
@@ -188,8 +188,8 @@ pub enum Message {
         path: PathBuf,
         delta: mouse::ScrollDelta,
     },
-    /// The thumbnail strip was scrolled; carries the absolute offset and
-    /// the viewport height to compute the visible tile range.
+    /// The thumbnail strip was scrolled; carries the absolute offset and the
+    /// viewport height to compute the visible tile range.
     StripScrolled {
         tab: Entity,
         offset_y: f32,
@@ -208,7 +208,7 @@ pub enum Message {
     },
     /// The image viewer reported a zoom/pan state change.
     ViewerStateChanged {
-        target: CurrentTarget,
+        target: Target,
         scale: f32,
         offset_x: f32,
         offset_y: f32,

@@ -72,36 +72,32 @@ pub(crate) enum TabContent {
     },
 }
 
-/// What a strip entry points to.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum NavEntry {
-    /// A file in a folder tab. PDFs show an inline preview. The format is
-    /// detected once when the folder is listed and carried here so the UI
-    /// never re-reads file bytes to decide the render path.
-    File { path: PathBuf, is_pdf: bool },
-    /// A page of the document tab (1-based).
+/// What a strip entry points to, and what is shown in the content area. The
+/// file format is detected once when a folder is listed and carried as
+/// `StripEntry.expandable` (not here), so the target stays a pure path/page.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Target {
+    /// A file in a folder tab. PDFs show an inline preview.
+    File { path: PathBuf },
+    /// A page of a document (1-based).
     Page { path: PathBuf, page: u32 },
 }
 
 /// One entry of the thumbnail strip of a tab.
 pub(crate) struct StripEntry {
-    pub(crate) target: NavEntry,
+    pub(crate) target: Target,
     pub(crate) name: String,
     pub(crate) thumb: Option<widget::image::Handle>,
-    /// Whether the entry is a multi-page PDF that can be expanded in place.
+    /// Whether the entry is a PDF that can be expanded in place.
     pub(crate) expandable: bool,
-}
-
-/// The entry currently shown in the content area.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CurrentTarget {
-    File { path: PathBuf },
-    Page { path: PathBuf, page: u32 },
+    /// Per-entry view state (zoom/pan/rotate/flip). Owned by the entry, not
+    /// copied into the tab or a side map.
+    pub(crate) view: ViewState,
 }
 
 /// Per-image view state (zoom, pan, rotate, flip) remembered across selections.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ZoomState {
+pub(crate) struct ViewState {
     /// Whether the image is shown fitted to the viewport.
     pub(crate) fit: bool,
     /// Zoom factor (1.0 = 100 % = native pixels); ignored while `fit`.
@@ -116,7 +112,7 @@ pub(crate) struct ZoomState {
     pub(crate) flip_h: bool,
 }
 
-impl Default for ZoomState {
+impl Default for ViewState {
     fn default() -> Self {
         Self {
             fit: true,
@@ -194,7 +190,7 @@ impl DocumentPreview {
 /// Volatile per-tab UI state: strip entries, selection and the preview.
 /// Survives tab switches but is not persisted in the session.
 pub(crate) struct TabUiState {
-    pub(crate) strip: Vec<StripEntry>,
+    pub(crate) entries: Vec<StripEntry>,
     pub(crate) selected: Option<usize>,
     pub(crate) preview: Option<DocumentPreview>,
     /// Path of the PDF currently expanded in the strip, if any.
@@ -202,10 +198,10 @@ pub(crate) struct TabUiState {
 }
 
 impl TabUiState {
-    pub(crate) fn new(strip: Vec<StripEntry>) -> Self {
-        let selected = (!strip.is_empty()).then_some(0);
+    pub(crate) fn new(entries: Vec<StripEntry>) -> Self {
+        let selected = (!entries.is_empty()).then_some(0);
         Self {
-            strip,
+            entries,
             selected,
             preview: None,
             expanded: None,
@@ -233,7 +229,7 @@ pub(crate) struct AnnotationUiState {
     /// Full-resolution pixels of the selected page, for the content view.
     pub(crate) current: Option<CurrentImage>,
     /// View transform (zoom/pan/rotate/flip), like single images.
-    pub(crate) view: ZoomState,
+    pub(crate) view: ViewState,
     /// Currently active annotation tool; `None` means browse/pan.
     pub(crate) active_tool: Option<AnnotationTool>,
     /// Selected free-text font size in points.
@@ -250,7 +246,7 @@ impl Default for AnnotationUiState {
             selected: 1,
             thumbs: Vec::new(),
             current: None,
-            view: ZoomState::default(),
+            view: ViewState::default(),
             active_tool: None,
             font_size_pt: 24.0,
             pending_text: None,
@@ -278,11 +274,9 @@ pub struct AppModel {
     /// View state of annotation tabs: page thumbnails and the current page.
     pub(crate) annotation_ui: HashMap<Entity, AnnotationUiState>,
     /// Entry currently shown in the content area (active tab).
-    pub(crate) current_target: Option<CurrentTarget>,
-    /// Rendered single-page content for the current target.
-    pub(crate) current_image: Option<CurrentImage>,
-    /// View state per image (zoom/pan/rotate/flip), keyed by the current target.
-    pub(crate) zoom_states: HashMap<CurrentTarget, ZoomState>,
+    pub(crate) displayed_target: Option<Target>,
+    /// Rendered single-page content for the displayed target.
+    pub(crate) displayed_image: Option<CurrentImage>,
     /// Viewport of the currently drawn viewer, written by the `Viewer` widget
     /// each frame. Lets the toolbar show the true percentage and lets
     /// zoom-from-fit continue from the displayed factor instead of jumping to
@@ -295,11 +289,11 @@ pub struct AppModel {
     pub(crate) show_nav_panel: bool,
     /// Single pdfium worker; all pdfium jobs run on its thread.
     pub(crate) worker: SharedWorker,
-    /// File size of the current target, for the status bar.
-    pub(crate) current_size: Option<u64>,
+    /// File size of the displayed target, for the status bar.
+    pub(crate) displayed_size: Option<u64>,
     /// Path of the file the right-click context menu was opened on.
     pub(crate) context_target: Option<PathBuf>,
-    /// When a start argument is a file, its nav entry is selected
+    /// When a start argument is a file, its strip entry is selected
     /// after the parent folder has been listed.
     pub(crate) pending_select: Option<PathBuf>,
     /// Path of a start argument that could not be opened; shown in the

@@ -20,7 +20,7 @@ use noctua_core::storage;
 
 use crate::fl;
 use crate::message::{MenuAction, Message};
-use crate::model::{AnnotationTool, AppModel, CurrentTarget, TabContent, ZoomState};
+use crate::model::{AnnotationTool, AppModel, TabContent, Target, ViewState};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_placeholder::empty_placeholder;
 use crate::widget::image_viewer::Viewer;
@@ -61,7 +61,7 @@ pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
         let is_annotation = app
             .active_tab()
             .is_some_and(|tab| matches!(app.tabs.get(&tab), Some(TabContent::Annotation { .. })));
-        let has_toolbar = app.current_target.is_some() || is_annotation;
+        let has_toolbar = app.displayed_target.is_some() || is_annotation;
         let mut content = widget::column::with_capacity(3).spacing(space.space_xxs);
         content = content.push(content_view(app));
         if has_toolbar {
@@ -96,7 +96,7 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
     };
 
     thumbnail_strip(
-        &state.strip,
+        &state.entries,
         state.selected,
         state.expanded.as_ref(),
         tab,
@@ -179,7 +179,7 @@ fn annotation_strip(app: &AppModel) -> Element<'_, Message> {
 /// instead of a pan.
 fn viewer_element(
     handle: &widget::image::Handle,
-    view: ZoomState,
+    view: ViewState,
     modifiers: Modifiers,
     reported_bounds: Rc<Cell<Size>>,
     on_state_change: impl Fn(f32, f32, f32) -> Message + 'static,
@@ -515,15 +515,18 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
         return with_file_context_menu(app, &path, viewer);
     }
 
-    match &app.current_image {
+    match &app.displayed_image {
         Some(image) => {
-            let Some(target) = app.current_target.clone() else {
+            let Some(target) = app.displayed_target.clone() else {
                 return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
             };
             let path = match &target {
-                CurrentTarget::File { path } | CurrentTarget::Page { path, .. } => path.clone(),
+                Target::File { path } | Target::Page { path, .. } => path.clone(),
             };
-            let state = app.zoom_states.get(&target).copied().unwrap_or_default();
+            let state = app
+                .displayed_entry()
+                .map(|entry| entry.view)
+                .unwrap_or_default();
             let viewer = viewer_element(
                 &image.handle,
                 state,
@@ -556,17 +559,17 @@ fn status_bar(app: &AppModel) -> Element<'_, Message> {
         info = info.push(widget::text::body(position));
     }
 
-    if let Some(target) = &app.current_target {
+    if let Some(target) = &app.displayed_target {
         let path = match target {
-            CurrentTarget::File { path } => path,
-            CurrentTarget::Page { path, .. } => path,
+            Target::File { path } => path,
+            Target::Page { path, .. } => path,
         };
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
             info = info.push(widget::text::body(name.to_string()));
         }
     }
 
-    if let Some(size) = app.current_size {
+    if let Some(size) = app.displayed_size {
         info = info.push(widget::text::body(storage::document::format_size(size)));
     }
 
@@ -595,7 +598,7 @@ fn position_label(app: &AppModel) -> String {
     let Some(state) = app.tab_ui.get(&tab) else {
         return String::new();
     };
-    let total = state.strip.len();
+    let total = state.entries.len();
     let Some(position) = state.selected else {
         return String::new();
     };
