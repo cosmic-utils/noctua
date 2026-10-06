@@ -252,6 +252,12 @@ impl cosmic::Application for AppModel {
                         return Some(action.message());
                     }
 
+                    // Ctrl+arrow pans the image inside the viewer widget;
+                    // plain arrows navigate.
+                    if modifiers.control() {
+                        return None;
+                    }
+
                     match key {
                         iced::keyboard::Key::Named(Named::ArrowLeft) => Some(Message::PrevEntry),
                         iced::keyboard::Key::Named(Named::ArrowRight) => Some(Message::NextEntry),

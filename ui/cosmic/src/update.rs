@@ -236,14 +236,27 @@ impl AppModel {
                 Key::Character("w".into()),
                 MenuAction::CloseTab,
             ),
+            // Zoom in: register every `=`/`+` combination because the two keys
+            // differ per layout (e.g. on German QWERTZ `+` is its own key and
+            // `=` is Shift+`0`).
+            bind(
+                &[Modifier::Ctrl],
+                Key::Character("=".into()),
+                MenuAction::ZoomIn,
+            ),
             bind(
                 &[Modifier::Ctrl, Modifier::Shift],
-                Key::Character("+".into()),
+                Key::Character("=".into()),
                 MenuAction::ZoomIn,
             ),
             bind(
                 &[Modifier::Ctrl],
-                Key::Character("=".into()),
+                Key::Character("+".into()),
+                MenuAction::ZoomIn,
+            ),
+            bind(
+                &[Modifier::Ctrl, Modifier::Shift],
+                Key::Character("+".into()),
                 MenuAction::ZoomIn,
             ),
             bind(

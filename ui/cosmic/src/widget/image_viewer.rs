@@ -15,7 +15,8 @@ use cosmic::iced::advanced::{Clipboard, Layout, Shell};
 use cosmic::iced::core::Image;
 use cosmic::iced::core::border;
 use cosmic::iced::core::image::FilterMethod;
-use cosmic::iced::keyboard::Modifiers;
+use cosmic::iced::keyboard::key::Named;
+use cosmic::iced::keyboard::{Key, Modifiers};
 use cosmic::iced::mouse;
 use cosmic::iced::{ContentFit, Element, Event, Length, Point, Radians, Rectangle, Size, Vector};
 
@@ -26,6 +27,9 @@ const SCALE_EPSILON: f32 = 0.0001;
 
 /// Tolerance for offset comparisons in widget state synchronization.
 const OFFSET_EPSILON: f32 = 0.01;
+
+/// Pan distance per Ctrl+arrow key press, in logical pixels.
+const PAN_STEP: f32 = 50.0;
 
 /// Callback for viewer state changes (scale, `offset_x`, `offset_y`).
 type StateChangeCallback<Message> = Box<dyn Fn(f32, f32, f32) -> Message>;
@@ -294,25 +298,9 @@ where
                         bounds.size(),
                         self.content_fit,
                     );
-                    let hidden_width = (scaled_size.width - bounds.width / 2.0).max(0.0).round();
-                    let hidden_height = (scaled_size.height - bounds.height / 2.0).max(0.0).round();
-
-                    let previous = state.current_offset;
-                    let x = if bounds.width < scaled_size.width {
-                        (state.current_offset.x - dx).clamp(-hidden_width, hidden_width)
-                    } else {
-                        0.0
-                    };
-                    let y = if bounds.height < scaled_size.height {
-                        (state.current_offset.y - dy).clamp(-hidden_height, hidden_height)
-                    } else {
-                        0.0
-                    };
-                    state.current_offset = Vector::new(x, y);
 
                     // Only notify the app when the offset actually changed.
-                    if ((state.current_offset.x - previous.x).abs() > OFFSET_EPSILON
-                        || (state.current_offset.y - previous.y).abs() > OFFSET_EPSILON)
+                    if state.pan(Vector::new(dx, dy), scaled_size, bounds.size())
                         && let Some(ref on_change) = self.on_state_change
                     {
                         shell.publish(on_change(
@@ -422,6 +410,44 @@ where
                     shell.request_redraw();
                     shell.capture_event();
                 }
+            }
+            Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
+                key, modifiers, ..
+            }) => {
+                // Ctrl+arrow pans the image; plain arrows are navigation and are
+                // handled by the application subscription instead.
+                if !modifiers.control() {
+                    return;
+                }
+                let delta = match key {
+                    Key::Named(Named::ArrowLeft) => Vector::new(-PAN_STEP, 0.0),
+                    Key::Named(Named::ArrowRight) => Vector::new(PAN_STEP, 0.0),
+                    Key::Named(Named::ArrowUp) => Vector::new(0.0, -PAN_STEP),
+                    Key::Named(Named::ArrowDown) => Vector::new(0.0, PAN_STEP),
+                    _ => return,
+                };
+
+                let state = tree.state.downcast_mut::<State>();
+                let scaled_size = scaled_image_size(
+                    renderer,
+                    &self.handle,
+                    state,
+                    bounds.size(),
+                    self.content_fit,
+                );
+
+                if state.pan(delta, scaled_size, bounds.size())
+                    && let Some(ref on_change) = self.on_state_change
+                {
+                    shell.publish(on_change(
+                        native_scale(renderer, &self.handle, scaled_size),
+                        state.current_offset.x,
+                        state.current_offset.y,
+                    ));
+                }
+
+                shell.request_redraw();
+                shell.capture_event();
             }
             _ => {}
         }
@@ -543,6 +569,27 @@ impl State {
     /// Whether the cursor is currently grabbed by the [`Viewer`].
     fn is_cursor_grabbed(&self) -> bool {
         self.cursor_grabbed_at.is_some()
+    }
+
+    /// Pan by `delta` logical pixels, clamped to the visible image bounds.
+    /// Returns `true` when the offset actually changed.
+    fn pan(&mut self, delta: Vector, scaled_size: Size, bounds: Size) -> bool {
+        let hidden_width = (scaled_size.width - bounds.width / 2.0).max(0.0).round();
+        let hidden_height = (scaled_size.height - bounds.height / 2.0).max(0.0).round();
+        let previous = self.current_offset;
+        let x = if bounds.width < scaled_size.width {
+            (self.current_offset.x - delta.x).clamp(-hidden_width, hidden_width)
+        } else {
+            0.0
+        };
+        let y = if bounds.height < scaled_size.height {
+            (self.current_offset.y - delta.y).clamp(-hidden_height, hidden_height)
+        } else {
+            0.0
+        };
+        self.current_offset = Vector::new(x, y);
+        (self.current_offset.x - previous.x).abs() > OFFSET_EPSILON
+            || (self.current_offset.y - previous.y).abs() > OFFSET_EPSILON
     }
 }
 
