@@ -6,6 +6,7 @@
 
 use noctua_core_test_common as common;
 
+use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::pdfium_ops::model::MarkupKind;
 use noctua_core::pdfium_ops::model::palette;
 use noctua_core::pdfium_ops::{BindSource, Command, CommandResult, PdfOpsManager};
@@ -376,12 +377,11 @@ fn add_annotations_and_save() {
             page: 1,
             text: "test note".to_string(),
             font_size: 16.0,
-            x: 40.0,
-            y: 40.0,
-            width: 60.0,
-            height: 30.0,
+            color: palette::RED,
+            position: (40.0, 70.0),
+            max_width: 160.0,
         }),
-        CommandResult::Ok
+        CommandResult::FreeTextWritten { .. }
     ));
     assert!(matches!(
         mgr.execute(Command::AddInkAnnotation {
@@ -520,4 +520,207 @@ fn operations_without_open_document_fail() {
         mgr.execute(Command::Save),
         CommandResult::Error(_)
     ));
+}
+
+/// A free text annotation wraps inside its width, grows downward from the
+/// click and is drawn without a frame.
+#[test]
+fn free_text_wraps_without_a_frame() {
+    let Some(pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("free-text");
+    let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
+
+    let index = match mgr.execute(Command::AddFreeTextAnnotation {
+        page: 1,
+        text: "Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod".to_string(),
+        font_size: 12.0,
+        color: AnnotationColor::rgb(255, 0, 0),
+        position: (60.0, 700.0),
+        max_width: 200.0,
+    }) {
+        CommandResult::FreeTextWritten { index, .. } => index.expect("created index"),
+        other => panic!("expected FreeTextWritten, got {other:?}"),
+    };
+    assert_eq!(index, 0);
+
+    let annotations = match mgr.execute(Command::ListFreeTextAnnotations { page: 1 }) {
+        CommandResult::FreeTextAnnotations(list) => list,
+        other => panic!("expected FreeTextAnnotations, got {other:?}"),
+    };
+    assert_eq!(annotations.len(), 1);
+    let annotation = &annotations[0];
+    assert!(
+        annotation.width > 100.0 && annotation.width <= 200.0,
+        "width {}",
+        annotation.width
+    );
+    // More than one line, and the box hangs below the click at its top edge.
+    assert!(
+        annotation.height > 12.0 * 1.2,
+        "height {}",
+        annotation.height
+    );
+    let top = annotation.y + annotation.height;
+    assert!((top - 700.0).abs() < 0.5, "top {top}");
+
+    let (width, height, rgba) = match mgr.execute(Command::RenderPage { page: 1, zoom: 1.0 }) {
+        CommandResult::Rendered {
+            width,
+            height,
+            rgba_data,
+        } => (width, height, rgba_data),
+        other => panic!("expected Rendered, got {other:?}"),
+    };
+
+    // A frame would paint the box's top edge across its whole width; the text
+    // itself starts one padding and one ascent below it.
+    let top_row = height - 700;
+    let mut edge_pixels = 0;
+    let mut text_pixels = 0;
+    for y in 0..40_u32 {
+        for x in 60..(60 + annotation.width as u32) {
+            let i = (((top_row + y) * width + x) * 4) as usize;
+            if rgba[i] < 240 || rgba[i + 1] < 240 || rgba[i + 2] < 240 {
+                if y <= 2 {
+                    edge_pixels += 1;
+                } else {
+                    text_pixels += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        edge_pixels * 4 < 2 * annotation.width as u32,
+        "the top edge must stay empty, got {edge_pixels} pixels"
+    );
+    assert!(text_pixels > 0, "the text must be rendered");
+
+    common::remove_dir(&dir);
+}
+
+/// Re-writing an annotation with its own box width as wrap width must not
+/// re-flow the text: clicking an existing annotation starts an edit, and every
+/// click used to re-wrap the paragraph.
+#[test]
+fn free_text_edit_keeps_its_layout() {
+    let Some(pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("free-text-edit");
+    let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
+
+    let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod";
+    assert!(matches!(
+        mgr.execute(Command::AddFreeTextAnnotation {
+            page: 1,
+            text: text.to_string(),
+            font_size: 12.0,
+            color: AnnotationColor::rgb(0, 0, 0),
+            position: (60.0, 700.0),
+            max_width: 200.0,
+        }),
+        CommandResult::FreeTextWritten { .. }
+    ));
+
+    let read =
+        |mgr: &mut PdfOpsManager| match mgr.execute(Command::ListFreeTextAnnotations { page: 1 }) {
+            CommandResult::FreeTextAnnotations(mut list) => list.remove(0),
+            other => panic!("expected FreeTextAnnotations, got {other:?}"),
+        };
+
+    let before = read(&mut mgr);
+    for _ in 0..3 {
+        let current = read(&mut mgr);
+        assert!(matches!(
+            mgr.execute(Command::UpdateFreeText {
+                page: 1,
+                index: current.index,
+                text: text.to_string(),
+                font_size: 12.0,
+                color: AnnotationColor::rgb(0, 0, 0),
+                position: (current.x, current.y + current.height),
+                max_width: current.width,
+                cursor: text.chars().count(),
+            }),
+            CommandResult::FreeTextWritten { .. }
+        ));
+    }
+    let after = read(&mut mgr);
+
+    assert!(
+        (after.width - before.width).abs() < 0.5,
+        "width {} -> {}",
+        before.width,
+        after.width
+    );
+    assert!(
+        (after.height - before.height).abs() < 0.5,
+        "height {} -> {}",
+        before.height,
+        after.height
+    );
+
+    common::remove_dir(&dir);
+}
+
+/// The insertion marker follows the cursor index, including across wrapped
+/// lines.
+#[test]
+fn free_text_caret_follows_the_cursor() {
+    let Some(pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("free-text-caret");
+    let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
+
+    let text = "alpha beta gamma delta epsilon zeta eta theta";
+    let created = mgr.execute(Command::AddFreeTextAnnotation {
+        page: 1,
+        text: text.to_string(),
+        font_size: 12.0,
+        color: AnnotationColor::rgb(0, 0, 0),
+        position: (60.0, 700.0),
+        max_width: 100.0,
+    });
+    let CommandResult::FreeTextWritten { caret: end, .. } = created else {
+        panic!("create failed");
+    };
+
+    let moved = mgr.execute(Command::UpdateFreeText {
+        page: 1,
+        index: 0,
+        text: text.to_string(),
+        font_size: 12.0,
+        color: AnnotationColor::rgb(0, 0, 0),
+        position: (60.0, 700.0),
+        max_width: 100.0,
+        cursor: 0,
+    });
+    let CommandResult::FreeTextWritten { caret: start, .. } = moved else {
+        panic!("update failed");
+    };
+
+    // The caret starts at the box's left padding and sits on the first line.
+    assert!((start.0 - 62.0).abs() < 0.5, "x {}", start.0);
+    assert!(start.1 > end.1, "start {} end {}", start.1, end.1);
+    assert!(start.0 < end.0, "start {} end {}", start.0, end.0);
+
+    common::remove_dir(&dir);
 }

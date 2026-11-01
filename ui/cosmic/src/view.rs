@@ -24,7 +24,7 @@ use crate::message::{MenuAction, Message};
 use crate::model::{AnnotationTool, AppModel, TabContent, Target, ViewState};
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_placeholder::empty_placeholder;
-use crate::widget::image_viewer::Viewer;
+use crate::widget::image_viewer::{TextCaret, Viewer};
 use crate::widget::scroll_zoom::ScrollZoom;
 use crate::widget::thumbnail_strip::thumbnail_strip;
 use crate::widget::toolbar::ResponsiveToolbar;
@@ -176,8 +176,12 @@ fn annotation_strip(app: &AppModel) -> Element<'_, Message> {
 
 /// Build the fitted/zoomable viewer for a rendered image, sharing the
 /// `Viewer` wiring between single images and annotation pages. `on_click` is
-/// set only in annotation mode; it turns a left click into a position report
-/// instead of a pan.
+/// the position of a click in native image pixels; `caret` is an optional
+/// insertion marker.
+//
+// The arguments mirror the widget's builder; bundling them into a struct would
+// only move the noise to the call sites.
+#[allow(clippy::too_many_arguments)]
 fn viewer_element(
     handle: &widget::image::Handle,
     view: ViewState,
@@ -185,7 +189,8 @@ fn viewer_element(
     reported_bounds: Rc<Cell<Size>>,
     cursor: mouse::Interaction,
     on_state_change: impl Fn(f32, f32, f32) -> Message + 'static,
-    on_click: Option<Box<dyn Fn(Point, Point) -> Message>>,
+    on_click: Option<Box<dyn Fn(Point) -> Message>>,
+    caret: Option<TextCaret>,
 ) -> Element<'static, Message> {
     let space = cosmic::theme::spacing();
     let content_fit = if view.fit {
@@ -207,7 +212,8 @@ fn viewer_element(
         .width(Length::Fill)
         .height(Length::Fill)
         .with_state(scale, offset_x, offset_y)
-        .on_state_change(on_state_change);
+        .on_state_change(on_state_change)
+        .text_caret(caret);
     if let Some(on_click) = on_click {
         viewer = viewer.on_click(on_click);
     }
@@ -300,7 +306,8 @@ fn page_context_menu(tab: Entity, page: u32) -> Vec<menu::Tree<Message>> {
     menu::items(&empty_binds, items)
 }
 
-/// The content view of an annotation tab: the selected page, fitted.
+/// The content view of an annotation tab: the selected page, fitted. The text
+/// being typed lives in the document itself, so no overlay is drawn here.
 fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     let Some(tab) = app.active_tab() else {
         return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
@@ -318,7 +325,29 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
         mouse::Interaction::Grab
     };
 
-    let viewer = viewer_element(
+    // The core reports the caret in page points with the origin at the
+    // bottom-left; the viewer draws in image pixels from the top-left. The page
+    // is rendered at one pixel per point.
+    let caret = state
+        .pending_text
+        .as_ref()
+        .filter(|_| state.caret_visible)
+        .map(|pending| {
+            let (x, y, width, height) = pending.caret;
+            let image_height = current.rgba.1 as f32;
+            TextCaret {
+                position: Point::new(x, image_height - (y + height)),
+                size: Size::new(width, height),
+                color: cosmic::iced::Color::from_rgba8(
+                    state.annotation_color.red,
+                    state.annotation_color.green,
+                    state.annotation_color.blue,
+                    f32::from(state.annotation_color.alpha) / 255.0,
+                ),
+            }
+        });
+
+    viewer_element(
         &current.handle,
         state.view,
         app.keyboard_modifiers,
@@ -330,40 +359,13 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
             offset_x,
             offset_y,
         },
-        Some(Box::new(move |native, screen| {
-            Message::AnnotationPointerClicked {
-                tab,
-                x: native.x,
-                y: native.y,
-                screen_x: screen.x,
-                screen_y: screen.y,
-            }
+        Some(Box::new(move |native| Message::AnnotationPointerClicked {
+            tab,
+            x: native.x,
+            y: native.y,
         })),
-    );
-
-    let Some(pending) = state.pending_text.as_ref() else {
-        return viewer;
-    };
-
-    let space = cosmic::theme::spacing();
-    let input =
-        cosmic::widget::text_input(fl!("text-annotation-placeholder"), pending.text.clone())
-            .id(widget::Id::new("annotation-text"))
-            .on_input(Message::AnnotationTextChanged)
-            .on_submit(Message::AnnotationTextSubmit)
-            .width(Length::Fixed(280.0));
-    // `viewer_element` pads the viewer by `space_m`; shift the input by the same
-    // amount so it sits exactly where the user clicked.
-    let offset = f32::from(space.space_m);
-    let top = (pending.screen.1 + offset) as u16;
-    let left = (pending.screen.0 + offset) as u16;
-    let overlay = widget::container(input)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Start)
-        .align_y(Alignment::Start)
-        .padding([top, 0, 0, left]);
-    cosmic::iced::widget::Stack::with_children([viewer, overlay.into()]).into()
+        caret,
+    )
 }
 
 /// Free-text font size presets, in points.
@@ -587,6 +589,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                     offset_x,
                     offset_y,
                 },
+                None,
                 None,
             );
             with_file_context_menu(app, &path, viewer)

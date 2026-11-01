@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
 use cosmic::widget::menu;
@@ -121,29 +122,45 @@ pub enum Message {
     /// The free-text colour changed.
     AnnotationColorChanged(AnnotationColor),
     /// A click landed on the annotation page; native image coordinates
-    /// (pixels, origin top-left) plus the screen position inside the viewer
-    /// for placing the in-place text input.
+    /// (pixels, origin top-left).
     AnnotationPointerClicked {
         tab: Entity,
         x: f32,
         y: f32,
-        screen_x: f32,
-        screen_y: f32,
     },
     /// The free-text annotations of the clicked page were listed; carries the
-    /// click context so the handler can hit-test and open the input.
+    /// click context so the handler can hit-test and start an edit.
     AnnotationAnnotationsListed {
         tab: Entity,
         annotations: Vec<FreeTextAnnotation>,
         x: f32,
         y: f32,
-        screen_x: f32,
-        screen_y: f32,
     },
-    /// The in-place free-text input changed; carries the current text.
-    AnnotationTextChanged(String),
-    /// The in-place free-text input was submitted; carries the text.
-    AnnotationTextSubmit(String),
+    /// A key press routed to the in-place free-text editor: named keys such as
+    /// Backspace, Delete, Enter, Escape or the arrow keys.
+    AnnotationTextKey(Key),
+    /// Text produced by a key press, with Shift, AltGr and the layout already
+    /// applied. This is what gets inserted at the caret.
+    AnnotationTextTyped(String),
+    /// The blink timer ticked; toggles the insertion marker while typing.
+    CaretTicked,
+    /// A free-text annotation was created; carries its index in the page's
+    /// annotation list, the geometry the edit started with and the insertion
+    /// marker rectangle (page points).
+    AnnotationTextCreated {
+        tab: Entity,
+        index: Option<usize>,
+        origin: (f32, f32),
+        max_width: f32,
+        caret: (f32, f32, f32, f32),
+    },
+    /// A free-text annotation was updated or removed; carries the updated
+    /// insertion marker rectangle.
+    AnnotationTextMutated {
+        tab: Entity,
+        ok: bool,
+        caret: Option<(f32, f32, f32, f32)>,
+    },
     /// The annotation viewer reported a zoom/pan state change.
     AnnotationViewerStateChanged {
         tab: Entity,

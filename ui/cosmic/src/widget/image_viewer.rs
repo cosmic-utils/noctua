@@ -18,7 +18,9 @@ use cosmic::iced::core::image::FilterMethod;
 use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::keyboard::{Key, Modifiers};
 use cosmic::iced::mouse;
-use cosmic::iced::{ContentFit, Element, Event, Length, Point, Radians, Rectangle, Size, Vector};
+use cosmic::iced::{
+    Color, ContentFit, Element, Event, Length, Point, Radians, Rectangle, Size, Vector,
+};
 
 use crate::model::{MAX_SCALE, MIN_SCALE, ZOOM_STEP};
 
@@ -34,10 +36,18 @@ const PAN_STEP: f32 = 50.0;
 /// Callback for viewer state changes (scale, `offset_x`, `offset_y`).
 type StateChangeCallback<Message> = Box<dyn Fn(f32, f32, f32) -> Message>;
 
-/// Callback notified when the image is clicked. The first `Point` is in
-/// native image pixels (origin top-left); the second is the position inside
-/// the viewer, used to place an in-place editor.
-type ClickCallback<Message> = Box<dyn Fn(Point, Point) -> Message>;
+/// Callback notified when the image is clicked, with the position in native
+/// image pixels (origin top-left).
+type ClickCallback<Message> = Box<dyn Fn(Point) -> Message>;
+
+/// Insertion marker drawn over the image, in native image pixels (origin
+/// top-left). The app blinks it, so it is not part of the document.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TextCaret {
+    pub(crate) position: Point,
+    pub(crate) size: Size,
+    pub(crate) color: Color,
+}
 
 /// A frame that displays an image with the ability to zoom in/out and pan.
 pub(crate) struct Viewer<Handle, Message> {
@@ -58,6 +68,8 @@ pub(crate) struct Viewer<Handle, Message> {
     /// Optional cell the widget writes its viewport into each frame, so the
     /// app can derive the effective zoom factor (incl. fit mode).
     reported_bounds: Option<Rc<Cell<Size>>>,
+    /// Optional insertion marker drawn over the image.
+    text_caret: Option<TextCaret>,
 }
 
 impl<Handle, Message> Viewer<Handle, Message> {
@@ -74,6 +86,7 @@ impl<Handle, Message> Viewer<Handle, Message> {
             on_state_change: None,
             on_click: None,
             reported_bounds: None,
+            text_caret: None,
         }
     }
 
@@ -81,6 +94,12 @@ impl<Handle, Message> Viewer<Handle, Message> {
     /// menu, keyboard or per-image restore.
     pub(crate) fn with_state(mut self, scale: f32, offset_x: f32, offset_y: f32) -> Self {
         self.external_state = Some((scale, Vector::new(offset_x, offset_y)));
+        self
+    }
+
+    /// Sets the candidate insertion marker drawn over the image.
+    pub(crate) fn text_caret(mut self, caret: Option<TextCaret>) -> Self {
+        self.text_caret = caret;
         self
     }
 
@@ -97,7 +116,7 @@ impl<Handle, Message> Viewer<Handle, Message> {
     /// click reports the position instead of starting a pan.
     pub(crate) fn on_click<F>(mut self, f: F) -> Self
     where
-        F: 'static + Fn(Point, Point) -> Message,
+        F: 'static + Fn(Point) -> Message,
     {
         self.on_click = Some(Box::new(f));
         self
@@ -351,7 +370,7 @@ where
                         (cursor_position.x - image_top_left.x) / (final_size.width / native_w),
                         (cursor_position.y - image_top_left.y) / (final_size.height / native_h),
                     );
-                    shell.publish(on_click(native, cursor_position));
+                    shell.publish(on_click(native));
                     shell.capture_event();
                     return;
                 }
@@ -522,7 +541,35 @@ where
 
         let drawing_bounds = Rectangle::new(bounds.position(), final_size);
 
-        let render = |renderer: &mut Renderer| {
+        // The caret is given in native image pixels; map it through the same
+        // scale and translation the image is drawn with.
+        let caret = self.text_caret.and_then(|caret| {
+            let native = renderer.measure_image(&self.handle).unwrap_or_default();
+            let native_size = Size::new(native.width as f32, native.height as f32);
+            if native_size.width <= 0.0 || native_size.height <= 0.0 {
+                return None;
+            }
+            let scale = Size::new(
+                final_size.width / native_size.width,
+                final_size.height / native_size.height,
+            );
+            let origin = bounds.position() + translation;
+            let rect = Rectangle::new(
+                Point::new(
+                    origin.x + caret.position.x * scale.width,
+                    origin.y + caret.position.y * scale.height,
+                ),
+                Size::new(
+                    // Keep the marker at least one pixel wide, otherwise it
+                    // disappears when the page is shown scaled down.
+                    (caret.size.width * scale.width).max(1.0),
+                    caret.size.height * scale.height,
+                ),
+            );
+            Some((rect, caret.color))
+        });
+
+        renderer.with_layer(bounds, |renderer| {
             renderer.with_translation(translation, |renderer| {
                 renderer.draw_image(
                     Image {
@@ -537,9 +584,22 @@ where
                     *viewport - translation,
                 );
             });
-        };
+        });
 
-        renderer.with_layer(bounds, render);
+        // A quad drawn in the image's layer ends up *under* the image: the
+        // renderer draws a layer as quads, then images, then text, regardless of
+        // insertion order. The caret therefore needs a layer of its own.
+        if let Some((rect, color)) = caret {
+            renderer.with_layer(bounds, |renderer| {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: rect,
+                        ..renderer::Quad::default()
+                    },
+                    color,
+                );
+            });
+        }
     }
 }
 

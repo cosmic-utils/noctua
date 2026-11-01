@@ -46,18 +46,37 @@ pub enum Command {
     /// the UI does not have to track it.
     RotatePageRelative { page: u32, clockwise: bool },
 
-    /// Add a visible free-text annotation at the given page and position.
-    /// `font_size` is the text size in points; `color` is the text colour.
+    /// Add a free-text annotation whose top-left corner sits at `position`
+    /// (page points, origin bottom-left). The text is wrapped at `max_width`
+    /// and the box is sized from the laid-out text, so the box is `max_width`
+    /// wide at most plus padding.
     AddFreeTextAnnotation {
         page: u32,
         text: String,
         font_size: f32,
         color: AnnotationColor,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        position: (f32, f32),
+        max_width: f32,
     },
+
+    /// Rewrite text, style and geometry of an existing free-text annotation.
+    /// `position` is the top-left corner of the box, as for
+    /// [`Command::AddFreeTextAnnotation`]. `cursor` is the character offset the
+    /// insertion marker is drawn at. Passing the box's own width as `max_width`
+    /// keeps an existing layout stable.
+    UpdateFreeText {
+        page: u32,
+        index: usize,
+        text: String,
+        font_size: f32,
+        color: AnnotationColor,
+        position: (f32, f32),
+        max_width: f32,
+        cursor: usize,
+    },
+
+    /// Remove the annotation at the given index from a 1-based page.
+    RemoveAnnotation { page: u32, index: usize },
 
     /// Add an ink (freehand drawing) annotation. The points are given in
     /// page coordinates (points, origin bottom-left).
@@ -86,16 +105,7 @@ pub enum Command {
     /// List the free-text annotations on a 1-based page, in page points.
     ListFreeTextAnnotations { page: u32 },
 
-    /// Replace the text of an existing free-text annotation on a 1-based page.
-    /// `index` is the annotation's position in the page's annotation list.
-    UpdateFreeTextAnnotation {
-        page: u32,
-        index: usize,
-        contents: String,
-    },
-
-    /// Change the text colour and font size of an existing free-text annotation
-    /// by rewriting its `/DA` appearance string.
+    /// Change the text colour and font size of an existing free-text annotation.
     SetFreeTextStyle {
         page: u32,
         index: usize,
@@ -134,6 +144,12 @@ pub enum CommandResult {
     PageSizes(Vec<(f32, f32)>),
     /// Free-text annotations on a page.
     FreeTextAnnotations(Vec<FreeTextAnnotation>),
+    /// A free-text annotation was written. `index` is `Some` for a creation;
+    /// `caret` is the insertion marker rectangle in page points.
+    FreeTextWritten {
+        index: Option<usize>,
+        caret: (f32, f32, f32, f32),
+    },
     /// A rendered page as RGBA pixels.
     Rendered {
         width: u32,

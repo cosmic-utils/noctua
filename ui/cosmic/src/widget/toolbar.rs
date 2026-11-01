@@ -10,9 +10,9 @@ use cosmic::iced::advanced::layout::{self, Node};
 use cosmic::iced::advanced::renderer;
 use cosmic::iced::advanced::widget::Widget;
 use cosmic::iced::advanced::widget::tree::Tree;
-use cosmic::iced::advanced::{Clipboard, Layout, Shell};
+use cosmic::iced::advanced::{Clipboard, Layout, Shell, overlay};
 use cosmic::iced::mouse;
-use cosmic::iced::{Event, Length, Point, Rectangle, Size};
+use cosmic::iced::{Event, Length, Point, Rectangle, Size, Vector};
 use cosmic::{Element, Renderer, Theme};
 
 /// Builder for a responsive toolbar.
@@ -326,6 +326,27 @@ impl<Message> Widget<Message, Theme, Renderer> for ReflowToolbar<'_, Message> {
                 viewport,
             );
         }
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        // Children may own overlays (the dropdown menus in the toolbar). A
+        // custom layout widget has to hand them through, otherwise the menus
+        // never become visible.
+        overlay::from_children(
+            &mut self.children,
+            tree,
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
     }
 
     fn mouse_interaction(

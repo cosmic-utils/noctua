@@ -239,20 +239,32 @@ pub(crate) struct AnnotationUiState {
     pub(crate) font_size_pt: f32,
     /// An in-progress free-text placement; `None` when no text is being entered.
     pub(crate) pending_text: Option<PendingText>,
+    /// Whether the insertion marker is currently shown; toggled by the blink
+    /// timer while a text edit is active.
+    pub(crate) caret_visible: bool,
 }
 
-/// An in-progress free-text placement: where the annotation goes on the page,
-/// where the in-place input is drawn, and the current input text.
+/// An in-progress free-text edit. The annotation itself lives in the document
+/// and is rewritten on every keystroke, so the page render is the preview.
 #[derive(Debug, Clone)]
 pub(crate) struct PendingText {
-    /// Page position in points (origin bottom-left) for the annotation.
-    pub(crate) page: (f32, f32),
-    /// Screen position inside the viewer, for placing the input box.
-    pub(crate) screen: (f32, f32),
-    /// Current text in the input (controlled value).
+    /// Index of the annotation in the page's annotation list.
+    pub(crate) index: usize,
+    /// Text when the edit started; restored when the edit is cancelled.
+    pub(crate) original_text: String,
+    /// Whether this edit created the annotation, so cancelling removes it.
+    pub(crate) is_new: bool,
+    /// Current text.
     pub(crate) text: String,
-    /// When editing an existing annotation, its page-annotation index.
-    pub(crate) edit_index: Option<usize>,
+    /// Caret position as a character offset into `text`.
+    pub(crate) cursor: usize,
+    /// Top-left corner of the box in page points (origin bottom-left).
+    pub(crate) origin: (f32, f32),
+    /// Width the text is wrapped at, in points.
+    pub(crate) max_width: f32,
+    /// Insertion marker rectangle in page points (origin bottom-left), as
+    /// reported by the core after the last write.
+    pub(crate) caret: (f32, f32, f32, f32),
 }
 
 impl Default for AnnotationUiState {
@@ -272,6 +284,7 @@ impl Default for AnnotationUiState {
             },
             font_size_pt: 24.0,
             pending_text: None,
+            caret_visible: true,
         }
     }
 }

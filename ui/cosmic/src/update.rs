@@ -1423,6 +1423,229 @@ impl AppModel {
         })
     }
 
+    /// Run a free-text command in the worker; the page is re-rendered when the
+    /// result arrives.
+    fn annotation_free_text_mutate(
+        &self,
+        tab: Entity,
+        document: DocumentId,
+        command: Command,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let worker = self.worker.clone();
+        cosmic::task::future(async move {
+            let (_, result) = worker.op(Some(document), command).await;
+            match result {
+                CommandResult::FreeTextWritten { caret, .. } => Message::AnnotationTextMutated {
+                    tab,
+                    ok: true,
+                    caret: Some(caret),
+                },
+                CommandResult::Ok => Message::AnnotationTextMutated {
+                    tab,
+                    ok: true,
+                    caret: None,
+                },
+                _ => Message::AnnotationTextMutated {
+                    tab,
+                    ok: false,
+                    caret: None,
+                },
+            }
+        })
+    }
+
+    /// The annotation document of a tab, if it has one.
+    fn annotation_document(&self, tab: Entity) -> Option<DocumentId> {
+        match self.tabs.get(&tab) {
+            Some(TabContent::Annotation { document, .. }) => Some(*document),
+            _ => None,
+        }
+    }
+
+    /// Mark an annotation tab as having unsaved changes.
+    fn mark_annotation_dirty(&mut self, tab: Entity) {
+        if let Some(TabContent::Annotation { dirty, .. }) = self.tabs.get_mut(&tab) {
+            *dirty = true;
+        }
+    }
+
+    /// Re-render only the selected page of an annotation tab.
+    fn render_current_annotation_page(&self, tab: Entity) -> iced::Task<cosmic::Action<Message>> {
+        let Some(document) = self.annotation_document(tab) else {
+            return iced::Task::none();
+        };
+        let Some(page) = self.annotation_ui.get(&tab).map(|state| state.selected) else {
+            return iced::Task::none();
+        };
+        self.render_annotation_page(tab, document, page)
+    }
+
+    /// Create an empty free-text annotation and start editing it.
+    fn add_pending_text(
+        &self,
+        tab: Entity,
+        document: DocumentId,
+        page: u32,
+        font_size: f32,
+        origin: (f32, f32),
+        max_width: f32,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let Some(state) = self.annotation_ui.get(&tab) else {
+            return iced::Task::none();
+        };
+        let color = state.annotation_color;
+        let worker = self.worker.clone();
+        cosmic::task::future(async move {
+            let (_, result) = worker
+                .op(
+                    Some(document),
+                    Command::AddFreeTextAnnotation {
+                        page,
+                        text: String::new(),
+                        font_size,
+                        color,
+                        position: origin,
+                        max_width,
+                    },
+                )
+                .await;
+            let (index, caret) = match result {
+                CommandResult::FreeTextWritten { index, caret } => (index, caret),
+                _ => {
+                    return Message::AnnotationTextMutated {
+                        tab,
+                        ok: false,
+                        caret: None,
+                    };
+                }
+            };
+            Message::AnnotationTextCreated {
+                tab,
+                index,
+                origin,
+                max_width,
+                caret,
+            }
+        })
+    }
+
+    /// Rewrite the annotation being edited with its current text and style.
+    fn update_pending_text(
+        &self,
+        tab: Entity,
+        document: DocumentId,
+        page: u32,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let Some(state) = self.annotation_ui.get(&tab) else {
+            return iced::Task::none();
+        };
+        let Some(pending) = state.pending_text.as_ref() else {
+            return iced::Task::none();
+        };
+        self.annotation_free_text_mutate(
+            tab,
+            document,
+            Command::UpdateFreeText {
+                page,
+                index: pending.index,
+                text: pending.text.clone(),
+                font_size: state.font_size_pt,
+                color: state.annotation_color,
+                position: pending.origin,
+                max_width: pending.max_width,
+                cursor: pending.cursor,
+            },
+        )
+    }
+
+    /// Keep the annotation as it is and drop the insertion marker. An empty
+    /// annotation that was created by this click is removed instead.
+    fn finish_pending_text(&mut self, tab: Entity) -> iced::Task<cosmic::Action<Message>> {
+        let Some(document) = self.annotation_document(tab) else {
+            return iced::Task::none();
+        };
+        let (page, font_size, color, pending) = {
+            let Some(state) = self.annotation_ui.get_mut(&tab) else {
+                return iced::Task::none();
+            };
+            let Some(pending) = state.pending_text.take() else {
+                return iced::Task::none();
+            };
+            (
+                state.selected,
+                state.font_size_pt,
+                state.annotation_color,
+                pending,
+            )
+        };
+
+        if pending.is_new && pending.text.is_empty() {
+            return self.annotation_free_text_mutate(
+                tab,
+                document,
+                Command::RemoveAnnotation {
+                    page,
+                    index: pending.index,
+                },
+            );
+        }
+        self.annotation_free_text_mutate(
+            tab,
+            document,
+            Command::UpdateFreeText {
+                page,
+                index: pending.index,
+                text: pending.text,
+                font_size,
+                color,
+                position: pending.origin,
+                max_width: pending.max_width,
+                cursor: pending.cursor,
+            },
+        )
+    }
+
+    /// Drop the edit: a new annotation is removed, an edited one is restored.
+    fn cancel_pending_text(&mut self, tab: Entity) -> iced::Task<cosmic::Action<Message>> {
+        let Some(document) = self.annotation_document(tab) else {
+            return iced::Task::none();
+        };
+        let Some(state) = self.annotation_ui.get_mut(&tab) else {
+            return iced::Task::none();
+        };
+        let page = state.selected;
+        let font_size = state.font_size_pt;
+        let color = state.annotation_color;
+        let Some(pending) = state.pending_text.take() else {
+            return iced::Task::none();
+        };
+
+        if pending.is_new {
+            return self.annotation_free_text_mutate(
+                tab,
+                document,
+                Command::RemoveAnnotation {
+                    page,
+                    index: pending.index,
+                },
+            );
+        }
+        self.annotation_free_text_mutate(
+            tab,
+            document,
+            Command::UpdateFreeText {
+                page,
+                index: pending.index,
+                text: pending.original_text,
+                font_size,
+                color,
+                position: pending.origin,
+                max_width: pending.max_width,
+                cursor: 0,
+            },
+        )
+    }
+
     /// Map a click in native image pixels (origin top-left) to the selected
     /// page's coordinates in points (origin bottom-left). Only valid while the
     /// page has not been rotated/flipped in the view.
@@ -1730,10 +1953,15 @@ impl AppModel {
     ) -> iced::Task<cosmic::Action<Message>> {
         match message {
             Message::TabActivated(id) => {
+                // Leave the text being typed in the previous tab as it is.
+                let finish = self
+                    .active_tab()
+                    .map(|tab| self.finish_pending_text(tab))
+                    .unwrap_or_else(iced::Task::none);
                 self.tab_model.activate(id);
                 let command = self.activate_tab();
                 let title = self.update_title();
-                return cosmic::task::batch(vec![command, title]);
+                return cosmic::task::batch(vec![finish, command, title]);
             }
 
             Message::TabCloseRequested(id) => {
@@ -2023,7 +2251,9 @@ impl AppModel {
             }
 
             Message::AnnotationPageSelected { tab, page } => {
-                return self.annotation_select_page(tab, page);
+                let finish = self.finish_pending_text(tab);
+                let select = self.annotation_select_page(tab, page);
+                return cosmic::task::batch(vec![finish, select]);
             }
 
             Message::AnnotationRotatePage {
@@ -2099,15 +2329,17 @@ impl AppModel {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
+                // Keep what was typed; only the insertion marker goes away.
+                let finish = self.finish_pending_text(tab);
                 let Some(state) = self.annotation_ui.get_mut(&tab) else {
-                    return iced::Task::none();
+                    return finish;
                 };
                 state.active_tool = if state.active_tool == Some(tool) {
                     None
                 } else {
                     Some(tool)
                 };
-                state.pending_text = None;
+                return finish;
             }
 
             Message::AnnotationFontSizeChanged(size) => {
@@ -2117,6 +2349,15 @@ impl AppModel {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     state.font_size_pt = size;
                 }
+                // Restyle the text that is being typed right away.
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
+                };
+                let page = match self.annotation_ui.get(&tab) {
+                    Some(state) => state.selected,
+                    None => return iced::Task::none(),
+                };
+                return self.update_pending_text(tab, document, page);
             }
 
             Message::AnnotationColorChanged(color) => {
@@ -2126,15 +2367,17 @@ impl AppModel {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     state.annotation_color = color;
                 }
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
+                };
+                let page = match self.annotation_ui.get(&tab) {
+                    Some(state) => state.selected,
+                    None => return iced::Task::none(),
+                };
+                return self.update_pending_text(tab, document, page);
             }
 
-            Message::AnnotationPointerClicked {
-                tab,
-                x,
-                y,
-                screen_x,
-                screen_y,
-            } => {
+            Message::AnnotationPointerClicked { tab, x, y } => {
                 let is_text = self
                     .annotation_ui
                     .get(&tab)
@@ -2142,18 +2385,21 @@ impl AppModel {
                 if !is_text {
                     return iced::Task::none();
                 }
+                // Finish the previous edit before starting a new one, so its
+                // insertion marker is removed.
+                let finish = self.finish_pending_text(tab);
                 let document = match self.tabs.get(&tab) {
                     Some(TabContent::Annotation { document, .. }) => *document,
-                    _ => return iced::Task::none(),
+                    _ => return finish,
                 };
                 let page = match self.annotation_ui.get(&tab) {
                     Some(state) => state.selected,
-                    None => return iced::Task::none(),
+                    None => return finish,
                 };
                 // Query the page's free-text annotations so the click can edit
                 // an existing one instead of always creating a new one.
                 let worker = self.worker.clone();
-                return cosmic::task::future(async move {
+                let click = cosmic::task::future(async move {
                     let (_, result) = worker
                         .op(Some(document), Command::ListFreeTextAnnotations { page })
                         .await;
@@ -2166,10 +2412,9 @@ impl AppModel {
                         annotations,
                         x,
                         y,
-                        screen_x,
-                        screen_y,
                     }
                 });
+                return cosmic::task::batch(vec![finish, click]);
             }
 
             Message::AnnotationAnnotationsListed {
@@ -2177,135 +2422,211 @@ impl AppModel {
                 annotations,
                 x,
                 y,
-                screen_x,
-                screen_y,
             } => {
                 let Some(position) = self.annotation_page_coords(tab, x, y) else {
                     return iced::Task::none();
                 };
-                // Hit-test the click (page points) against the annotations.
-                let hit = annotations.iter().find(|a| {
-                    position.0 >= a.x
-                        && position.0 <= a.x + a.width
-                        && position.1 >= a.y
-                        && position.1 <= a.y + a.height
-                });
-                let (pending, style) = match hit {
-                    Some(a) => (
-                        PendingText {
-                            page: (a.x, a.y),
-                            screen: (screen_x, screen_y),
-                            text: a.contents.clone(),
-                            edit_index: Some(a.index),
-                        },
-                        Some((a.color, a.font_size)),
-                    ),
-                    None => (
-                        PendingText {
-                            page: position,
-                            screen: (screen_x, screen_y),
-                            text: String::new(),
-                            edit_index: None,
-                        },
-                        None,
-                    ),
-                };
-                if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.pending_text = Some(pending);
-                    // Load the annotation's style into the toolbar so editing it
-                    // starts from its real colour and size.
-                    if let Some((color, font_size)) = style {
-                        state.annotation_color = color;
-                        state.font_size_pt = font_size;
-                    }
-                }
-                // Focus the freshly shown input so typing lands in it.
-                return cosmic::widget::text_input::focus(cosmic::widget::Id::new(
-                    "annotation-text",
-                ))
-                .map(cosmic::Action::App);
-            }
-
-            Message::AnnotationTextChanged(text) => {
-                let Some(tab) = self.active_tab() else {
-                    return iced::Task::none();
-                };
-                if let Some(state) = self.annotation_ui.get_mut(&tab)
-                    && let Some(pending) = state.pending_text.as_mut()
-                {
-                    pending.text = text;
-                }
-            }
-
-            Message::AnnotationTextSubmit(text) => {
-                let Some(tab) = self.active_tab() else {
-                    return iced::Task::none();
-                };
-                let (document, page, font_size, color, position, edit_index) = {
-                    let state = match self.annotation_ui.get(&tab) {
-                        Some(state) => state,
-                        None => return iced::Task::none(),
-                    };
-                    let Some(pending) = state.pending_text.as_ref() else {
+                let (document, page, font_size, max_width) = {
+                    let Some(state) = self.annotation_ui.get(&tab) else {
                         return iced::Task::none();
                     };
                     let document = match self.tabs.get(&tab) {
                         Some(TabContent::Annotation { document, .. }) => *document,
                         _ => return iced::Task::none(),
                     };
+                    let page_width = state
+                        .page_sizes
+                        .get(state.selected as usize - 1)
+                        .map(|(width, _)| *width)
+                        .unwrap_or(0.0);
                     (
                         document,
                         state.selected,
                         state.font_size_pt,
-                        state.annotation_color,
-                        pending.page,
-                        pending.edit_index,
+                        (page_width - position.0).max(0.0),
                     )
                 };
+
+                // Hit-test the click (page points) against the annotations.
+                let hit = annotations.iter().find(|annotation| {
+                    position.0 >= annotation.x
+                        && position.0 <= annotation.x + annotation.width
+                        && position.1 >= annotation.y
+                        && position.1 <= annotation.y + annotation.height
+                });
+
+                if let Some(annotation) = hit {
+                    // Editing keeps the text and the box; only the insertion
+                    // marker is redrawn.
+                    let pending = PendingText {
+                        index: annotation.index,
+                        original_text: annotation.contents.clone(),
+                        is_new: false,
+                        text: annotation.contents.clone(),
+                        cursor: text_char_count(&annotation.contents),
+                        origin: (annotation.x, annotation.y + annotation.height),
+                        max_width: annotation.width,
+                        // Filled in by the first update that reaches the core.
+                        caret: (0.0, 0.0, 0.0, 0.0),
+                    };
+                    let (color, font_size) = (annotation.color, annotation.font_size);
+                    if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                        state.pending_text = Some(pending);
+                        // Start the toolbar from the annotation's real style.
+                        state.annotation_color = color;
+                        state.font_size_pt = font_size;
+                        state.caret_visible = true;
+                    }
+                    return self.update_pending_text(tab, document, page);
+                }
+
+                return self.add_pending_text(tab, document, page, font_size, position, max_width);
+            }
+
+            Message::AnnotationTextKey(key) => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+
+                if matches!(key, Key::Named(Named::Escape)) {
+                    return self.cancel_pending_text(tab);
+                }
+
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
+                };
+                let page = match self.annotation_ui.get(&tab) {
+                    Some(state) => state.selected,
+                    None => return iced::Task::none(),
+                };
+
+                let finished = {
+                    let Some(state) = self.annotation_ui.get_mut(&tab) else {
+                        return iced::Task::none();
+                    };
+                    let Some(pending) = state.pending_text.as_mut() else {
+                        return iced::Task::none();
+                    };
+
+                    match key {
+                        Key::Named(Named::Enter) => true,
+                        Key::Named(Named::Backspace) => {
+                            delete_before(&mut pending.text, &mut pending.cursor);
+                            false
+                        }
+                        Key::Named(Named::Delete) => {
+                            delete_at(&mut pending.text, pending.cursor);
+                            false
+                        }
+                        Key::Named(Named::ArrowLeft) => {
+                            pending.cursor = pending.cursor.saturating_sub(1);
+                            false
+                        }
+                        Key::Named(Named::ArrowRight) => {
+                            pending.cursor =
+                                (pending.cursor + 1).min(text_char_count(&pending.text));
+                            false
+                        }
+                        Key::Named(Named::Home) => {
+                            pending.cursor = 0;
+                            false
+                        }
+                        Key::Named(Named::End) => {
+                            pending.cursor = text_char_count(&pending.text);
+                            false
+                        }
+                        _ => false,
+                    }
+                };
+
+                if finished {
+                    return self.finish_pending_text(tab);
+                }
+                // Typing restarts the blink, so the marker is visible while the
+                // key is processed.
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.pending_text = None;
+                    state.caret_visible = true;
                 }
-                if let Some(index) = edit_index {
-                    // Update the text and its style in the same edit.
-                    return cosmic::task::batch(vec![
-                        self.annotation_mutate(
-                            tab,
-                            document,
-                            Command::UpdateFreeTextAnnotation {
-                                page,
-                                index,
-                                contents: text,
-                            },
-                        ),
-                        self.annotation_mutate(
-                            tab,
-                            document,
-                            Command::SetFreeTextStyle {
-                                page,
-                                index,
-                                color,
-                                font_size,
-                            },
-                        ),
-                    ]);
+                return self.update_pending_text(tab, document, page);
+            }
+
+            Message::AnnotationTextTyped(text) => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
+                };
+                let page = match self.annotation_ui.get(&tab) {
+                    Some(state) => state.selected,
+                    None => return iced::Task::none(),
+                };
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    let Some(pending) = state.pending_text.as_mut() else {
+                        return iced::Task::none();
+                    };
+                    insert_at(&mut pending.text, &mut pending.cursor, &text);
+                    state.caret_visible = true;
                 }
-                let (x, y) = position;
-                let width = 200.0;
-                let height = font_size * 1.5;
-                return self.annotation_mutate(
-                    tab,
-                    document,
-                    Command::AddFreeTextAnnotation {
-                        page,
-                        text,
-                        font_size,
-                        color,
-                        x,
-                        y,
-                        width,
-                        height,
-                    },
-                );
+                return self.update_pending_text(tab, document, page);
+            }
+
+            Message::CaretTicked => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                if let Some(state) = self.annotation_ui.get_mut(&tab)
+                    && state.pending_text.is_some()
+                {
+                    state.caret_visible = !state.caret_visible;
+                }
+                return iced::Task::none();
+            }
+
+            Message::AnnotationTextCreated {
+                tab,
+                index,
+                origin,
+                max_width,
+                caret,
+            } => {
+                let Some(index) = index else {
+                    tracing::error!("failed to create the free-text annotation");
+                    return iced::Task::none();
+                };
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    state.pending_text = Some(PendingText {
+                        index,
+                        original_text: String::new(),
+                        is_new: true,
+                        text: String::new(),
+                        cursor: 0,
+                        origin,
+                        max_width,
+                        caret,
+                    });
+                    state.caret_visible = true;
+                }
+                self.mark_annotation_dirty(tab);
+                let title = self.update_title();
+                let render = self.render_current_annotation_page(tab);
+                return cosmic::task::batch(vec![title, render]);
+            }
+
+            Message::AnnotationTextMutated { tab, ok, caret } => {
+                if !ok {
+                    tracing::error!("free-text annotation update failed");
+                    return iced::Task::none();
+                }
+                if let (Some(state), Some(caret)) = (self.annotation_ui.get_mut(&tab), caret)
+                    && let Some(pending) = state.pending_text.as_mut()
+                {
+                    pending.caret = caret;
+                }
+                self.mark_annotation_dirty(tab);
+                let title = self.update_title();
+                let render = self.render_current_annotation_page(tab);
+                return cosmic::task::batch(vec![title, render]);
             }
 
             Message::AnnotationViewerStateChanged {
@@ -2681,4 +3002,43 @@ impl AppModel {
         }
         iced::Task::none()
     }
+}
+
+/// Number of characters in `text`.
+fn text_char_count(text: &str) -> usize {
+    text.chars().count()
+}
+
+/// Byte offset of `char_index` in `text`; the end of the string when past it.
+fn byte_offset(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map(|(offset, _)| offset)
+        .unwrap_or(text.len())
+}
+
+/// Insert `added` at the caret and move the caret past it.
+fn insert_at(text: &mut String, cursor: &mut usize, added: &str) {
+    let offset = byte_offset(text, *cursor);
+    text.insert_str(offset, added);
+    *cursor += text_char_count(added);
+}
+
+/// Remove the character before the caret.
+fn delete_before(text: &mut String, cursor: &mut usize) {
+    if *cursor == 0 {
+        return;
+    }
+    let offset = byte_offset(text, *cursor - 1);
+    text.remove(offset);
+    *cursor -= 1;
+}
+
+/// Remove the character at the caret.
+fn delete_at(text: &mut String, cursor: usize) {
+    if cursor >= text_char_count(text) {
+        return;
+    }
+    let offset = byte_offset(text, cursor);
+    text.remove(offset);
 }

@@ -26,7 +26,6 @@ move-page-up = Flytta sida upp
 move-page-down = Flytta sida ned
 delete-page = Ta bort sida
 text-tool = Text
-text-annotation-placeholder = Skriv text...
 color-black = Svart
 color-white = Vit
 color-red = Röd

@@ -24,9 +24,12 @@ use noctua_core::storage;
 use crate::config::NoctuaConfig;
 use crate::fl;
 use crate::message::{MenuAction, Message};
-use crate::model::{AppModel, TabContent};
+use crate::model::{AnnotationTool, AppModel, TabContent};
 
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+
+/// Insertion marker blink interval, in milliseconds.
+const CARET_BLINK_MILLIS: u64 = 530;
 const APP_ICON: &[u8] =
     include_bytes!("../resources/icons/hicolor/scalable/apps/org.codeberg.wfx.Noctua.svg");
 
@@ -234,18 +237,58 @@ impl cosmic::Application for AppModel {
         // A HashMap is not Hash, so pass the binds as a Vec for the
         // subscription state.
         let key_binds: Vec<_> = self.key_binds.clone().into_iter().collect();
-        iced::keyboard::listen()
-            .with(key_binds)
-            .filter_map(|(key_binds, event)| match event {
+        // While the text tool is active, keys belong to the annotation: menu
+        // binds and entry navigation stay out of the way.
+        let typing_text = self
+            .active_tab()
+            .and_then(|tab| self.annotation_ui.get(&tab))
+            .is_some_and(|state| {
+                state.pending_text.is_some() || state.active_tool == Some(AnnotationTool::Text)
+            });
+
+        let keyboard = iced::keyboard::listen()
+            .with((key_binds, typing_text))
+            .filter_map(|((key_binds, typing_text), event)| match event {
                 iced::keyboard::Event::ModifiersChanged(modifiers) => {
                     Some(Message::ModifiersChanged(modifiers))
                 }
                 iced::keyboard::Event::KeyPressed {
                     key,
+                    modified_key: _,
                     modifiers,
                     physical_key,
+                    text,
                     ..
                 } => {
+                    if typing_text {
+                        // Named editing keys first: they never carry text.
+                        let named = matches!(
+                            &key,
+                            iced::keyboard::Key::Named(
+                                Named::Backspace
+                                    | Named::Delete
+                                    | Named::Enter
+                                    | Named::Escape
+                                    | Named::ArrowLeft
+                                    | Named::ArrowRight
+                                    | Named::Home
+                                    | Named::End
+                            )
+                        );
+                        if named {
+                            return Some(Message::AnnotationTextKey(key));
+                        }
+
+                        // Ctrl shortcuts stay shortcuts; AltGr types characters.
+                        if modifiers.control() && !modifiers.alt() {
+                            return None;
+                        }
+
+                        // `text` already has Shift, AltGr and the keyboard
+                        // layout applied; `key` is the unmodified key.
+                        return text.map(|text| Message::AnnotationTextTyped(text.to_string()));
+                    }
+
                     if let Some((_, action)) = key_binds
                         .iter()
                         .find(|(bind, _)| bind.matches(modifiers, &key, Some(&physical_key)))
@@ -268,7 +311,22 @@ impl cosmic::Application for AppModel {
                     }
                 }
                 _ => None,
-            })
+            });
+
+        // Blink the insertion marker while a text annotation is being edited.
+        let editing = self
+            .active_tab()
+            .and_then(|tab| self.annotation_ui.get(&tab))
+            .is_some_and(|state| state.pending_text.is_some());
+        if !editing {
+            return keyboard;
+        }
+
+        iced::Subscription::batch(vec![
+            keyboard,
+            iced::time::every(std::time::Duration::from_millis(CARET_BLINK_MILLIS))
+                .map(|_| Message::CaretTicked),
+        ])
     }
 
     /// Save the session when the app exits.
