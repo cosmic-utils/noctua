@@ -69,6 +69,7 @@ impl cosmic::Application for AppModel {
             .license(env!("CARGO_PKG_LICENSE"))
             .license_url("https://www.gnu.org/licenses/gpl-3.0.html")
             .developers([("wfx", "wfx.codeberg@mailbox.org")])
+            .translators([("Luna Jernberg", "bittin@noreply.codeberg.org")])
             .links([(fl!("repository"), REPOSITORY)]);
 
         let mut app = AppModel {
