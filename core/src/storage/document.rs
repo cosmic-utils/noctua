@@ -6,7 +6,7 @@
 use super::StorageError;
 use crate::document::{DocumentInfo, Kind, Metadata};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Metadata about a physical file, obtained via `std::fs::metadata`.
@@ -35,6 +35,53 @@ pub fn open(path: &Path) -> Result<Vec<u8>, StorageError> {
 pub fn save(path: &Path, data: &[u8]) -> Result<(), StorageError> {
     fs::write(path, data)?;
     Ok(())
+}
+
+/// Rename a document inside its own folder, keeping its file extension.
+///
+/// `name` is the new name without extension, as entered by the user; a trailing
+/// extension equal to the current one is dropped, so "report.pdf" becomes
+/// "report". Returns the new path. An existing file is never replaced, so a
+/// rename cannot destroy another document.
+///
+/// # Errors
+/// Returns `StorageError` if the name is empty or contains a path separator,
+/// if the target already exists, or if the filesystem rename fails.
+pub fn rename_stem(path: &Path, name: &str) -> Result<PathBuf, StorageError> {
+    let parent = path.parent().ok_or_else(|| {
+        StorageError::Document(format!("{} has no parent folder", path.display()))
+    })?;
+
+    if name.is_empty() || name.contains('/') || name.contains('\\') {
+        return Err(StorageError::Document(format!(
+            "invalid file name: {name:?}"
+        )));
+    }
+
+    let extension = path.extension().and_then(|ext| ext.to_str());
+    let stem = match extension {
+        Some(extension) if !extension.is_empty() => name
+            .strip_suffix(&format!(".{extension}"))
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or(name),
+        _ => name,
+    };
+
+    let file_name = match extension {
+        Some(extension) if !extension.is_empty() => format!("{stem}.{extension}"),
+        _ => stem.to_string(),
+    };
+    let target = parent.join(file_name);
+
+    if target.exists() {
+        return Err(StorageError::Document(format!(
+            "{} already exists",
+            target.display()
+        )));
+    }
+
+    fs::rename(path, &target)?;
+    Ok(target)
 }
 
 /// Retrieves basic file metadata (size, modification time).

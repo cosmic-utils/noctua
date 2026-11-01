@@ -94,6 +94,7 @@ impl cosmic::Application for AppModel {
             context_target: None,
             pending_select: None,
             start_error: None,
+            rename: None,
         };
 
         let mut command = iced::Task::none();
@@ -153,10 +154,30 @@ impl cosmic::Application for AppModel {
             ));
         }
 
+        // Renaming needs a target file on disk; an unsaved annotation has none.
+        let can_rename = self.active_tab().is_some_and(|tab| {
+            matches!(
+                self.tabs.get(&tab),
+                Some(TabContent::Annotation {
+                    save_target: Some(_),
+                    ..
+                })
+            )
+        });
+
         file_items.extend([
             menu::Item::Divider,
             menu::Item::Button(fl!("save-pdf"), None, MenuAction::SavePdf),
             menu::Item::Button(fl!("save-pdf-as"), None, MenuAction::SavePdfAs),
+            if can_rename {
+                menu::Item::Button(fl!("rename-annotation"), None, MenuAction::RenameAnnotation)
+            } else {
+                menu::Item::ButtonDisabled(
+                    fl!("rename-annotation"),
+                    None,
+                    MenuAction::RenameAnnotation,
+                )
+            },
             menu::Item::Divider,
             menu::Item::Button(fl!("close-tab"), None, MenuAction::CloseTab),
             menu::Item::Divider,
@@ -224,6 +245,11 @@ impl cosmic::Application for AppModel {
     /// Describes the interface based on the current state of the application model.
     fn view(&self) -> Element<'_, Self::Message> {
         crate::view::view(self)
+    }
+
+    /// Overlay dialogs, such as the annotation rename prompt.
+    fn dialog(&self) -> Option<Element<'_, Self::Message>> {
+        crate::view::rename_dialog(self)
     }
 
     /// Handles messages emitted by the application and its widgets.

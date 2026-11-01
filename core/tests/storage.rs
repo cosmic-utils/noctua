@@ -110,3 +110,54 @@ fn formats_file_sizes() {
     assert_eq!(storage::document::format_size(2048), "2.0 KB");
     assert_eq!(storage::document::format_size(3 * 1024 * 1024), "3.0 MB");
 }
+
+#[test]
+fn renames_document_keeping_its_extension() {
+    let dir = common::temp_dir("rename-keep-ext");
+    let pdf = dir.join("old.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n").unwrap();
+
+    let new_path = storage::document::rename_stem(&pdf, "new").unwrap();
+
+    assert_eq!(new_path, dir.join("new.pdf"));
+    assert!(!pdf.exists());
+    assert!(new_path.exists());
+    common::remove_dir(&dir);
+}
+
+#[test]
+fn rename_drops_a_typed_extension() {
+    let dir = common::temp_dir("rename-typed-ext");
+    let pdf = dir.join("old.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n").unwrap();
+
+    let new_path = storage::document::rename_stem(&pdf, "new.pdf").unwrap();
+
+    assert_eq!(new_path, dir.join("new.pdf"));
+    common::remove_dir(&dir);
+}
+
+#[test]
+fn rename_refuses_to_replace_an_existing_file() {
+    let dir = common::temp_dir("rename-existing");
+    let source = dir.join("old.pdf");
+    let taken = dir.join("taken.pdf");
+    std::fs::write(&source, b"%PDF-1.4\nold").unwrap();
+    std::fs::write(&taken, b"%PDF-1.4\nkept").unwrap();
+
+    assert!(storage::document::rename_stem(&source, "taken").is_err());
+    assert!(source.exists());
+    assert_eq!(std::fs::read(&taken).unwrap(), b"%PDF-1.4\nkept");
+    common::remove_dir(&dir);
+}
+
+#[test]
+fn rename_rejects_a_name_with_a_path_separator() {
+    let dir = common::temp_dir("rename-separator");
+    let pdf = dir.join("old.pdf");
+    std::fs::write(&pdf, b"%PDF-1.4\n").unwrap();
+
+    assert!(storage::document::rename_stem(&pdf, "nested/new").is_err());
+    assert!(pdf.exists());
+    common::remove_dir(&dir);
+}

@@ -334,4 +334,14 @@ pub struct AppModel {
     /// Path of a start argument that could not be opened; shown in the
     /// empty view instead of the folder hint.
     pub(crate) start_error: Option<String>,
+    /// Open rename dialog of an annotation tab.
+    pub(crate) rename: Option<RenameDraft>,
+}
+
+/// Text being edited in the rename dialog of an annotation tab.
+pub(crate) struct RenameDraft {
+    /// The annotation tab whose target file is being renamed.
+    pub(crate) tab: Entity,
+    /// New file name without extension.
+    pub(crate) text: String,
 }

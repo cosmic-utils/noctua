@@ -31,8 +31,8 @@ use crate::message::{MenuAction, Message};
 use crate::model::{
     AnnotationTool, AnnotationUiState, AppModel, CurrentImage, DocumentPreview, MAX_SCALE,
     MIN_SCALE, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, PendingText,
-    Rgba, SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent, TabUiState,
-    Target, ViewState, ZOOM_STEP,
+    RenameDraft, Rgba, SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent,
+    TabUiState, Target, ViewState, ZOOM_STEP,
 };
 
 /// Estimated strip tile height including spacing, for lazy thumbnails.
@@ -2658,6 +2658,91 @@ impl AppModel {
                 return self.save_active_annotation(true);
             }
 
+            Message::RenameAnnotation => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let Some(TabContent::Annotation {
+                    save_target: Some(path),
+                    ..
+                }) = self.tabs.get(&tab)
+                else {
+                    return iced::Task::none();
+                };
+
+                // The dialog edits the name only; the extension is kept.
+                let text = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                self.rename = Some(RenameDraft { tab, text });
+                return iced::Task::none();
+            }
+
+            Message::RenameAnnotationChanged(text) => {
+                if let Some(draft) = self.rename.as_mut() {
+                    draft.text = text;
+                }
+                return iced::Task::none();
+            }
+
+            Message::RenameAnnotationCancelled => {
+                self.rename = None;
+                return iced::Task::none();
+            }
+
+            Message::RenameAnnotationConfirmed => {
+                let Some(draft) = self.rename.take() else {
+                    return iced::Task::none();
+                };
+                let Some(TabContent::Annotation {
+                    save_target: Some(path),
+                    ..
+                }) = self.tabs.get(&draft.tab)
+                else {
+                    return iced::Task::none();
+                };
+
+                let source = path.clone();
+                let tab = draft.tab;
+                let stem = draft.text.trim().to_string();
+                return cosmic::task::future(async move {
+                    let result = storage::document::rename_stem(&source, &stem)
+                        .map_err(|err| err.to_string());
+                    Message::AnnotationRenamed { tab, stem, result }
+                });
+            }
+
+            Message::AnnotationRenamed { tab, stem, result } => match result {
+                Ok(path) => {
+                    let new_name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(str::to_string);
+                    if let Some(TabContent::Annotation {
+                        name, save_target, ..
+                    }) = self.tabs.get_mut(&tab)
+                    {
+                        *save_target = Some(path);
+                        if let Some(new_name) = new_name {
+                            *name = new_name;
+                        }
+                    }
+                    // The tab title follows the display name.
+                    if let Some(TabContent::Annotation { name, .. }) = self.tabs.get(&tab) {
+                        self.tab_model.text_set(tab, name.clone());
+                    }
+                    return self.update_title();
+                }
+                Err(err) => {
+                    // Reopen the dialog with the input, so it is not lost.
+                    tracing::error!("failed to rename annotation: {err}");
+                    self.rename = Some(RenameDraft { tab, text: stem });
+                    return iced::Task::none();
+                }
+            },
+
             Message::SaveTargetChosen(path) => {
                 let Some(path) = path else {
                     return iced::Task::none();
@@ -2686,6 +2771,10 @@ impl AppModel {
                         if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                             *name = file_name.to_string();
                         }
+                    }
+                    // The tab title follows the display name.
+                    if let Some(TabContent::Annotation { name, .. }) = self.tabs.get(&tab) {
+                        self.tab_model.text_set(tab, name.clone());
                     }
                 } else {
                     tracing::error!("failed to save annotation to {path:?}");

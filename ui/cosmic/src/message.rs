@@ -180,6 +180,21 @@ pub enum Message {
         path: PathBuf,
         ok: bool,
     },
+    /// Rename the target file of the active annotation tab.
+    RenameAnnotation,
+    /// The text of the rename dialog changed.
+    RenameAnnotationChanged(String),
+    /// The rename dialog was confirmed.
+    RenameAnnotationConfirmed,
+    /// The rename dialog was cancelled.
+    RenameAnnotationCancelled,
+    /// Renaming an annotation's target file finished; `stem` is the attempted
+    /// name, kept so a failure can reopen the dialog with the input intact.
+    AnnotationRenamed {
+        tab: Entity,
+        stem: String,
+        result: Result<PathBuf, String>,
+    },
     /// The folder content was listed.
     FolderListed {
         dir: PathBuf,
@@ -284,6 +299,7 @@ pub enum MenuAction {
     AddToAnnotation(DocumentId),
     SavePdf,
     SavePdfAs,
+    RenameAnnotation,
     CloseTab,
     ZoomIn,
     ZoomOut,
@@ -317,6 +333,7 @@ impl menu::action::MenuAction for MenuAction {
             },
             MenuAction::SavePdf => Message::SaveAnnotation,
             MenuAction::SavePdfAs => Message::SaveAnnotationAs,
+            MenuAction::RenameAnnotation => Message::RenameAnnotation,
             MenuAction::CloseTab => Message::CloseTab,
             MenuAction::ZoomIn => Message::ZoomIn,
             MenuAction::ZoomOut => Message::ZoomOut,

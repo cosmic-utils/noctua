@@ -84,6 +84,32 @@ pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
         .into()
 }
 
+/// The rename dialog of an annotation tab, if one is open. The field edits the
+/// target file name without its extension; the extension is kept.
+pub(crate) fn rename_dialog(app: &AppModel) -> Option<Element<'_, Message>> {
+    let draft = app.rename.as_ref()?;
+
+    let field = widget::text_input("", draft.text.as_str())
+        .on_input(Message::RenameAnnotationChanged)
+        .on_submit(|_| Message::RenameAnnotationConfirmed);
+
+    Some(
+        widget::dialog()
+            .title(fl!("rename-annotation"))
+            .body(fl!("rename-annotation-body"))
+            .control(field)
+            .primary_action(
+                widget::button::suggested(fl!("rename"))
+                    .on_press(Message::RenameAnnotationConfirmed),
+            )
+            .secondary_action(
+                widget::button::standard(fl!("cancel"))
+                    .on_press(Message::RenameAnnotationCancelled),
+            )
+            .into(),
+    )
+}
+
 /// The thumbnail strip of the active tab: image tiles, lazy thumbnails.
 fn strip_view(app: &AppModel) -> Element<'_, Message> {
     let Some(tab) = app.active_tab() else {
