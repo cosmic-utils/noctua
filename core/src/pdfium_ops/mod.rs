@@ -13,6 +13,6 @@ pub mod model;
 pub use command::{Command, CommandResult};
 pub use error::PdfOpsError;
 pub use manager::{PdfOpsManager, read_pdf_metadata};
-pub use model::{AnnotationColor, BindSource, PageRef, PdfMetadata};
+pub use model::{AnnotationColor, BindSource, FreeTextAnnotation, PageRef, PdfMetadata};
 
 pub use bindings::try_pdfium;

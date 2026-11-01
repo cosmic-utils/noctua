@@ -4,7 +4,7 @@
 // The language of the annotation mode. All operations on an open PDF
 // document are expressed as commands.
 
-use crate::pdfium_ops::model::{AnnotationColor, BindSource, MarkupKind};
+use crate::pdfium_ops::model::{AnnotationColor, BindSource, FreeTextAnnotation, MarkupKind};
 use std::path::PathBuf;
 
 /// Commands accepted by the PDF operations manager.
@@ -47,11 +47,12 @@ pub enum Command {
     RotatePageRelative { page: u32, clockwise: bool },
 
     /// Add a visible free-text annotation at the given page and position.
-    /// `font_size` is the text size in points.
+    /// `font_size` is the text size in points; `color` is the text colour.
     AddFreeTextAnnotation {
         page: u32,
         text: String,
         font_size: f32,
+        color: AnnotationColor,
         x: f32,
         y: f32,
         width: f32,
@@ -80,6 +81,26 @@ pub enum Command {
         y: f32,
         width: f32,
         height: f32,
+    },
+
+    /// List the free-text annotations on a 1-based page, in page points.
+    ListFreeTextAnnotations { page: u32 },
+
+    /// Replace the text of an existing free-text annotation on a 1-based page.
+    /// `index` is the annotation's position in the page's annotation list.
+    UpdateFreeTextAnnotation {
+        page: u32,
+        index: usize,
+        contents: String,
+    },
+
+    /// Change the text colour and font size of an existing free-text annotation
+    /// by rewriting its `/DA` appearance string.
+    SetFreeTextStyle {
+        page: u32,
+        index: usize,
+        color: AnnotationColor,
+        font_size: f32,
     },
 
     /// Save the current document to its open path.
@@ -111,6 +132,8 @@ pub enum CommandResult {
     PageCount(u32),
     /// Width and height of every page in points, in page order.
     PageSizes(Vec<(f32, f32)>),
+    /// Free-text annotations on a page.
+    FreeTextAnnotations(Vec<FreeTextAnnotation>),
     /// A rendered page as RGBA pixels.
     Rendered {
         width: u32,

@@ -73,6 +73,24 @@ pub struct PdfMetadata {
     pub page_count: u32,
 }
 
+/// A free-text annotation read from a page. `x`/`y` is the lower-left corner
+/// in page points (origin bottom-left); `width`/`height` extend up and right.
+#[derive(Debug, Clone)]
+pub struct FreeTextAnnotation {
+    /// Index in the page's annotation collection, for later updates.
+    pub index: usize,
+    /// The annotation's text (`/Contents`).
+    pub contents: String,
+    /// Text colour parsed from `/DA` (black when absent).
+    pub color: AnnotationColor,
+    /// Font size in points parsed from `/DA` (12 pt when absent).
+    pub font_size: f32,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// Common annotation colors used by the annotation mode.
 pub mod palette {
     use super::AnnotationColor;

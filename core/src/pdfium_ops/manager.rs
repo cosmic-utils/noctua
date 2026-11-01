@@ -12,7 +12,7 @@ use pdfium_render::prelude::*;
 use super::bindings::pdfium_or_err;
 use super::command::{Command, CommandResult};
 use super::error::PdfOpsError;
-use super::model::{AnnotationColor, BindSource, MarkupKind, PdfMetadata};
+use super::model::{AnnotationColor, BindSource, FreeTextAnnotation, MarkupKind, PdfMetadata};
 
 use crate::storage::document::Format;
 
@@ -22,6 +22,76 @@ fn pdfium_err(e: PdfiumError) -> PdfOpsError {
 
 fn to_color(c: AnnotationColor) -> PdfColor {
     PdfColor::new(c.red, c.green, c.blue, c.alpha)
+}
+
+/// Build a free-text `/DA` appearance string: RGB colour (0–1) plus the Helvetica
+/// font size in points.
+fn free_text_da(color: AnnotationColor, font_size: f32) -> String {
+    let r = color.red as f32 / 255.0;
+    let g = color.green as f32 / 255.0;
+    let b = color.blue as f32 / 255.0;
+    format!("{r:.3} {g:.3} {b:.3} rg /Helv {font_size} Tf")
+}
+
+/// Parse the colour and font size out of a free-text `/DA` string. Falls back to
+/// black and 12 pt, matching the PDF defaults.
+fn parse_free_text_da(da: &str) -> (AnnotationColor, f32) {
+    let tokens: Vec<&str> = da.split_whitespace().collect();
+    let number = |index: usize| {
+        tokens
+            .get(index)
+            .and_then(|token| token.parse::<f32>().ok())
+    };
+    let mut rgb = [0.0f32; 3];
+    let mut size = 12.0f32;
+    for (index, token) in tokens.iter().enumerate() {
+        match *token {
+            "rg" if index >= 3 => {
+                if let (Some(r), Some(g), Some(b)) =
+                    (number(index - 3), number(index - 2), number(index - 1))
+                {
+                    rgb = [r, g, b];
+                }
+            }
+            "g" if index >= 1 => {
+                if let Some(grey) = number(index - 1) {
+                    rgb = [grey; 3];
+                }
+            }
+            "Tf" if index >= 1 => {
+                if let Some(value) = number(index - 1).filter(|value| *value > 0.0) {
+                    size = value;
+                }
+            }
+            _ => {}
+        }
+    }
+    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    (
+        AnnotationColor {
+            red: channel(rgb[0]),
+            green: channel(rgb[1]),
+            blue: channel(rgb[2]),
+            alpha: 255,
+        },
+        size.clamp(1.0, 400.0),
+    )
+}
+
+/// Read a string value from a raw annotation handle. pdfium returns UTF-16LE.
+fn read_annot_string(
+    bindings: &dyn PdfiumLibraryBindings,
+    annot: FPDF_ANNOTATION,
+    key: &str,
+) -> Option<String> {
+    let length = bindings.FPDFAnnot_GetStringValue(annot, key, std::ptr::null_mut(), 0);
+    if length <= 2 {
+        return None;
+    }
+    let mut buffer = vec![0u16; length as usize / 2];
+    bindings.FPDFAnnot_GetStringValue(annot, key, buffer.as_mut_ptr(), length);
+    let text = String::from_utf16_lossy(&buffer);
+    Some(text.trim_end_matches('\0').to_string())
 }
 
 /// Set the common position, size and color of a text-markup annotation.
@@ -124,12 +194,13 @@ impl PdfOpsManager {
                 page,
                 text,
                 font_size,
+                color,
                 x,
                 y,
                 width,
                 height,
             } => self
-                .add_free_text_annotation(page, &text, font_size, (x, y, width, height))
+                .add_free_text_annotation(page, &text, font_size, color, (x, y, width, height))
                 .into(),
             Command::AddInkAnnotation {
                 page,
@@ -152,6 +223,27 @@ impl PdfOpsManager {
                 height,
             } => self
                 .add_markup_annotation(page, kind, color, (x, y, width, height))
+                .into(),
+            Command::ListFreeTextAnnotations { page } => {
+                match self.list_free_text_annotations(page) {
+                    Ok(list) => CommandResult::FreeTextAnnotations(list),
+                    Err(e) => CommandResult::Error(e),
+                }
+            }
+            Command::UpdateFreeTextAnnotation {
+                page,
+                index,
+                contents,
+            } => self
+                .update_free_text_annotation(page, index, &contents)
+                .into(),
+            Command::SetFreeTextStyle {
+                page,
+                index,
+                color,
+                font_size,
+            } => self
+                .set_free_text_style(page, index, color, font_size)
                 .into(),
             Command::Save => self.save().into(),
             Command::SaveAs { path } => self.save_as(&path).into(),
@@ -462,6 +554,7 @@ impl PdfOpsManager {
         page: u32,
         text: &str,
         font_size: f32,
+        color: AnnotationColor,
         bounds: (f32, f32, f32, f32),
     ) -> Result<(), PdfOpsError> {
         let (x, y, width, height) = bounds;
@@ -493,13 +586,7 @@ impl PdfOpsManager {
             }
 
             bindings.FPDFAnnot_SetStringValue_str(annot, "Contents", text);
-            // Black text; the font size is the only option for now. Color is
-            // applied in a later step by extending this appearance string.
-            bindings.FPDFAnnot_SetStringValue_str(
-                annot,
-                "DA",
-                &format!("/Helv {font_size} Tf 0 0 0 rg"),
-            );
+            bindings.FPDFAnnot_SetStringValue_str(annot, "DA", &free_text_da(color, font_size));
 
             let rect = PdfRect::new(
                 PdfPoints::new(y),
@@ -511,6 +598,113 @@ impl PdfOpsManager {
             bindings.FPDFAnnot_SetRect(annot, &fs_rect);
         }
 
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// List the free-text annotations on a page, in page points. `index` is the
+    /// annotation's position in the page's annotation list.
+    fn list_free_text_annotations(
+        &self,
+        page: u32,
+    ) -> Result<Vec<FreeTextAnnotation>, PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        let document = self.require_document()?;
+        let pdf_page = document
+            .pages()
+            .get((page - 1) as PdfPageIndex)
+            .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
+        let bindings = pdfium_or_err()?.bindings();
+        let page_handle = bindings.get_handle_from_page(&pdf_page);
+
+        let mut annotations = Vec::new();
+        for (index, annotation) in pdf_page.annotations().iter().enumerate() {
+            if annotation.annotation_type() != PdfPageAnnotationType::FreeText {
+                continue;
+            }
+            let bounds = annotation.bounds().map_err(pdfium_err)?;
+            // The colour and size live in `/DA`, which has no high-level getter.
+            let handle = bindings.FPDFPage_GetAnnot(page_handle, index as i32);
+            let da = read_annot_string(bindings, handle, "DA").unwrap_or_default();
+            let (color, font_size) = parse_free_text_da(&da);
+            annotations.push(FreeTextAnnotation {
+                index,
+                contents: annotation.contents().unwrap_or_default(),
+                color,
+                font_size,
+                x: bounds.left().value,
+                y: bounds.bottom().value,
+                width: bounds.width().value,
+                height: bounds.height().value,
+            });
+        }
+        Ok(annotations)
+    }
+
+    /// Replace the text of an existing free-text annotation.
+    fn update_free_text_annotation(
+        &mut self,
+        page: u32,
+        index: usize,
+        contents: &str,
+    ) -> Result<(), PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        {
+            let document = self.require_document()?;
+            let pdf_page = document
+                .pages()
+                .get((page - 1) as PdfPageIndex)
+                .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
+            let mut annotation = pdf_page.annotations().get(index).map_err(pdfium_err)?;
+            if annotation.annotation_type() != PdfPageAnnotationType::FreeText {
+                return Err(PdfOpsError::Pdfium(
+                    "annotation is not a free-text annotation".to_string(),
+                ));
+            }
+            annotation.set_contents(contents).map_err(pdfium_err)?;
+        }
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Rewrite the `/DA` appearance string of a free-text annotation, changing
+    /// its text colour and font size.
+    fn set_free_text_style(
+        &mut self,
+        page: u32,
+        index: usize,
+        color: AnnotationColor,
+        font_size: f32,
+    ) -> Result<(), PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        {
+            let document = self.require_document()?;
+            let pdf_page = document
+                .pages()
+                .get((page - 1) as PdfPageIndex)
+                .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
+            let annotation = pdf_page.annotations().get(index).map_err(pdfium_err)?;
+            if annotation.annotation_type() != PdfPageAnnotationType::FreeText {
+                return Err(PdfOpsError::Pdfium(
+                    "annotation is not a free-text annotation".to_string(),
+                ));
+            }
+            let bindings = pdfium_or_err()?.bindings();
+            let page_handle = bindings.get_handle_from_page(&pdf_page);
+            let handle = bindings.FPDFPage_GetAnnot(page_handle, index as i32);
+            if handle.is_null() {
+                return Err(PdfOpsError::Pdfium(
+                    "failed to access annotation".to_string(),
+                ));
+            }
+            bindings.FPDFAnnot_SetStringValue_str(handle, "DA", &free_text_da(color, font_size));
+        }
         self.dirty = true;
         Ok(())
     }
