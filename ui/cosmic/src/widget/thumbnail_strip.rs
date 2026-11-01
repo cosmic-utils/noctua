@@ -124,7 +124,13 @@ pub(crate) fn thumbnail_strip<'a>(
             interactive
         };
 
-        column = column.push(interactive);
+        // Give the tile a stable identity, so its widget tree (and with it the
+        // context menu's popup state) follows the entry instead of staying at a
+        // list position that another, differently shaped menu may take over.
+        column = column.push(widget::id_container(
+            interactive,
+            widget::Id::new(entry_identity(tab, &entry.target)),
+        ));
     }
 
     let strip_scroll = widget::scrollable(column)
@@ -143,4 +149,14 @@ pub(crate) fn thumbnail_strip<'a>(
         .width(Length::Fixed(PANEL_WIDTH))
         .height(Length::Fill)
         .into()
+}
+
+/// Stable widget id of one strip tile, unique within the strip of its tab.
+fn entry_identity(tab: Entity, target: &Target) -> String {
+    match target {
+        Target::File { path } => format!("strip:{tab:?}:file:{}", path.display()),
+        Target::Page { path, page } => {
+            format!("strip:{tab:?}:page:{}:{page}", path.display())
+        }
+    }
 }

@@ -2277,11 +2277,15 @@ impl AppModel {
                     Some(TabContent::Annotation { document, .. }) => *document,
                     _ => return iced::Task::none(),
                 };
-                return self.annotation_mutate(
+                // A running text edit refers to this page's annotation list, so
+                // close it before the page changes.
+                let finish = self.finish_pending_text(tab);
+                let mutate = self.annotation_mutate(
                     tab,
                     document,
                     Command::DeletePages { pages: vec![page] },
                 );
+                return cosmic::task::batch(vec![finish, mutate]);
             }
 
             Message::AnnotationMovePage { tab, page, up } => {
@@ -2305,7 +2309,10 @@ impl AppModel {
                 if to == page {
                     return iced::Task::none();
                 }
-                return self.annotation_mutate(tab, document, Command::MovePage { from: page, to });
+                let finish = self.finish_pending_text(tab);
+                let mutate =
+                    self.annotation_mutate(tab, document, Command::MovePage { from: page, to });
+                return cosmic::task::batch(vec![finish, mutate]);
             }
 
             Message::AnnotationPageMutated { tab, ok } => {

@@ -162,10 +162,16 @@ fn annotation_strip(app: &AppModel) -> Element<'_, Message> {
 
         let interactive =
             widget::mouse_area(entry).on_release(Message::AnnotationPageSelected { tab, page });
-        column = column.push(
+        let interactive: Element<'_, Message> =
             cosmic::widget::context_menu(interactive, Some(page_context_menu(tab, page)))
-                .on_surface_action(Message::Surface),
-        );
+                .on_surface_action(Message::Surface)
+                .into();
+        // Stable identity per page, so this tile keeps its own widget tree even
+        // when the page list is reordered or the tab switches strips.
+        column = column.push(widget::id_container(
+            interactive,
+            widget::Id::new(format!("annotation:{tab:?}:page:{page}")),
+        ));
     }
 
     widget::container(widget::scrollable(column))
@@ -393,6 +399,21 @@ fn icon_button(name: &'static str, tooltip: String, message: Message) -> Element
         .into()
 }
 
+/// A toolbar icon button that is disabled (no `on_press`) when the action does
+/// not apply, for example moving the first page up.
+fn page_button(
+    name: &'static str,
+    tooltip: String,
+    message: Message,
+    enabled: bool,
+) -> Element<'static, Message> {
+    let mut button = widget::button::icon(widget::icon::from_name(name)).tooltip(tooltip);
+    if enabled {
+        button = button.on_press(message);
+    }
+    button.into()
+}
+
 /// The view toolbar: navigation, transform (rotate/flip) and zoom actions for
 /// the active document, matching cosmic-viewer's bottom-center panel. In
 /// annotation mode it additionally leads with the annotation tools, so a
@@ -487,7 +508,46 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
             "object-rotate-right-symbolic",
             fl!("rotate-clockwise"),
             rotate_right,
-        ))
+        ));
+
+    // Page operations belong to the annotation tab's own toolbar section.
+    if let Some((tab, page)) = annotation_page {
+        let page_count = app
+            .annotation_ui
+            .get(&tab)
+            .map(|state| state.page_sizes.len() as u32)
+            .unwrap_or(0);
+        toolbar = toolbar
+            .start(page_button(
+                "go-up-symbolic",
+                fl!("move-page-up"),
+                Message::AnnotationMovePage {
+                    tab,
+                    page,
+                    up: true,
+                },
+                page > 1,
+            ))
+            .start(page_button(
+                "go-down-symbolic",
+                fl!("move-page-down"),
+                Message::AnnotationMovePage {
+                    tab,
+                    page,
+                    up: false,
+                },
+                page < page_count,
+            ))
+            .start(page_button(
+                "user-trash-symbolic",
+                fl!("delete-page"),
+                Message::AnnotationDeletePage { tab, page },
+                // A document needs at least one page.
+                page_count > 1,
+            ));
+    }
+
+    toolbar = toolbar
         .start(icon_button(
             "object-flip-horizontal-symbolic",
             fl!("flip-horizontal"),
