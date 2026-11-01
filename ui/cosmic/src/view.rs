@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
+use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::storage;
 
 use crate::fl;
@@ -182,8 +183,9 @@ fn viewer_element(
     view: ViewState,
     modifiers: Modifiers,
     reported_bounds: Rc<Cell<Size>>,
+    cursor: mouse::Interaction,
     on_state_change: impl Fn(f32, f32, f32) -> Message + 'static,
-    on_click: Option<Box<dyn Fn(Point) -> Message>>,
+    on_click: Option<Box<dyn Fn(Point, Point) -> Message>>,
 ) -> Element<'static, Message> {
     let space = cosmic::theme::spacing();
     let content_fit = if view.fit {
@@ -200,6 +202,7 @@ fn viewer_element(
     let mut viewer = Viewer::new(handle.clone())
         .content_fit(content_fit)
         .modifiers(modifiers)
+        .cursor(cursor)
         .reported_bounds(reported_bounds)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -309,42 +312,76 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
         return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
     };
 
+    let cursor = if state.active_tool == Some(AnnotationTool::Text) {
+        mouse::Interaction::Text
+    } else {
+        mouse::Interaction::Grab
+    };
+
     let viewer = viewer_element(
         &current.handle,
         state.view,
         app.keyboard_modifiers,
         app.viewer_bounds.clone(),
+        cursor,
         move |scale, offset_x, offset_y| Message::AnnotationViewerStateChanged {
             tab,
             scale,
             offset_x,
             offset_y,
         },
-        Some(Box::new(move |point| Message::AnnotationPointerClicked {
-            tab,
-            x: point.x,
-            y: point.y,
+        Some(Box::new(move |native, screen| {
+            Message::AnnotationPointerClicked {
+                tab,
+                x: native.x,
+                y: native.y,
+                screen_x: screen.x,
+                screen_y: screen.y,
+            }
         })),
     );
 
-    if state.pending_text.is_some() {
-        let space = cosmic::theme::spacing();
-        let input = cosmic::widget::text_input(fl!("text-annotation-placeholder"), "")
+    let Some(pending) = state.pending_text.as_ref() else {
+        return viewer;
+    };
+
+    let space = cosmic::theme::spacing();
+    let input =
+        cosmic::widget::text_input(fl!("text-annotation-placeholder"), pending.text.clone())
             .id(widget::Id::new("annotation-text"))
+            .on_input(Message::AnnotationTextChanged)
             .on_submit(Message::AnnotationTextSubmit)
             .width(Length::Fixed(280.0));
-        let overlay = widget::container(input)
-            .width(Length::Fill)
-            .align_x(Alignment::Center)
-            .padding([space.space_s, 0, 0, 0]);
-        cosmic::iced::widget::Stack::with_children([viewer, overlay.into()]).into()
-    } else {
-        viewer
-    }
+    // `viewer_element` pads the viewer by `space_m`; shift the input by the same
+    // amount so it sits exactly where the user clicked.
+    let offset = f32::from(space.space_m);
+    let top = (pending.screen.1 + offset) as u16;
+    let left = (pending.screen.0 + offset) as u16;
+    let overlay = widget::container(input)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Start)
+        .align_y(Alignment::Start)
+        .padding([top, 0, 0, left]);
+    cosmic::iced::widget::Stack::with_children([viewer, overlay.into()]).into()
 }
 
 /// Free-text font size presets, in points.
 const FONT_SIZE_PRESETS: [f32; 8] = [12.0, 16.0, 20.0, 24.0, 32.0, 48.0, 64.0, 96.0];
+
+/// Preset text colours for the free-text tool (label, colour).
+fn text_color_presets() -> Vec<(String, AnnotationColor)> {
+    use noctua_core::pdfium_ops::model::palette;
+    vec![
+        (fl!("color-black"), AnnotationColor::rgb(0, 0, 0)),
+        (fl!("color-white"), AnnotationColor::rgb(255, 255, 255)),
+        (fl!("color-red"), palette::RED),
+        (fl!("color-orange"), palette::ORANGE),
+        (fl!("color-yellow"), palette::YELLOW),
+        (fl!("color-green"), palette::GREEN),
+        (fl!("color-blue"), palette::BLUE),
+    ]
+}
 
 /// A toolbar icon button with a tooltip, publishing the message when pressed.
 fn icon_button(name: &'static str, tooltip: String, message: Message) -> Element<'static, Message> {
@@ -414,6 +451,17 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
             toolbar = toolbar.start(cosmic::widget::dropdown(labels, selected, |index| {
                 Message::AnnotationFontSizeChanged(FONT_SIZE_PRESETS[index])
             }));
+
+            let colors = text_color_presets();
+            let color_labels: Vec<String> = colors.iter().map(|(name, _)| name.clone()).collect();
+            let color_selected = colors
+                .iter()
+                .position(|(_, color)| *color == state.annotation_color);
+            toolbar = toolbar.start(cosmic::widget::dropdown(
+                color_labels,
+                color_selected,
+                move |index| Message::AnnotationColorChanged(colors[index].1),
+            ));
         }
     }
 
@@ -532,6 +580,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                 state,
                 app.keyboard_modifiers,
                 app.viewer_bounds.clone(),
+                mouse::Interaction::Grab,
                 move |scale, offset_x, offset_y| Message::ViewerStateChanged {
                     target: target.clone(),
                     scale,

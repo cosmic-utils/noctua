@@ -34,9 +34,10 @@ const PAN_STEP: f32 = 50.0;
 /// Callback for viewer state changes (scale, `offset_x`, `offset_y`).
 type StateChangeCallback<Message> = Box<dyn Fn(f32, f32, f32) -> Message>;
 
-/// Callback notified when the image is clicked. The `Point` is in native
-/// image pixel coordinates (origin top-left).
-type ClickCallback<Message> = Box<dyn Fn(Point) -> Message>;
+/// Callback notified when the image is clicked. The first `Point` is in
+/// native image pixels (origin top-left); the second is the position inside
+/// the viewer, used to place an in-place editor.
+type ClickCallback<Message> = Box<dyn Fn(Point, Point) -> Message>;
 
 /// A frame that displays an image with the ability to zoom in/out and pan.
 pub(crate) struct Viewer<Handle, Message> {
@@ -46,6 +47,8 @@ pub(crate) struct Viewer<Handle, Message> {
     content_fit: ContentFit,
     /// Current keyboard modifiers, synced from the app.
     modifiers: Modifiers,
+    /// Cursor shown while hovering (grab to pan, text for the text tool).
+    cursor: mouse::Interaction,
     /// Optional external state to override the internal state (scale, offset).
     external_state: Option<(f32, Vector)>,
     /// Optional callback to notify the app of state changes.
@@ -66,6 +69,7 @@ impl<Handle, Message> Viewer<Handle, Message> {
             height: Length::Shrink,
             content_fit: ContentFit::default(),
             modifiers: Modifiers::default(),
+            cursor: mouse::Interaction::Grab,
             external_state: None,
             on_state_change: None,
             on_click: None,
@@ -93,9 +97,15 @@ impl<Handle, Message> Viewer<Handle, Message> {
     /// click reports the position instead of starting a pan.
     pub(crate) fn on_click<F>(mut self, f: F) -> Self
     where
-        F: 'static + Fn(Point) -> Message,
+        F: 'static + Fn(Point, Point) -> Message,
     {
         self.on_click = Some(Box::new(f));
+        self
+    }
+
+    /// Sets the cursor shown while hovering the image.
+    pub(crate) fn cursor(mut self, cursor: mouse::Interaction) -> Self {
+        self.cursor = cursor;
         self
     }
 
@@ -341,7 +351,7 @@ where
                         (cursor_position.x - image_top_left.x) / (final_size.width / native_w),
                         (cursor_position.y - image_top_left.y) / (final_size.height / native_h),
                     );
-                    shell.publish(on_click(native));
+                    shell.publish(on_click(native, cursor_position));
                     shell.capture_event();
                     return;
                 }
@@ -467,7 +477,7 @@ where
         if state.is_cursor_grabbed() {
             mouse::Interaction::Grabbing
         } else if cursor.is_over(bounds) {
-            mouse::Interaction::Grab
+            self.cursor
         } else {
             mouse::Interaction::None
         }

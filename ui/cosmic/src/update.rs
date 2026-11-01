@@ -30,9 +30,9 @@ use crate::fl;
 use crate::message::{MenuAction, Message};
 use crate::model::{
     AnnotationTool, AnnotationUiState, AppModel, CurrentImage, DocumentPreview, MAX_SCALE,
-    MIN_SCALE, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, Rgba,
-    SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent, TabUiState, Target,
-    ViewState, ZOOM_STEP,
+    MIN_SCALE, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, PendingText,
+    Rgba, SESSION_NAME, STRIP_INITIAL_THUMBS, StripEntry, THUMB_ZOOM, TabContent, TabUiState,
+    Target, ViewState, ZOOM_STEP,
 };
 
 /// Estimated strip tile height including spacing, for lazy thumbnails.
@@ -2119,7 +2119,22 @@ impl AppModel {
                 }
             }
 
-            Message::AnnotationPointerClicked { tab, x, y } => {
+            Message::AnnotationColorChanged(color) => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    state.annotation_color = color;
+                }
+            }
+
+            Message::AnnotationPointerClicked {
+                tab,
+                x,
+                y,
+                screen_x,
+                screen_y,
+            } => {
                 let is_text = self
                     .annotation_ui
                     .get(&tab)
@@ -2127,11 +2142,98 @@ impl AppModel {
                 if !is_text {
                     return iced::Task::none();
                 }
+                let document = match self.tabs.get(&tab) {
+                    Some(TabContent::Annotation { document, .. }) => *document,
+                    _ => return iced::Task::none(),
+                };
+                let page = match self.annotation_ui.get(&tab) {
+                    Some(state) => state.selected,
+                    None => return iced::Task::none(),
+                };
+                // Query the page's free-text annotations so the click can edit
+                // an existing one instead of always creating a new one.
+                let worker = self.worker.clone();
+                return cosmic::task::future(async move {
+                    let (_, result) = worker
+                        .op(Some(document), Command::ListFreeTextAnnotations { page })
+                        .await;
+                    let annotations = match result {
+                        CommandResult::FreeTextAnnotations(list) => list,
+                        _ => Vec::new(),
+                    };
+                    Message::AnnotationAnnotationsListed {
+                        tab,
+                        annotations,
+                        x,
+                        y,
+                        screen_x,
+                        screen_y,
+                    }
+                });
+            }
+
+            Message::AnnotationAnnotationsListed {
+                tab,
+                annotations,
+                x,
+                y,
+                screen_x,
+                screen_y,
+            } => {
                 let Some(position) = self.annotation_page_coords(tab, x, y) else {
                     return iced::Task::none();
                 };
+                // Hit-test the click (page points) against the annotations.
+                let hit = annotations.iter().find(|a| {
+                    position.0 >= a.x
+                        && position.0 <= a.x + a.width
+                        && position.1 >= a.y
+                        && position.1 <= a.y + a.height
+                });
+                let (pending, style) = match hit {
+                    Some(a) => (
+                        PendingText {
+                            page: (a.x, a.y),
+                            screen: (screen_x, screen_y),
+                            text: a.contents.clone(),
+                            edit_index: Some(a.index),
+                        },
+                        Some((a.color, a.font_size)),
+                    ),
+                    None => (
+                        PendingText {
+                            page: position,
+                            screen: (screen_x, screen_y),
+                            text: String::new(),
+                            edit_index: None,
+                        },
+                        None,
+                    ),
+                };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.pending_text = Some(position);
+                    state.pending_text = Some(pending);
+                    // Load the annotation's style into the toolbar so editing it
+                    // starts from its real colour and size.
+                    if let Some((color, font_size)) = style {
+                        state.annotation_color = color;
+                        state.font_size_pt = font_size;
+                    }
+                }
+                // Focus the freshly shown input so typing lands in it.
+                return cosmic::widget::text_input::focus(cosmic::widget::Id::new(
+                    "annotation-text",
+                ))
+                .map(cosmic::Action::App);
+            }
+
+            Message::AnnotationTextChanged(text) => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                if let Some(state) = self.annotation_ui.get_mut(&tab)
+                    && let Some(pending) = state.pending_text.as_mut()
+                {
+                    pending.text = text;
                 }
             }
 
@@ -2139,22 +2241,53 @@ impl AppModel {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
-                let (document, page, font_size, position) = {
+                let (document, page, font_size, color, position, edit_index) = {
                     let state = match self.annotation_ui.get(&tab) {
                         Some(state) => state,
                         None => return iced::Task::none(),
                     };
-                    let Some(position) = state.pending_text else {
+                    let Some(pending) = state.pending_text.as_ref() else {
                         return iced::Task::none();
                     };
                     let document = match self.tabs.get(&tab) {
                         Some(TabContent::Annotation { document, .. }) => *document,
                         _ => return iced::Task::none(),
                     };
-                    (document, state.selected, state.font_size_pt, position)
+                    (
+                        document,
+                        state.selected,
+                        state.font_size_pt,
+                        state.annotation_color,
+                        pending.page,
+                        pending.edit_index,
+                    )
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     state.pending_text = None;
+                }
+                if let Some(index) = edit_index {
+                    // Update the text and its style in the same edit.
+                    return cosmic::task::batch(vec![
+                        self.annotation_mutate(
+                            tab,
+                            document,
+                            Command::UpdateFreeTextAnnotation {
+                                page,
+                                index,
+                                contents: text,
+                            },
+                        ),
+                        self.annotation_mutate(
+                            tab,
+                            document,
+                            Command::SetFreeTextStyle {
+                                page,
+                                index,
+                                color,
+                                font_size,
+                            },
+                        ),
+                    ]);
                 }
                 let (x, y) = position;
                 let width = 200.0;
@@ -2166,6 +2299,7 @@ impl AppModel {
                         page,
                         text,
                         font_size,
+                        color,
                         x,
                         y,
                         width,
@@ -2173,8 +2307,6 @@ impl AppModel {
                     },
                 );
             }
-
-            Message::AnnotationTextChanged(_text) => {}
 
             Message::AnnotationViewerStateChanged {
                 tab,

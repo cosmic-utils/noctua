@@ -10,6 +10,7 @@ use cosmic::iced::mouse;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::Entity;
 
+use noctua_core::pdfium_ops::model::{AnnotationColor, FreeTextAnnotation};
 use noctua_core::render::worker::DocumentId;
 use noctua_core::storage::browser::BrowserEntry;
 
@@ -117,12 +118,27 @@ pub enum Message {
     AnnotationToolToggled(AnnotationTool),
     /// The free-text font size changed.
     AnnotationFontSizeChanged(f32),
+    /// The free-text colour changed.
+    AnnotationColorChanged(AnnotationColor),
     /// A click landed on the annotation page; native image coordinates
-    /// (pixels, origin top-left).
+    /// (pixels, origin top-left) plus the screen position inside the viewer
+    /// for placing the in-place text input.
     AnnotationPointerClicked {
         tab: Entity,
         x: f32,
         y: f32,
+        screen_x: f32,
+        screen_y: f32,
+    },
+    /// The free-text annotations of the clicked page were listed; carries the
+    /// click context so the handler can hit-test and open the input.
+    AnnotationAnnotationsListed {
+        tab: Entity,
+        annotations: Vec<FreeTextAnnotation>,
+        x: f32,
+        y: f32,
+        screen_x: f32,
+        screen_y: f32,
     },
     /// The in-place free-text input changed; carries the current text.
     AnnotationTextChanged(String),

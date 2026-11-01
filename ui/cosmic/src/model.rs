@@ -15,6 +15,7 @@ use cosmic::widget::about::About;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::{Entity, SingleSelectModel};
 
+use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::render::worker::{DocumentId, SharedWorker};
 use noctua_core::storage::browser::BrowserEntry;
 
@@ -232,11 +233,26 @@ pub(crate) struct AnnotationUiState {
     pub(crate) view: ViewState,
     /// Currently active annotation tool; `None` means browse/pan.
     pub(crate) active_tool: Option<AnnotationTool>,
+    /// Selected free-text colour.
+    pub(crate) annotation_color: AnnotationColor,
     /// Selected free-text font size in points.
     pub(crate) font_size_pt: f32,
-    /// Page position (points, origin bottom-left) of an in-progress free-text
-    /// placement; `None` when no text is being entered.
-    pub(crate) pending_text: Option<(f32, f32)>,
+    /// An in-progress free-text placement; `None` when no text is being entered.
+    pub(crate) pending_text: Option<PendingText>,
+}
+
+/// An in-progress free-text placement: where the annotation goes on the page,
+/// where the in-place input is drawn, and the current input text.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingText {
+    /// Page position in points (origin bottom-left) for the annotation.
+    pub(crate) page: (f32, f32),
+    /// Screen position inside the viewer, for placing the input box.
+    pub(crate) screen: (f32, f32),
+    /// Current text in the input (controlled value).
+    pub(crate) text: String,
+    /// When editing an existing annotation, its page-annotation index.
+    pub(crate) edit_index: Option<usize>,
 }
 
 impl Default for AnnotationUiState {
@@ -248,6 +264,12 @@ impl Default for AnnotationUiState {
             current: None,
             view: ViewState::default(),
             active_tool: None,
+            annotation_color: AnnotationColor {
+                red: 0,
+                green: 0,
+                blue: 0,
+                alpha: 255,
+            },
             font_size_pt: 24.0,
             pending_text: None,
         }
