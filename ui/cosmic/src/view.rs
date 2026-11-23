@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
+use noctua_core::pdfium_ops::FormField;
 use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::storage;
 
@@ -221,7 +222,8 @@ fn viewer_element(
     reported_bounds: Rc<Cell<Size>>,
     cursor: mouse::Interaction,
     on_state_change: impl Fn(f32, f32, f32) -> Message + 'static,
-    on_click: Option<Box<dyn Fn(Point) -> Message>>,
+    on_click: Option<Box<dyn Fn(Point, Point) -> Message>>,
+    hover_cursor: Option<Box<dyn Fn(Point) -> Option<mouse::Interaction>>>,
     caret: Option<TextCaret>,
 ) -> Element<'static, Message> {
     let space = cosmic::theme::spacing();
@@ -246,6 +248,9 @@ fn viewer_element(
         .with_state(scale, offset_x, offset_y)
         .on_state_change(on_state_change)
         .text_caret(caret);
+    if let Some(hover) = hover_cursor {
+        viewer = viewer.hover_cursor(hover);
+    }
     if let Some(on_click) = on_click {
         viewer = viewer.on_click(on_click);
     }
@@ -360,26 +365,40 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     // The core reports the caret in page points with the origin at the
     // bottom-left; the viewer draws in image pixels from the top-left. The page
     // is rendered at one pixel per point.
-    let caret = state
-        .pending_text
-        .as_ref()
-        .filter(|_| state.caret_visible)
-        .map(|pending| {
-            let (x, y, width, height) = pending.caret;
-            let image_height = current.rgba.1 as f32;
-            TextCaret {
-                position: Point::new(x, image_height - (y + height)),
-                size: Size::new(width, height),
-                color: cosmic::iced::Color::from_rgba8(
-                    state.annotation_color.red,
-                    state.annotation_color.green,
-                    state.annotation_color.blue,
-                    f32::from(state.annotation_color.alpha) / 255.0,
-                ),
+    let image_height = current.rgba.1 as f32;
+    let caret = if let Some(pending) = state.pending_text.as_ref().filter(|_| state.caret_visible) {
+        let (x, y, width, height) = pending.caret;
+        Some(TextCaret {
+            position: Point::new(x, image_height - (y + height)),
+            size: Size::new(width, height),
+            color: cosmic::iced::Color::from_rgba8(
+                state.annotation_color.red,
+                state.annotation_color.green,
+                state.annotation_color.blue,
+                f32::from(state.annotation_color.alpha) / 255.0,
+            ),
+        })
+    } else {
+        // While a form field is edited, the caret lives inside the field.
+        state.form_focus.and_then(|index| {
+            let field = state.form_fields.get(index)?;
+            if !crate::widget::form_fields::accepts_text(field) {
+                return None;
             }
-        });
+            let (x, bottom, height) = crate::widget::form_fields::caret_in_field(
+                field,
+                &state.form_draft,
+                state.form_caret,
+            );
+            Some(TextCaret {
+                position: Point::new(x, image_height - (bottom + height)),
+                size: Size::new(1.0, height),
+                color: cosmic::iced::Color::from_rgba8(0, 0, 0, 1.0),
+            })
+        })
+    };
 
-    viewer_element(
+    let element = viewer_element(
         &current.handle,
         state.view,
         app.keyboard_modifiers,
@@ -391,13 +410,72 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
             offset_x,
             offset_y,
         },
-        Some(Box::new(move |native| Message::AnnotationPointerClicked {
-            tab,
-            x: native.x,
-            y: native.y,
+        Some(Box::new(move |native, anchor| {
+            Message::AnnotationPointerClicked {
+                tab,
+                x: native.x,
+                y: native.y,
+                anchor,
+            }
+        })),
+        Some(Box::new({
+            let fields = state.form_fields.clone();
+            move |point: Point| crate::widget::form_fields::cursor_for(&fields, point, image_height)
         })),
         caret,
-    )
+    );
+
+    // The option list of a choice field is drawn over the page where the field
+    // was clicked. The viewer sits inside its frame's padding, so the click
+    // position moves into that frame before it anchors the popup.
+    let Some(anchor) = state.form_menu else {
+        return element;
+    };
+    let Some(field) = state
+        .form_focus
+        .and_then(|index| state.form_fields.get(index))
+        .filter(|field| crate::widget::form_fields::has_options(field))
+    else {
+        return element;
+    };
+    let space = cosmic::theme::spacing();
+    let padding = f32::from(space.space_m);
+    widget::popover(element)
+        .position(widget::popover::Position::Point(Point::new(
+            anchor.x + padding,
+            anchor.y + padding,
+        )))
+        .popup(form_option_list(tab, field))
+        .on_close(Message::AnnotationFormMenuClosed)
+        .into()
+}
+
+/// Width of the option list popup, in logical pixels.
+const FORM_MENU_WIDTH: f32 = 220.0;
+
+/// The option list of a choice field: the field name and one button per option.
+/// Pure UI: picking an option publishes a message for the core to apply.
+fn form_option_list(tab: Entity, field: &FormField) -> Element<'static, Message> {
+    let space = cosmic::theme::spacing();
+    let mut list = widget::column::with_capacity(field.options.len() + 1)
+        .spacing(space.space_xxs)
+        .padding(space.space_xs)
+        .push(widget::text::caption(field.name.clone()));
+    for (option, label) in field.options.iter().enumerate() {
+        list = list.push(
+            widget::button::standard(label.clone())
+                .width(Length::Fill)
+                .on_press(Message::AnnotationFormOptionPicked {
+                    tab,
+                    field: field.index,
+                    option,
+                }),
+        );
+    }
+    widget::container(list)
+        .class(cosmic::style::Container::Dropdown)
+        .width(Length::Fixed(FORM_MENU_WIDTH))
+        .into()
 }
 
 /// Free-text font size presets, in points.
@@ -675,6 +753,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                     offset_x,
                     offset_y,
                 },
+                None,
                 None,
                 None,
             );

@@ -36,9 +36,10 @@ const PAN_STEP: f32 = 50.0;
 /// Callback for viewer state changes (scale, `offset_x`, `offset_y`).
 type StateChangeCallback<Message> = Box<dyn Fn(f32, f32, f32) -> Message>;
 
-/// Callback notified when the image is clicked, with the position in native
-/// image pixels (origin top-left).
-type ClickCallback<Message> = Box<dyn Fn(Point) -> Message>;
+/// Callback notified when the image is clicked: the position in native image
+/// pixels (origin top-left) and the same click in the viewer's own coordinates,
+/// which the app uses to anchor overlays at the click.
+type ClickCallback<Message> = Box<dyn Fn(Point, Point) -> Message>;
 
 /// Insertion marker drawn over the image, in native image pixels (origin
 /// top-left). The app blinks it, so it is not part of the document.
@@ -59,6 +60,8 @@ pub(crate) struct Viewer<Handle, Message> {
     modifiers: Modifiers,
     /// Cursor shown while hovering (grab to pan, text for the text tool).
     cursor: mouse::Interaction,
+    /// Overrides `cursor` when the pointer is over a mapped position.
+    hover_cursor: Option<Box<dyn Fn(Point) -> Option<mouse::Interaction> + 'static>>,
     /// Optional external state to override the internal state (scale, offset).
     external_state: Option<(f32, Vector)>,
     /// Optional callback to notify the app of state changes.
@@ -82,6 +85,7 @@ impl<Handle, Message> Viewer<Handle, Message> {
             content_fit: ContentFit::default(),
             modifiers: Modifiers::default(),
             cursor: mouse::Interaction::Grab,
+            hover_cursor: None,
             external_state: None,
             on_state_change: None,
             on_click: None,
@@ -116,7 +120,7 @@ impl<Handle, Message> Viewer<Handle, Message> {
     /// click reports the position instead of starting a pan.
     pub(crate) fn on_click<F>(mut self, f: F) -> Self
     where
-        F: 'static + Fn(Point) -> Message,
+        F: 'static + Fn(Point, Point) -> Message,
     {
         self.on_click = Some(Box::new(f));
         self
@@ -125,6 +129,16 @@ impl<Handle, Message> Viewer<Handle, Message> {
     /// Sets the cursor shown while hovering the image.
     pub(crate) fn cursor(mut self, cursor: mouse::Interaction) -> Self {
         self.cursor = cursor;
+        self
+    }
+
+    /// Overrides the cursor for a position in native image pixels, for example
+    /// over an interactive region of the page.
+    pub(crate) fn hover_cursor<F>(mut self, f: F) -> Self
+    where
+        F: Fn(Point) -> Option<mouse::Interaction> + 'static,
+    {
+        self.hover_cursor = Some(Box::new(f));
         self
     }
 
@@ -370,7 +384,10 @@ where
                         (cursor_position.x - image_top_left.x) / (final_size.width / native_w),
                         (cursor_position.y - image_top_left.y) / (final_size.height / native_h),
                     );
-                    shell.publish(on_click(native));
+                    shell.publish(on_click(
+                        native,
+                        Point::new(cursor_position.x - bounds.x, cursor_position.y - bounds.y),
+                    ));
                     shell.capture_event();
                     return;
                 }
@@ -488,18 +505,41 @@ where
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         _viewport: &Rectangle,
-        _renderer: &Renderer,
+        renderer: &Renderer,
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<State>();
         let bounds = layout.bounds();
 
         if state.is_cursor_grabbed() {
-            mouse::Interaction::Grabbing
-        } else if cursor.is_over(bounds) {
-            self.cursor
-        } else {
-            mouse::Interaction::None
+            return mouse::Interaction::Grabbing;
         }
+        let Some(position) = cursor.position_over(bounds) else {
+            return mouse::Interaction::None;
+        };
+        if let Some(hover) = &self.hover_cursor {
+            // Same native-pixel mapping as the click handler; it needs the
+            // trait's concrete renderer, which is only in scope here.
+            let final_size = scaled_image_size(
+                renderer,
+                &self.handle,
+                state,
+                bounds.size(),
+                self.content_fit,
+            );
+            let translation = image_translation(state, bounds, final_size, self.content_fit);
+            let native_size = renderer.measure_image(&self.handle).unwrap_or_default();
+            let native_w = (native_size.width as f32).max(1.0);
+            let native_h = (native_size.height as f32).max(1.0);
+            let top_left = bounds.position() + translation;
+            let point = Point::new(
+                (position.x - top_left.x) / (final_size.width / native_w),
+                (position.y - top_left.y) / (final_size.height / native_h),
+            );
+            if let Some(interaction) = hover(point) {
+                return interaction;
+            }
+        }
+        self.cursor
     }
 
     fn draw(

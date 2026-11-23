@@ -269,7 +269,9 @@ impl cosmic::Application for AppModel {
             .active_tab()
             .and_then(|tab| self.annotation_ui.get(&tab))
             .is_some_and(|state| {
-                state.pending_text.is_some() || state.active_tool == Some(AnnotationTool::Text)
+                state.pending_text.is_some()
+                    || state.form_focus.is_some()
+                    || state.active_tool == Some(AnnotationTool::Text)
             });
 
         let keyboard = iced::keyboard::listen()
@@ -299,6 +301,7 @@ impl cosmic::Application for AppModel {
                                     | Named::ArrowRight
                                     | Named::Home
                                     | Named::End
+                                    | Named::Tab
                             )
                         );
                         if named {

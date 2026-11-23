@@ -8,13 +8,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use cosmic::iced::Size;
 use cosmic::iced::keyboard::Modifiers;
+use cosmic::iced::{Point, Size};
 use cosmic::widget;
 use cosmic::widget::about::About;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::{Entity, SingleSelectModel};
 
+use noctua_core::pdfium_ops::FormField;
 use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::render::worker::{DocumentId, SharedWorker};
 use noctua_core::storage::browser::BrowserEntry;
@@ -242,6 +243,19 @@ pub(crate) struct AnnotationUiState {
     /// Whether the insertion marker is currently shown; toggled by the blink
     /// timer while a text edit is active.
     pub(crate) caret_visible: bool,
+    /// Interactive form fields on the selected page.
+    pub(crate) form_fields: Vec<FormField>,
+    /// Focused form field: an index into `form_fields`.
+    pub(crate) form_focus: Option<usize>,
+    /// Text being edited in the focused text or choice field.
+    pub(crate) form_draft: String,
+    /// Caret position in `form_draft`, in characters.
+    pub(crate) form_caret: usize,
+    /// Value the focused field had when focus started, restored on Escape.
+    pub(crate) form_original: String,
+    /// Anchor of the open option list of a choice field, in viewer coordinates
+    /// (origin top left). `None` while the list is closed.
+    pub(crate) form_menu: Option<Point>,
 }
 
 /// An in-progress free-text edit. The annotation itself lives in the document
@@ -285,6 +299,12 @@ impl Default for AnnotationUiState {
             font_size_pt: 24.0,
             pending_text: None,
             caret_visible: true,
+            form_fields: Vec::new(),
+            form_focus: None,
+            form_draft: String::new(),
+            form_caret: 0,
+            form_original: String::new(),
+            form_menu: None,
         }
     }
 }

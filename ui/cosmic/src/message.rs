@@ -5,12 +5,14 @@
 
 use std::path::PathBuf;
 
+use cosmic::iced::Point;
 use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::Modifiers;
 use cosmic::iced::mouse;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::Entity;
 
+use noctua_core::pdfium_ops::FormField;
 use noctua_core::pdfium_ops::model::{AnnotationColor, FreeTextAnnotation};
 use noctua_core::render::worker::DocumentId;
 use noctua_core::storage::browser::BrowserEntry;
@@ -122,11 +124,13 @@ pub enum Message {
     /// The free-text colour changed.
     AnnotationColorChanged(AnnotationColor),
     /// A click landed on the annotation page; native image coordinates
-    /// (pixels, origin top-left).
+    /// (pixels, origin top-left) plus the same click in the viewer's own
+    /// coordinates, used to anchor overlays such as the option list.
     AnnotationPointerClicked {
         tab: Entity,
         x: f32,
         y: f32,
+        anchor: Point,
     },
     /// The free-text annotations of the clicked page were listed; carries the
     /// click context so the handler can hit-test and start an edit.
@@ -195,6 +199,30 @@ pub enum Message {
         stem: String,
         result: Result<PathBuf, String>,
     },
+    /// Form fields on an annotation page were listed for a click, which then
+    /// decides whether it toggled a field or started editing one.
+    AnnotationFormFieldsListed {
+        tab: Entity,
+        fields: Vec<FormField>,
+        x: f32,
+        y: f32,
+        anchor: Point,
+    },
+    /// A form field was toggled or focused; the page is re-rendered so the new
+    /// state is visible.
+    AnnotationFormMutated {
+        tab: Entity,
+        ok: bool,
+    },
+    /// An option of the focused choice field was picked; `field` is the
+    /// annotation index and `option` the 0-based position in its option list.
+    AnnotationFormOptionPicked {
+        tab: Entity,
+        field: usize,
+        option: usize,
+    },
+    /// The option list was dismissed without a pick.
+    AnnotationFormMenuClosed,
     /// The folder content was listed.
     FolderListed {
         dir: PathBuf,
