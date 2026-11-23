@@ -254,7 +254,18 @@ impl cosmic::Application for AppModel {
 
     /// Handles messages emitted by the application and its widgets.
     fn update(&mut self, message: Self::Message) -> iced::Task<cosmic::Action<Self::Message>> {
-        self.handle_message(message)
+        let task = self.handle_message(message);
+        // While a form field has the keyboard focus, Tab walks the fields of the
+        // page. Cosmic's keyboard navigation would otherwise move the widget
+        // focus into the toolbar at the same time. Its other keys (F11, Ctrl+F)
+        // are unavailable for as long as a field is being edited; Escape is
+        // handled by the field itself.
+        let editing_field = self
+            .active_tab()
+            .and_then(|tab| self.annotation_ui.get(&tab))
+            .is_some_and(|state| state.form_focus.is_some());
+        self.core.set_keyboard_nav(!editing_field);
+        task
     }
 
     /// Maps the menu key binds to their actions. The menu bar only displays

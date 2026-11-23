@@ -819,6 +819,7 @@ fn selects_form_field_option() {
     assert_eq!(field.kind, noctua_core::pdfium_ops::FormFieldKind::Combo);
     assert_eq!(field.options, ["United States", "Germany"]);
     assert_eq!(field.value, "de");
+    assert_eq!(field.selected, Some(1));
 
     assert!(matches!(
         mgr.execute(Command::SelectFormFieldOption {
@@ -829,6 +830,7 @@ fn selects_form_field_option() {
         CommandResult::Ok
     ));
     assert_eq!(value(&mut mgr).value, "us");
+    assert_eq!(value(&mut mgr).selected, Some(0));
 
     // The selection survives saving and shows the option's label.
     let CommandResult::Saved { data } = mgr.execute(Command::Save) else {

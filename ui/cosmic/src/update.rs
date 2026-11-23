@@ -2692,6 +2692,22 @@ impl AppModel {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     state.form_menu = None;
                 }
+                // The viewer reports clicks for its whole frame, including the
+                // margin around a fitted page. Only clicks on the page itself
+                // can create an annotation or hit a field.
+                let Some((width, height)) = self
+                    .annotation_ui
+                    .get(&tab)
+                    .and_then(|state| state.current.as_ref())
+                    .map(|current| (current.rgba.0 as f32, current.rgba.1 as f32))
+                else {
+                    return iced::Task::none();
+                };
+                if x < 0.0 || y < 0.0 || x > width || y > height {
+                    // A click next to the page ends a running text edit, but it
+                    // cannot create an annotation or hit a field.
+                    return self.finish_pending_text(tab);
+                }
                 let is_text = self
                     .annotation_ui
                     .get(&tab)
@@ -3008,6 +3024,9 @@ impl AppModel {
                     state.view.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
                     state.view.offset_x = offset_x;
                     state.view.offset_y = offset_y;
+                    // The list was anchored to a position that zooming or
+                    // panning just moved.
+                    state.form_menu = None;
                 }
             }
 

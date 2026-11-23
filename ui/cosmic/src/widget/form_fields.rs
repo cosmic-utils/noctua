@@ -40,10 +40,13 @@ pub(crate) fn cursor_for(
 ) -> Option<mouse::Interaction> {
     let kind = fields.get(field_at(fields, point, image_height)?)?.kind;
     Some(match kind {
-        FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::ListBox => {
-            mouse::Interaction::Text
-        }
-        FormFieldKind::Checkbox | FormFieldKind::Radio => mouse::Interaction::Pointer,
+        FormFieldKind::Text => mouse::Interaction::Text,
+        // Choice fields open a list on a click, so they read as clickable; a
+        // text caret would promise typing they do not accept.
+        FormFieldKind::Combo
+        | FormFieldKind::ListBox
+        | FormFieldKind::Checkbox
+        | FormFieldKind::Radio => mouse::Interaction::Pointer,
         FormFieldKind::PushButton | FormFieldKind::Signature | FormFieldKind::Unknown => {
             return None;
         }
@@ -153,6 +156,7 @@ mod tests {
             flags: 0,
             value: String::new(),
             options: Vec::new(),
+            selected: None,
             font_size: 12.0,
             x,
             y,
@@ -224,6 +228,11 @@ mod tests {
         combo.options = vec!["United States".to_string(), "Germany".to_string()];
         assert!(has_options(&combo));
         assert!(!accepts_text(&combo));
+        // A choice field reads as clickable; it opens a list, not a caret.
+        assert_eq!(
+            cursor_for(&[combo.clone()], Point::new(10.0, 390.0), 400.0),
+            Some(mouse::Interaction::Pointer)
+        );
 
         // A combo box that allows editing keeps the text input.
         combo.flags = CHOICE_EDIT;

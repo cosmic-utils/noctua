@@ -118,6 +118,8 @@ pub struct FormField {
     pub value: String,
     /// Choice options; empty for other kinds.
     pub options: Vec<String>,
+    /// Position of the selected option in `options`, if one is selected.
+    pub selected: Option<usize>,
     /// Font size from `/DA`, in points.
     pub font_size: f32,
     pub x: f32,

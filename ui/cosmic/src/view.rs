@@ -11,10 +11,12 @@ use cosmic::prelude::*;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::widget::{self, menu, tab_bar};
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use noctua_core::pdfium_ops::FormField;
 use noctua_core::pdfium_ops::model::AnnotationColor;
@@ -438,8 +440,7 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     else {
         return element;
     };
-    let space = cosmic::theme::spacing();
-    let padding = f32::from(space.space_m);
+    let padding = f32::from(cosmic::theme::spacing().space_m);
     widget::popover(element)
         .position(widget::popover::Position::Point(Point::new(
             anchor.x + padding,
@@ -450,32 +451,35 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
         .into()
 }
 
-/// Width of the option list popup, in logical pixels.
+/// Width of the option list, in logical pixels.
 const FORM_MENU_WIDTH: f32 = 220.0;
 
-/// The option list of a choice field: the field name and one button per option.
-/// Pure UI: picking an option publishes a message for the core to apply.
-fn form_option_list(tab: Entity, field: &FormField) -> Element<'static, Message> {
+/// The option list of a choice field, drawn with cosmic's own dropdown list.
+///
+/// `Menu` is the list, not a widget that places itself, so `popup` is only the
+/// way to turn it into an element; the surrounding popover decides where it
+/// appears. The list opens whether or not the click was on a dropdown arrow —
+/// the whole field is the click target.
+fn form_option_list<'a>(tab: Entity, field: &FormField) -> Element<'a, Message> {
     let space = cosmic::theme::spacing();
-    let mut list = widget::column::with_capacity(field.options.len() + 1)
-        .spacing(space.space_xxs)
-        .padding(space.space_xs)
-        .push(widget::text::caption(field.name.clone()));
-    for (option, label) in field.options.iter().enumerate() {
-        list = list.push(
-            widget::button::standard(label.clone())
-                .width(Length::Fill)
-                .on_press(Message::AnnotationFormOptionPicked {
-                    tab,
-                    field: field.index,
-                    option,
-                }),
-        );
-    }
-    widget::container(list)
-        .class(cosmic::style::Container::Dropdown)
-        .width(Length::Fixed(FORM_MENU_WIDTH))
-        .into()
+    let annotation = field.index;
+    widget::dropdown::menu::Menu::new(
+        widget::dropdown::menu::State::new(),
+        Cow::Owned(field.options.clone()),
+        Cow::Owned(Vec::new()),
+        Arc::new(Mutex::new(None)),
+        field.selected,
+        move |option| Message::AnnotationFormOptionPicked {
+            tab,
+            field: annotation,
+            option,
+        },
+        None,
+        Some(Message::AnnotationFormMenuClosed),
+    )
+    .width(FORM_MENU_WIDTH)
+    .padding(space.space_xxs)
+    .popup(Point::ORIGIN, 0.0)
 }
 
 /// Free-text font size presets, in points.

@@ -991,15 +991,27 @@ impl PdfOpsManager {
             let (_, font_size) = parse_free_text_da(&da);
 
             let mut options = Vec::new();
+            let mut labels_complete = true;
             let option_count = bindings.FPDFAnnot_GetOptionCount(form, annot.handle);
             for option in 0..option_count.max(0) {
                 let label = form_text(|buffer, length| {
                     bindings.FPDFAnnot_GetOptionLabel(form, annot.handle, option, buffer, length)
                 });
-                if let Some(label) = label {
-                    options.push(label);
+                match label {
+                    Some(label) => options.push(label),
+                    None => labels_complete = false,
                 }
             }
+            // Option positions only line up with pdfium's option indices when
+            // every label could be read.
+            let selected = if labels_complete {
+                (0..option_count.max(0)).find(|option| {
+                    bindings.FPDFAnnot_IsOptionSelected(form, annot.handle, *option) != 0
+                })
+            } else {
+                None
+            }
+            .and_then(|option| usize::try_from(option).ok());
 
             fields.push(FormField {
                 index,
@@ -1014,6 +1026,7 @@ impl PdfOpsManager {
                 })
                 .unwrap_or_default(),
                 options,
+                selected,
                 font_size,
                 x: rect.left,
                 y: rect.bottom,
