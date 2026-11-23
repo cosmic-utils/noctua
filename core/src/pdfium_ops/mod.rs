@@ -6,13 +6,16 @@
 
 mod bindings;
 mod command;
+mod document;
 mod error;
 mod manager;
 pub mod model;
 
 pub use command::{Command, CommandResult};
 pub use error::PdfOpsError;
-pub use manager::{PdfOpsManager, read_pdf_metadata};
-pub use model::{AnnotationColor, BindSource, FreeTextAnnotation, PageRef, PdfMetadata};
+pub use manager::{PdfOpsManager, helvetica_text_width, read_pdf_metadata};
+pub use model::{
+    AnnotationColor, BindSource, FormField, FormFieldKind, FreeTextAnnotation, PageRef, PdfMetadata,
+};
 
 pub use bindings::try_pdfium;

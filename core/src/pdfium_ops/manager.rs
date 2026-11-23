@@ -11,17 +11,17 @@ use pdfium_render::prelude::*;
 
 use super::bindings::pdfium_or_err;
 use super::command::{Command, CommandResult};
+use super::document::Document;
 use super::error::PdfOpsError;
-use super::model::{AnnotationColor, BindSource, FreeTextAnnotation, MarkupKind, PdfMetadata};
+use super::model::{
+    AnnotationColor, BindSource, FormField, FormFieldKind, FreeTextAnnotation, MarkupKind,
+    PdfMetadata,
+};
 
 use crate::storage::document::Format;
 
 fn pdfium_err(e: PdfiumError) -> PdfOpsError {
     PdfOpsError::Pdfium(format!("{e:?}"))
-}
-
-fn to_color(c: AnnotationColor) -> PdfColor {
-    PdfColor::new(c.red, c.green, c.blue, c.alpha)
 }
 
 /// `FPDF_ANNOT_FLAG_PRINT` from `fpdf_annot.h`. The pdfium-render prelude does
@@ -172,6 +172,14 @@ fn char_width(ch: char, font_size: f32) -> f32 {
 /// Rendered width of `text` at `font_size` points.
 fn text_width(text: &str, font_size: f32) -> f32 {
     text.chars().map(|ch| char_width(ch, font_size)).sum()
+}
+
+/// Rendered width of `text` in Helvetica at `font_size` points.
+///
+/// Public because the UI places the caret inside a form field with the same
+/// metrics the appearance uses; the width table lives in this module.
+pub fn helvetica_text_width(text: &str, font_size: f32) -> f32 {
+    text_width(text, font_size)
 }
 
 /// Greedy wrap: break at spaces, split words that are wider than a line. Each
@@ -338,48 +346,77 @@ fn free_text_caret(
     )
 }
 
-/// Set the common position, size and color of a text-markup annotation.
-fn position_markup<A: PdfPageAnnotationCommon>(
-    annotation: &mut A,
-    color: AnnotationColor,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-) -> Result<(), PdfOpsError> {
-    annotation
-        .set_position(PdfPoints::new(x), PdfPoints::new(y))
-        .map_err(pdfium_err)?;
-    annotation
-        .set_width(PdfPoints::new(width))
-        .map_err(pdfium_err)?;
-    annotation
-        .set_height(PdfPoints::new(height))
-        .map_err(pdfium_err)?;
-    annotation
-        .set_stroke_color(to_color(color))
-        .map_err(pdfium_err)?;
-    annotation
-        .set_fill_color(to_color(color))
-        .map_err(pdfium_err)?;
-    Ok(())
+/// `FPDF_FORMFIELD_*` from `fpdf_formfill.h`: the field type pdfium reports.
+const FORM_FIELD_PUSH_BUTTON: i32 = 1;
+const FORM_FIELD_CHECKBOX: i32 = 2;
+const FORM_FIELD_RADIO: i32 = 3;
+const FORM_FIELD_COMBO: i32 = 4;
+const FORM_FIELD_LISTBOX: i32 = 5;
+const FORM_FIELD_TEXT: i32 = 6;
+const FORM_FIELD_SIGNATURE: i32 = 7;
+
+/// `FPDFANNOT_COLORTYPE_COLOR`, the annotation's stroke colour.
+const ANNOT_COLOR_STROKE: u32 = 0;
+
+/// `FPDFBitmap_BGRA`, pdfium's native 32-bit layout.
+const RENDER_BITMAP_BGRA: i32 = 4;
+
+/// Ink stroke width in points, as drawn before the raw port.
+const INK_WIDTH: f32 = 2.0;
+
+/// Rectangle of an annotation in page points, origin bottom-left.
+fn annot_box(x: f32, y: f32, width: f32, height: f32) -> FS_RECTF {
+    FS_RECTF {
+        left: x,
+        bottom: y,
+        right: x + width,
+        top: y + height,
+    }
 }
 
-/// Build the quad points of a markup rectangle. Text-markup annotations are
-/// visible only through these attachment points.
-fn markup_quad(x: f32, y: f32, width: f32, height: f32) -> PdfQuadPoints {
-    let rect = PdfRect::new(
-        PdfPoints::new(y),
-        PdfPoints::new(x),
-        PdfPoints::new(y + height),
-        PdfPoints::new(x + width),
-    );
-    PdfQuadPoints::from_rect(&rect)
+/// Read a UTF-16 string a pdfium form getter writes in two calls.
+fn form_text(
+    fetch: impl Fn(*mut u16, std::os::raw::c_ulong) -> std::os::raw::c_ulong,
+) -> Option<String> {
+    let length = fetch(std::ptr::null_mut(), 0);
+    if length <= 2 {
+        return None;
+    }
+    let mut buffer = vec![0u16; length as usize / 2];
+    fetch(buffer.as_mut_ptr(), length);
+    let text = String::from_utf16_lossy(&buffer);
+    Some(text.trim_end_matches('\0').to_string())
+}
+
+/// Read an annotation's rectangle.
+fn annot_rect(bindings: &dyn PdfiumLibraryBindings, annot: FPDF_ANNOTATION) -> Option<FS_RECTF> {
+    let mut rect = FS_RECTF {
+        left: 0.0,
+        bottom: 0.0,
+        right: 0.0,
+        top: 0.0,
+    };
+    (bindings.FPDFAnnot_GetRect(annot, &mut rect) != 0).then_some(rect)
+}
+
+/// Quad points of a markup rectangle, counter-clockwise from the upper left.
+/// Text-markup annotations are visible only through these attachment points.
+fn annot_quad(x: f32, y: f32, width: f32, height: f32) -> FS_QUADPOINTSF {
+    FS_QUADPOINTSF {
+        x1: x,
+        y1: y + height,
+        x2: x + width,
+        y2: y + height,
+        x3: x,
+        y3: y,
+        x4: x + width,
+        y4: y,
+    }
 }
 
 /// Manager for PDF editing operations. Owns the currently open document.
 pub struct PdfOpsManager {
-    document: Option<PdfDocument<'static>>,
+    document: Option<Document>,
     path: Option<PathBuf>,
     dirty: bool,
 }
@@ -494,6 +531,26 @@ impl PdfOpsManager {
                     Err(e) => CommandResult::Error(e),
                 }
             }
+            Command::ListFormFields { page } => match self.list_form_fields(page) {
+                Ok(list) => CommandResult::FormFields(list),
+                Err(e) => CommandResult::Error(e),
+            },
+            Command::SetFormFieldValue { page, index, value } => {
+                self.set_form_field_value(page, index, &value).into()
+            }
+            Command::ToggleFormField { page, index } => self.toggle_form_field(page, index).into(),
+            Command::SelectFormFieldOption {
+                page,
+                index,
+                option,
+            } => self.select_form_field_option(page, index, option).into(),
+            Command::FocusFormField { page, index } => self.focus_form_field(page, index).into(),
+            Command::BlurFormField => {
+                if let Some(document) = self.document.as_ref() {
+                    document.blur_field();
+                }
+                CommandResult::Ok
+            }
             Command::SetFreeTextStyle {
                 page,
                 index,
@@ -535,59 +592,44 @@ impl PdfOpsManager {
 
     // ── Internal operations ──
 
-    fn require_document(&self) -> Result<&PdfDocument<'static>, PdfOpsError> {
+    fn require_document(&self) -> Result<&Document, PdfOpsError> {
         self.document.as_ref().ok_or(PdfOpsError::NoDocumentOpen)
     }
 
     fn open(&mut self, data: Vec<u8>, path: &Path) -> Result<(), PdfOpsError> {
-        // `load_pdf_from_byte_vec` takes ownership of the bytes so the
-        // stored document can outlive the caller's buffer.
-        let document = pdfium_or_err()?
-            .load_pdf_from_byte_vec(data, None)
-            .map_err(pdfium_err)?;
-        self.document = Some(document);
+        // `Document::open` keeps the bytes alive for pdfium's lifetime.
+        self.document = Some(Document::open(data)?);
         self.path = Some(path.to_path_buf());
         self.dirty = false;
         Ok(())
     }
 
     fn new_document(&mut self) -> Result<(), PdfOpsError> {
-        let document = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
-        self.document = Some(document);
+        self.document = Some(Document::create()?);
         self.path = None;
         self.dirty = true;
         Ok(())
     }
 
     fn page_count(&self) -> Result<u32, PdfOpsError> {
-        Ok(self.require_document()?.pages().len() as u32)
+        Ok(self.require_document()?.page_count())
     }
 
     fn page_sizes(&self) -> Result<Vec<(f32, f32)>, PdfOpsError> {
-        self.require_document()?
-            .pages()
-            .iter()
-            .map(|page| Ok((page.width().value, page.height().value)))
-            .collect()
+        self.require_document()?.page_sizes()
     }
 
     fn save(&mut self) -> Result<Vec<u8>, PdfOpsError> {
         if self.path.is_none() {
             return Err(PdfOpsError::NoDocumentOpen);
         }
-        let data = self
-            .require_document()?
-            .save_to_bytes()
-            .map_err(pdfium_err)?;
+        let data = self.require_document()?.save()?;
         self.dirty = false;
         Ok(data)
     }
 
     fn save_as(&mut self, path: &Path) -> Result<Vec<u8>, PdfOpsError> {
-        let data = self
-            .require_document()?
-            .save_to_bytes()
-            .map_err(pdfium_err)?;
+        let data = self.require_document()?.save()?;
         self.path = Some(path.to_path_buf());
         self.dirty = false;
         Ok(data)
@@ -603,22 +645,17 @@ impl PdfOpsManager {
             }
         }
 
-        let mut document = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
+        let mut document = Document::create()?;
 
         for source in &sources {
             match source.format {
                 Format::Pdf => {
-                    let src_doc = pdfium_or_err()?
-                        .load_pdf_from_byte_slice(&source.data, None)
-                        .map_err(pdfium_err)?;
+                    let src_doc = Document::open(source.data.clone())?;
                     match &source.pages {
-                        None => document.pages_mut().append(&src_doc).map_err(pdfium_err)?,
+                        None => document.import_all(&src_doc)?,
                         Some(range) => {
-                            let dest_index = document.pages().len();
-                            document
-                                .pages_mut()
-                                .copy_pages_from_document(&src_doc, range, dest_index)
-                                .map_err(pdfium_err)?
+                            let at = document.page_count() as i32;
+                            document.import_range(&src_doc, range, at)?;
                         }
                     }
                 }
@@ -635,7 +672,7 @@ impl PdfOpsManager {
             }
         }
 
-        let data = document.save_to_bytes().map_err(pdfium_err)?;
+        let data = document.save()?;
         self.document = Some(document);
         self.path = Some(target.to_path_buf());
         self.dirty = false;
@@ -650,37 +687,26 @@ impl PdfOpsManager {
 
         match source.format {
             Format::Pdf => {
-                let src_doc = pdfium_or_err()?
-                    .load_pdf_from_byte_slice(&source.data, None)
-                    .map_err(pdfium_err)?;
+                let src_doc = Document::open(source.data.clone())?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
                 match &source.pages {
-                    None => document.pages_mut().append(&src_doc).map_err(pdfium_err)?,
-                    Some(range) => document
-                        .pages_mut()
-                        .copy_pages_from_document(&src_doc, range, dest_index)
-                        .map_err(pdfium_err)?,
+                    None => document.import_all(&src_doc)?,
+                    Some(range) => document.import_range(&src_doc, range, dest_index as i32)?,
                 }
             }
             Format::Raster => {
                 // Raster pages are inserted by binding into a scratch document
                 // and importing the resulting page.
-                let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
+                let mut scratch = Document::create()?;
                 embed_raster_page(&mut scratch, &source.data)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
-                document
-                    .pages_mut()
-                    .copy_page_from_document(&scratch, 0, dest_index)
-                    .map_err(pdfium_err)?;
+                document.import_indices(&scratch, &[0], dest_index as i32)?;
             }
             Format::Svg => {
-                let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
+                let mut scratch = Document::create()?;
                 embed_vector_page(&mut scratch, &source.data)?;
                 let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
-                document
-                    .pages_mut()
-                    .copy_page_from_document(&scratch, 0, dest_index)
-                    .map_err(pdfium_err)?;
+                document.import_indices(&scratch, &[0], dest_index as i32)?;
             }
             Format::Unknown => {
                 return Err(PdfOpsError::UnsupportedSource(source.name.clone()));
@@ -692,22 +718,21 @@ impl PdfOpsManager {
     }
 
     fn delete_pages(&mut self, pages: &[u32]) -> Result<(), PdfOpsError> {
-        let mut indices: Vec<PdfPageIndex> = Vec::with_capacity(pages.len());
+        let mut indices: Vec<i32> = Vec::with_capacity(pages.len());
         for page in pages {
             if *page == 0 {
                 return Err(PdfOpsError::PageOutOfRange(0));
             }
-            indices.push((*page - 1) as PdfPageIndex);
+            indices.push((*page - 1) as i32);
         }
         // Delete in descending order so indices stay valid.
         indices.sort_unstable_by(|a, b| b.cmp(a));
+        let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
         for index in indices {
-            let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
-            let page = document
-                .pages()
-                .get(index)
-                .map_err(|_| PdfOpsError::PageOutOfRange(index as u32 + 1))?;
-            page.delete().map_err(pdfium_err)?;
+            if index as u32 >= document.page_count() {
+                return Err(PdfOpsError::PageOutOfRange(index as u32 + 1));
+            }
+            document.delete_page(index);
         }
         self.dirty = true;
         Ok(())
@@ -715,46 +740,36 @@ impl PdfOpsManager {
 
     /// Move a page by copying it into a scratch document, deleting the
     /// original, and re-inserting the copy at the target position.
-    /// pdfium-render exposes FPDF_MovePages only as a raw binding without
-    /// access to the document handle, so this is the safe high-level path.
     fn move_page(&mut self, from: u32, to: u32) -> Result<(), PdfOpsError> {
         if from == 0 || to == 0 {
             return Err(PdfOpsError::PageOutOfRange(0));
         }
-        let from_idx = (from - 1) as PdfPageIndex;
-        let to_idx = (to - 1) as PdfPageIndex;
+        let from_idx = (from - 1) as i32;
+        let to_idx = (to - 1) as i32;
 
         // 1. Copy the source page into a scratch document.
-        let mut scratch = pdfium_or_err()?.create_new_pdf().map_err(pdfium_err)?;
+        let mut scratch = Document::create()?;
         {
             let document = self.require_document()?;
-            if from_idx >= document.pages().len() {
+            if from_idx as u32 >= document.page_count() {
                 return Err(PdfOpsError::PageOutOfRange(from));
             }
-            scratch
-                .pages_mut()
-                .copy_page_from_document(document, from_idx, 0)
-                .map_err(pdfium_err)?;
+            scratch.import_indices(document, &[from_idx], 0)?;
         }
 
         // 2. Delete the original page.
-        {
-            let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
-            let page = document
-                .pages()
-                .get(from_idx)
-                .map_err(|_| PdfOpsError::PageOutOfRange(from))?;
-            page.delete().map_err(pdfium_err)?;
-        }
+        self.document
+            .as_mut()
+            .ok_or(PdfOpsError::NoDocumentOpen)?
+            .delete_page(from_idx);
 
         // 3. Insert the copy at the target position. pdfium inserts AT the
         // destination index, so the 1-based target `to` maps directly to the
         // 0-based `to_idx` — the deleted page already shifted everything up.
-        let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
-        document
-            .pages_mut()
-            .copy_page_from_document(&scratch, 0, to_idx)
-            .map_err(pdfium_err)?;
+        self.document
+            .as_mut()
+            .ok_or(PdfOpsError::NoDocumentOpen)?
+            .import_indices(&scratch, &[0], to_idx)?;
 
         self.dirty = true;
         Ok(())
@@ -764,23 +779,14 @@ impl PdfOpsManager {
         if page == 0 {
             return Err(PdfOpsError::PageOutOfRange(0));
         }
-        let rotation = match degrees {
-            0 => PdfPageRenderRotation::None,
-            90 => PdfPageRenderRotation::Degrees90,
-            180 => PdfPageRenderRotation::Degrees180,
-            270 => PdfPageRenderRotation::Degrees270,
-            _ => {
-                return Err(PdfOpsError::Pdfium(format!(
-                    "unsupported rotation: {degrees} degrees"
-                )));
-            }
-        };
+        if !matches!(degrees, 0 | 90 | 180 | 270) {
+            return Err(PdfOpsError::Pdfium(format!(
+                "unsupported rotation: {degrees} degrees"
+            )));
+        }
         let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
-        let mut pdf_page = document
-            .pages_mut()
-            .get((page - 1) as PdfPageIndex)
-            .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
-        pdf_page.set_rotation(rotation);
+        let pdf_page = document.page(page - 1)?;
+        pdf_page.set_rotation_quarters(i32::from(degrees / 90) as std::os::raw::c_int);
         self.dirty = true;
         Ok(())
     }
@@ -794,11 +800,8 @@ impl PdfOpsManager {
         }
         let current = {
             let document = self.require_document()?;
-            let pdf_page = document
-                .pages()
-                .get((page - 1) as PdfPageIndex)
-                .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
-            pdf_page.rotation().map_err(pdfium_err)?.as_degrees()
+            let pdf_page = document.page(page - 1)?;
+            f32::from(pdf_page.rotation_quarters() as u16) * 90.0
         };
         // Counter-clockwise is expressed as three clockwise quarter turns.
         let delta = if clockwise { 90.0 } else { 270.0 };
@@ -821,12 +824,9 @@ impl PdfOpsManager {
 
         let result = {
             let document = self.require_document()?;
-            let pdf_page = document
-                .pages()
-                .get((page - 1) as PdfPageIndex)
-                .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
-            let bindings = pdfium_or_err()?.bindings();
-            let page_handle = bindings.get_handle_from_page(&pdf_page);
+            let pdf_page = document.page(page - 1)?;
+            let bindings = document.bindings();
+            let page_handle = pdf_page.handle();
 
             let annot = bindings.FPDFPage_CreateAnnot(
                 page_handle,
@@ -913,40 +913,165 @@ impl PdfOpsManager {
             return Err(PdfOpsError::PageOutOfRange(0));
         }
         let document = self.require_document()?;
-        let pdf_page = document
-            .pages()
-            .get((page - 1) as PdfPageIndex)
-            .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
-        let bindings = pdfium_or_err()?.bindings();
-        let page_handle = bindings.get_handle_from_page(&pdf_page);
+        let pdf_page = document.page(page - 1)?;
+        let bindings = document.bindings();
 
         let mut annotations = Vec::new();
-        for (index, annotation) in pdf_page.annotations().iter().enumerate() {
-            if annotation.annotation_type() != PdfPageAnnotationType::FreeText {
+        for index in 0..pdf_page.annotation_count() {
+            let Some(handle) = AnnotGuard::new(bindings, pdf_page.annotation(index)) else {
+                continue;
+            };
+            if bindings.FPDFAnnot_GetSubtype(handle.handle)
+                != PdfPageAnnotationType::FreeText as FPDF_ANNOTATION_SUBTYPE
+            {
                 continue;
             }
-            let bounds = annotation.bounds().map_err(pdfium_err)?;
-            // The colour and size live in `/DA`, which has no high-level getter.
-            let handle = AnnotGuard::new(
-                bindings,
-                bindings.FPDFPage_GetAnnot(page_handle, index as i32),
-            );
-            let da = handle
-                .and_then(|handle| read_annot_string(bindings, handle.handle, "DA"))
-                .unwrap_or_default();
+            let mut rect = FS_RECTF {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+            };
+            if bindings.FPDFAnnot_GetRect(handle.handle, &mut rect) == 0 {
+                continue;
+            }
+            // The colour and size live in `/DA`, which has no typed getter.
+            let da = read_annot_string(bindings, handle.handle, "DA").unwrap_or_default();
             let (color, font_size) = parse_free_text_da(&da);
             annotations.push(FreeTextAnnotation {
                 index,
-                contents: annotation.contents().unwrap_or_default(),
+                contents: read_annot_string(bindings, handle.handle, "Contents")
+                    .unwrap_or_default(),
                 color,
                 font_size,
-                x: bounds.left().value,
-                y: bounds.bottom().value,
-                width: bounds.width().value,
-                height: bounds.height().value,
+                x: rect.left,
+                y: rect.bottom,
+                width: rect.right - rect.left,
+                height: rect.top - rect.bottom,
             });
         }
         Ok(annotations)
+    }
+
+    /// List the interactive form fields on a page, in page points.
+    fn list_form_fields(&self, page: u32) -> Result<Vec<FormField>, PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        let document = self.require_document()?;
+        let pdf_page = document.page(page - 1)?;
+        let bindings = document.bindings();
+        let form = document.form();
+
+        let mut fields = Vec::new();
+        for index in 0..pdf_page.annotation_count() {
+            let Some(annot) = AnnotGuard::new(bindings, pdf_page.annotation(index)) else {
+                continue;
+            };
+            if bindings.FPDFAnnot_GetSubtype(annot.handle)
+                != PdfPageAnnotationType::Widget as FPDF_ANNOTATION_SUBTYPE
+            {
+                continue;
+            }
+            let Some(rect) = annot_rect(bindings, annot.handle) else {
+                continue;
+            };
+            let kind = match bindings.FPDFAnnot_GetFormFieldType(form, annot.handle) {
+                FORM_FIELD_PUSH_BUTTON => FormFieldKind::PushButton,
+                FORM_FIELD_CHECKBOX => FormFieldKind::Checkbox,
+                FORM_FIELD_RADIO => FormFieldKind::Radio,
+                FORM_FIELD_TEXT => FormFieldKind::Text,
+                FORM_FIELD_LISTBOX => FormFieldKind::ListBox,
+                FORM_FIELD_COMBO => FormFieldKind::Combo,
+                FORM_FIELD_SIGNATURE => FormFieldKind::Signature,
+                _ => FormFieldKind::Unknown,
+            };
+
+            let da = read_annot_string(bindings, annot.handle, "DA").unwrap_or_default();
+            let (_, font_size) = parse_free_text_da(&da);
+
+            let mut options = Vec::new();
+            let option_count = bindings.FPDFAnnot_GetOptionCount(form, annot.handle);
+            for option in 0..option_count.max(0) {
+                let label = form_text(|buffer, length| {
+                    bindings.FPDFAnnot_GetOptionLabel(form, annot.handle, option, buffer, length)
+                });
+                if let Some(label) = label {
+                    options.push(label);
+                }
+            }
+
+            fields.push(FormField {
+                index,
+                name: form_text(|buffer, length| {
+                    bindings.FPDFAnnot_GetFormFieldName(form, annot.handle, buffer, length)
+                })
+                .unwrap_or_default(),
+                kind,
+                flags: bindings.FPDFAnnot_GetFormFieldFlags(form, annot.handle),
+                value: form_text(|buffer, length| {
+                    bindings.FPDFAnnot_GetFormFieldValue(form, annot.handle, buffer, length)
+                })
+                .unwrap_or_default(),
+                options,
+                font_size,
+                x: rect.left,
+                y: rect.bottom,
+                width: rect.right - rect.left,
+                height: rect.top - rect.bottom,
+            });
+        }
+        Ok(fields)
+    }
+
+    /// Write a new value into a text or choice field.
+    fn set_form_field_value(
+        &mut self,
+        page: u32,
+        index: usize,
+        value: &str,
+    ) -> Result<(), PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        self.require_document()?
+            .set_field_text(page - 1, index, value)?;
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Toggle a checkbox or radio button.
+    fn toggle_form_field(&mut self, page: u32, index: usize) -> Result<(), PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        self.require_document()?.toggle_field(page - 1, index)?;
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Select one option of a combo or list box.
+    fn select_form_field_option(
+        &mut self,
+        page: u32,
+        index: usize,
+        option: usize,
+    ) -> Result<(), PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        self.require_document()?
+            .select_field_option(page - 1, index, option)?;
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Give a form field the input focus.
+    fn focus_form_field(&self, page: u32, index: usize) -> Result<(), PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+        self.require_document()?.focus_field(page - 1, index)
     }
 
     /// Rewrite text, style and geometry of an existing free-text annotation.
@@ -969,12 +1094,9 @@ impl PdfOpsManager {
         }
         let caret = {
             let document = self.require_document()?;
-            let pdf_page = document
-                .pages()
-                .get((page - 1) as PdfPageIndex)
-                .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
-            let bindings = pdfium_or_err()?.bindings();
-            let page_handle = bindings.get_handle_from_page(&pdf_page);
+            let pdf_page = document.page(page - 1)?;
+            let bindings = document.bindings();
+            let page_handle = pdf_page.handle();
             let annot = AnnotGuard::new(
                 bindings,
                 bindings.FPDFPage_GetAnnot(page_handle, index as i32),
@@ -1003,12 +1125,9 @@ impl PdfOpsManager {
         }
         {
             let document = self.require_document()?;
-            let pdf_page = document
-                .pages()
-                .get((page - 1) as PdfPageIndex)
-                .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
-            let bindings = pdfium_or_err()?.bindings();
-            let page_handle = bindings.get_handle_from_page(&pdf_page);
+            let pdf_page = document.page(page - 1)?;
+            let bindings = document.bindings();
+            let page_handle = pdf_page.handle();
             if bindings.FPDFPage_RemoveAnnot(page_handle, index as i32) == 0 {
                 return Err(PdfOpsError::Pdfium(
                     "failed to remove annotation".to_string(),
@@ -1033,29 +1152,25 @@ impl PdfOpsManager {
         }
         let (text, position, max_width) = {
             let document = self.require_document()?;
-            let pdf_page = document
-                .pages()
-                .get((page - 1) as PdfPageIndex)
-                .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
-            let annotation = pdf_page.annotations().get(index).map_err(pdfium_err)?;
-            if annotation.annotation_type() != PdfPageAnnotationType::FreeText {
+            let pdf_page = document.page(page - 1)?;
+            let bindings = document.bindings();
+            let handle = AnnotGuard::new(bindings, pdf_page.annotation(index))
+                .ok_or_else(|| PdfOpsError::Pdfium("failed to access annotation".to_string()))?;
+            if bindings.FPDFAnnot_GetSubtype(handle.handle)
+                != PdfPageAnnotationType::FreeText as FPDF_ANNOTATION_SUBTYPE
+            {
                 return Err(PdfOpsError::Pdfium(
                     "annotation is not a free-text annotation".to_string(),
                 ));
             }
-            let bounds = annotation.bounds().map_err(pdfium_err)?;
-            let bindings = pdfium_or_err()?.bindings();
-            let page_handle = bindings.get_handle_from_page(&pdf_page);
-            let handle = AnnotGuard::new(
-                bindings,
-                bindings.FPDFPage_GetAnnot(page_handle, index as i32),
-            )
-            .ok_or_else(|| PdfOpsError::Pdfium("failed to access annotation".to_string()))?;
+            let rect = annot_rect(bindings, handle.handle).ok_or_else(|| {
+                PdfOpsError::Pdfium("failed to read the annotation rectangle".to_string())
+            })?;
             let text = read_annot_string(bindings, handle.handle, "Contents").unwrap_or_default();
             (
                 text,
-                (bounds.left().value, bounds.top().value),
-                bounds.width().value,
+                (rect.left, rect.top),
+                (rect.right - rect.left).max(0.0),
             )
         };
         self.update_free_text(
@@ -1078,39 +1193,50 @@ impl PdfOpsManager {
         points: &[(f32, f32)],
         bounds: (f32, f32, f32, f32),
     ) -> Result<(), PdfOpsError> {
-        let (x, y, width, height) = bounds;
-        let mut pdf_page = self.page_mut(page)?;
-        let mut annotation = pdf_page
-            .annotations_mut()
-            .create_ink_annotation()
-            .map_err(pdfium_err)?;
-        annotation
-            .set_position(PdfPoints::new(x), PdfPoints::new(y))
-            .map_err(pdfium_err)?;
-        annotation
-            .set_width(PdfPoints::new(width))
-            .map_err(pdfium_err)?;
-        annotation
-            .set_height(PdfPoints::new(height))
-            .map_err(pdfium_err)?;
-
-        // Ink strokes are path objects inside the annotation. Connect the
-        // points with line segments.
-        for pair in points.windows(2) {
-            let (x1, y1) = pair[0];
-            let (x2, y2) = pair[1];
-            annotation
-                .objects_mut()
-                .create_path_object_line(
-                    PdfPoints::new(x1),
-                    PdfPoints::new(y1),
-                    PdfPoints::new(x2),
-                    PdfPoints::new(y2),
-                    to_color(color),
-                    PdfPoints::new(2.0),
-                )
-                .map_err(pdfium_err)?;
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
         }
+        let (x, y, width, height) = bounds;
+        let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
+        let pdf_page = document.page(page - 1)?;
+        let bindings = document.bindings();
+
+        let handle = AnnotGuard::new(
+            bindings,
+            bindings.FPDFPage_CreateAnnot(
+                pdf_page.handle(),
+                PdfPageAnnotationType::Ink as FPDF_ANNOTATION_SUBTYPE,
+            ),
+        )
+        .ok_or_else(|| PdfOpsError::Pdfium("failed to create ink annotation".to_string()))?;
+        bindings.FPDFAnnot_SetFlags(handle.handle, ANNOT_FLAG_PRINT);
+        bindings.FPDFAnnot_SetRect(handle.handle, &annot_box(x, y, width, height));
+        bindings.FPDFAnnot_SetColor(
+            handle.handle,
+            ANNOT_COLOR_STROKE,
+            u32::from(color.red),
+            u32::from(color.green),
+            u32::from(color.blue),
+            u32::from(color.alpha),
+        );
+        bindings.FPDFAnnot_SetBorder(handle.handle, 0.0, 0.0, INK_WIDTH);
+
+        // One stroke per segment keeps the original drawing: each pair of
+        // points is its own line inside the annotation.
+        for pair in points.windows(2) {
+            let stroke = [
+                FS_POINTF {
+                    x: pair[0].0,
+                    y: pair[0].1,
+                },
+                FS_POINTF {
+                    x: pair[1].0,
+                    y: pair[1].1,
+                },
+            ];
+            bindings.FPDFAnnot_AddInkStroke(handle.handle, stroke.as_ptr(), stroke.len());
+        }
+
         self.dirty = true;
         Ok(())
     }
@@ -1122,89 +1248,48 @@ impl PdfOpsManager {
         color: AnnotationColor,
         bounds: (f32, f32, f32, f32),
     ) -> Result<(), PdfOpsError> {
-        let (x, y, width, height) = bounds;
-        let mut pdf_page = self.page_mut(page)?;
-        let quad = markup_quad(x, y, width, height);
-        match kind {
-            MarkupKind::Highlight => {
-                let mut annotation = pdf_page
-                    .annotations_mut()
-                    .create_highlight_annotation()
-                    .map_err(pdfium_err)?;
-                position_markup(&mut annotation, color, x, y, width, height)?;
-                annotation
-                    .attachment_points_mut()
-                    .create_attachment_point_at_end(quad)
-                    .map_err(pdfium_err)?;
-            }
-            MarkupKind::Underline => {
-                let mut annotation = pdf_page
-                    .annotations_mut()
-                    .create_underline_annotation()
-                    .map_err(pdfium_err)?;
-                position_markup(&mut annotation, color, x, y, width, height)?;
-                annotation
-                    .attachment_points_mut()
-                    .create_attachment_point_at_end(quad)
-                    .map_err(pdfium_err)?;
-            }
-            MarkupKind::Strikeout => {
-                let mut annotation = pdf_page
-                    .annotations_mut()
-                    .create_strikeout_annotation()
-                    .map_err(pdfium_err)?;
-                position_markup(&mut annotation, color, x, y, width, height)?;
-                annotation
-                    .attachment_points_mut()
-                    .create_attachment_point_at_end(quad)
-                    .map_err(pdfium_err)?;
-            }
-            MarkupKind::Squiggly => {
-                let mut annotation = pdf_page
-                    .annotations_mut()
-                    .create_squiggly_annotation()
-                    .map_err(pdfium_err)?;
-                position_markup(&mut annotation, color, x, y, width, height)?;
-                annotation
-                    .attachment_points_mut()
-                    .create_attachment_point_at_end(quad)
-                    .map_err(pdfium_err)?;
-            }
-        }
-
-        self.dirty = true;
-        Ok(())
-    }
-
-    fn page_mut(&mut self, page: u32) -> Result<PdfPage<'static>, PdfOpsError> {
         if page == 0 {
             return Err(PdfOpsError::PageOutOfRange(0));
         }
+        let (x, y, width, height) = bounds;
+        let subtype = match kind {
+            MarkupKind::Highlight => PdfPageAnnotationType::Highlight,
+            MarkupKind::Underline => PdfPageAnnotationType::Underline,
+            MarkupKind::Strikeout => PdfPageAnnotationType::Strikeout,
+            MarkupKind::Squiggly => PdfPageAnnotationType::Squiggly,
+        };
+
         let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
-        document
-            .pages_mut()
-            .get((page - 1) as PdfPageIndex)
-            .map_err(|_| PdfOpsError::PageOutOfRange(page))
+        let pdf_page = document.page(page - 1)?;
+        let bindings = document.bindings();
+
+        let handle = AnnotGuard::new(
+            bindings,
+            bindings.FPDFPage_CreateAnnot(pdf_page.handle(), subtype as FPDF_ANNOTATION_SUBTYPE),
+        )
+        .ok_or_else(|| PdfOpsError::Pdfium("failed to create markup annotation".to_string()))?;
+        bindings.FPDFAnnot_SetFlags(handle.handle, ANNOT_FLAG_PRINT);
+        bindings.FPDFAnnot_SetRect(handle.handle, &annot_box(x, y, width, height));
+        bindings.FPDFAnnot_SetColor(
+            handle.handle,
+            ANNOT_COLOR_STROKE,
+            u32::from(color.red),
+            u32::from(color.green),
+            u32::from(color.blue),
+            u32::from(color.alpha),
+        );
+        // Text markups are visible only through their attachment points.
+        bindings.FPDFAnnot_AppendAttachmentPoints(handle.handle, &annot_quad(x, y, width, height));
+
+        self.dirty = true;
+        Ok(())
     }
 
     fn render_page(&self, page: u32, zoom: f32) -> Result<(u32, u32, Vec<u8>), PdfOpsError> {
         if page == 0 {
             return Err(PdfOpsError::PageOutOfRange(0));
         }
-        let document = self.require_document()?;
-        let pdf_page = document
-            .pages()
-            .get((page - 1) as PdfPageIndex)
-            .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
-
-        // scale_page_by_factor expresses the zoom directly and lets
-        // pdfium handle the points-to-pixels conversion.
-        let config = PdfRenderConfig::new().scale_page_by_factor(zoom);
-
-        let bitmap = pdf_page.render_with_config(&config).map_err(pdfium_err)?;
-        let image = bitmap.as_image();
-        let rgba = image.to_rgba8();
-        Ok((rgba.width(), rgba.height(), rgba.into_raw()))
+        self.require_document()?.render(page - 1, zoom)
     }
 
     /// Render a page as a thumbnail that fits inside `max_px` × `max_px`.
@@ -1213,16 +1298,14 @@ impl PdfOpsManager {
             return Err(PdfOpsError::PageOutOfRange(0));
         }
         let document = self.require_document()?;
-        let pdf_page = document
-            .pages()
-            .get((page - 1) as PdfPageIndex)
-            .map_err(|_| PdfOpsError::PageOutOfRange(page))?;
-
-        let config = PdfRenderConfig::new().thumbnail(max_px as i32);
-        let bitmap = pdf_page.render_with_config(&config).map_err(pdfium_err)?;
-        let image = bitmap.as_image();
-        let rgba = image.to_rgba8();
-        Ok((rgba.width(), rgba.height(), rgba.into_raw()))
+        let pdf_page = document.page(page - 1)?;
+        let (width, height) = pdf_page.display_size();
+        let longest = width.max(height);
+        if longest <= 0.0 {
+            return Ok((0, 0, Vec::new()));
+        }
+        let scale = max_px as f32 / longest;
+        document.render(page - 1, scale)
     }
 }
 
@@ -1268,43 +1351,58 @@ pub fn read_pdf_metadata(data: &[u8]) -> Result<PdfMetadata, PdfOpsError> {
 }
 
 /// Embed a raster image as a full-page image in the given document.
-fn embed_raster_page(document: &mut PdfDocument<'static>, data: &[u8]) -> Result<(), PdfOpsError> {
+fn embed_raster_page(document: &mut Document, data: &[u8]) -> Result<(), PdfOpsError> {
     let img = image::load_from_memory(data)
         .map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))?;
     embed_image(document, &img)
 }
 
 /// Embed an image as a full-page image in the given document.
-fn embed_image(
-    document: &mut PdfDocument<'static>,
-    img: &image::DynamicImage,
-) -> Result<(), PdfOpsError> {
+fn embed_image(document: &mut Document, img: &image::DynamicImage) -> Result<(), PdfOpsError> {
     use image::GenericImageView;
 
     let (px_w, px_h) = img.dimensions();
+    let width = px_w as i32;
+    let height = px_h as i32;
+
+    // pdfium expects premultiplied BGRA; our images are RGBA.
+    let mut pixels = img.to_rgba8().into_raw();
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+
+    let bindings = document.bindings();
+    let stride = width * 4;
+    let bitmap = bindings.FPDFBitmap_CreateEx(
+        width,
+        height,
+        RENDER_BITMAP_BGRA,
+        pixels.as_mut_ptr() as *mut std::ffi::c_void,
+        stride,
+    );
+    if bitmap.is_null() {
+        return Err(PdfOpsError::Pdfium(
+            "failed to allocate an image bitmap".to_string(),
+        ));
+    }
 
     // 1 px = 1 pt keeps the source resolution; acceptable for bind.
-    let page_size =
-        PdfPagePaperSize::new_custom(PdfPoints::new(px_w as f32), PdfPoints::new(px_h as f32));
-    let mut page = document
-        .pages_mut()
-        .create_page_at_end(page_size)
-        .map_err(pdfium_err)?;
-    page.objects_mut()
-        .create_image_object(
-            PdfPoints::ZERO,
-            PdfPoints::ZERO,
-            img,
-            Some(PdfPoints::new(px_w as f32)),
-            Some(PdfPoints::new(px_h as f32)),
-        )
-        .map_err(pdfium_err)?;
-    Ok(())
+    let obj = bindings.FPDFPageObj_NewImageObj(document.handle());
+    let mut page = document.create_page(px_w as f32, px_h as f32)?;
+    let mut page_handle = page.handle();
+    let ok = bindings.FPDFImageObj_SetBitmap(&mut page_handle, 1, obj, bitmap);
+    bindings.FPDFBitmap_Destroy(bitmap);
+    if ok == 0 {
+        return Err(PdfOpsError::Pdfium(
+            "failed to attach an image to a page".to_string(),
+        ));
+    }
+    page.insert_image(obj)
 }
 
 /// Rasterize an SVG via resvg and embed it as a full-page image.
 #[cfg(feature = "resvg")]
-fn embed_vector_page(document: &mut PdfDocument<'static>, data: &[u8]) -> Result<(), PdfOpsError> {
+fn embed_vector_page(document: &mut Document, data: &[u8]) -> Result<(), PdfOpsError> {
     let page = crate::render::render_svg_bytes(data, 1.0)
         .map_err(|e| PdfOpsError::UnsupportedSource(format!("{e:?}")))?;
     let img = image::RgbaImage::from_raw(page.width, page.height, page.rgba_data)
@@ -1314,9 +1412,7 @@ fn embed_vector_page(document: &mut PdfDocument<'static>, data: &[u8]) -> Result
 
 /// Fallback when the resvg feature is disabled.
 #[cfg(not(feature = "resvg"))]
-fn embed_vector_page(
-    _document: &mut PdfDocument<'static>,
-    _data: &[u8],
-) -> Result<(), PdfOpsError> {
+fn embed_vector_page(document: &mut Document, _data: &[u8]) -> Result<(), PdfOpsError> {
+    let _ = document;
     Err(PdfOpsError::UnsupportedSource("svg".to_string()))
 }

@@ -724,3 +724,326 @@ fn free_text_caret_follows_the_cursor() {
 
     common::remove_dir(&dir);
 }
+
+/// Serialize numbered objects into a PDF with a valid cross-reference table.
+fn build_pdf(objects: &[String]) -> Vec<u8> {
+    let mut pdf = String::from("%PDF-1.7\n");
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.push_str(&format!("{} 0 obj\n{object}\nendobj\n", index + 1));
+    }
+
+    let xref_at = pdf.len();
+    pdf.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+    pdf.push_str("0000000000 65535 f \n");
+    for offset in &offsets {
+        pdf.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    pdf.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
+        objects.len() + 1
+    ));
+    pdf.into_bytes()
+}
+
+/// Build a one-page PDF with a single AcroForm text field.
+fn form_pdf() -> Vec<u8> {
+    let content = "BT /Helv 12 Tf 50 350 Td (Form) Tj ET";
+    build_pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DR << /Font << /Helv 6 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /Font << /Helv 6 0 R >> >> /Contents 4 0 R /Annots [5 0 R] >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Mountain Lion) /DA (/Helv 12 Tf 0 0 0 rg) /Rect [100 300 300 330] /F 4 /P 3 0 R >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+    ])
+}
+
+/// Build a one-page PDF with a single checkbox offering `/Off` and `/Yes`.
+fn checkbox_pdf() -> Vec<u8> {
+    let content = "";
+    build_pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".to_string(),
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents 4 0 R /Annots [5 0 R] >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [100 300 130 330] /F 4 /P 3 0 R /AP << /N << /Off 6 0 R /Yes 7 0 R >> >> >>".to_string(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 0 >>\nstream\nendstream".to_string(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 0 >>\nstream\nendstream".to_string(),
+    ])
+}
+
+/// Build a one-page PDF with a combo box whose options pair an export value
+/// with a display label, as in real-world forms.
+fn combo_pdf() -> Vec<u8> {
+    let content = "";
+    build_pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DR << /Font << /Helv 6 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /Font << /Helv 6 0 R >> >> /Contents 4 0 R /Annots [5 0 R] >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 131072 /T (country) /V (de) /Opt [[(us) (United States)] [(de) (Germany)]] /DA (/Helv 12 Tf 0 0 0 rg) /Rect [100 300 300 330] /F 4 /P 3 0 R >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+    ])
+}
+
+/// A combo box lists its display labels, and selecting an option writes that
+/// option's export value, not its label.
+#[test]
+fn selects_form_field_option() {
+    let Some(_pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("form-combo");
+    let path = dir.join("combo.pdf");
+    let data = combo_pdf();
+    std::fs::write(&path, &data).expect("write fixture");
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(
+        mgr.execute(Command::Open {
+            data,
+            path: path.clone()
+        }),
+        CommandResult::Ok
+    ));
+
+    let value = |mgr: &mut PdfOpsManager| match mgr.execute(Command::ListFormFields { page: 1 }) {
+        CommandResult::FormFields(fields) => fields[0].clone(),
+        other => panic!("expected FormFields, got {other:?}"),
+    };
+    let field = value(&mut mgr);
+    assert_eq!(field.kind, noctua_core::pdfium_ops::FormFieldKind::Combo);
+    assert_eq!(field.options, ["United States", "Germany"]);
+    assert_eq!(field.value, "de");
+
+    assert!(matches!(
+        mgr.execute(Command::SelectFormFieldOption {
+            page: 1,
+            index: 0,
+            option: 0,
+        }),
+        CommandResult::Ok
+    ));
+    assert_eq!(value(&mut mgr).value, "us");
+
+    // The selection survives saving and shows the option's label.
+    let CommandResult::Saved { data } = mgr.execute(Command::Save) else {
+        panic!("save failed");
+    };
+    std::fs::write(&path, &data).expect("write saved");
+    let mut again = PdfOpsManager::new();
+    assert!(matches!(
+        again.execute(Command::Open {
+            data,
+            path: path.clone()
+        }),
+        CommandResult::Ok
+    ));
+    assert_eq!(value(&mut again).value, "us");
+
+    let CommandResult::Rendered {
+        width,
+        height,
+        rgba_data,
+    } = again.execute(Command::RenderPage { page: 1, zoom: 1.0 })
+    else {
+        panic!("render failed");
+    };
+    let mut ink = 0u32;
+    for y in (height - 330)..(height - 300) {
+        for x in 100..300 {
+            let i = ((y * width + x) * 4) as usize;
+            if rgba_data[i] < 250 || rgba_data[i + 1] < 250 || rgba_data[i + 2] < 250 {
+                ink += 1;
+            }
+        }
+    }
+    assert!(ink > 20, "no combo field text rendered (ink {ink})");
+
+    common::remove_dir(&dir);
+}
+
+/// The document's form fields are listed with name, kind, value and box.
+#[test]
+fn lists_form_fields() {
+    let Some(_pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("form-fields");
+    let path = dir.join("form.pdf");
+    let data = form_pdf();
+    std::fs::write(&path, &data).expect("write fixture");
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(
+        mgr.execute(Command::Open { data, path }),
+        CommandResult::Ok
+    ));
+
+    let fields = match mgr.execute(Command::ListFormFields { page: 1 }) {
+        CommandResult::FormFields(fields) => fields,
+        other => panic!("expected FormFields, got {other:?}"),
+    };
+    assert_eq!(fields.len(), 1, "one field expected");
+    let field = &fields[0];
+    assert_eq!(field.name, "name");
+    assert_eq!(field.kind, noctua_core::pdfium_ops::FormFieldKind::Text);
+    assert_eq!(field.value, "Mountain Lion");
+    assert!(
+        (field.font_size - 12.0).abs() < 0.5,
+        "size {}",
+        field.font_size
+    );
+    assert!((field.x - 100.0).abs() < 0.5, "x {}", field.x);
+    assert!((field.y - 300.0).abs() < 0.5, "y {}", field.y);
+    assert!((field.width - 200.0).abs() < 0.5, "width {}", field.width);
+    assert!((field.height - 30.0).abs() < 0.5, "height {}", field.height);
+
+    common::remove_dir(&dir);
+}
+
+/// Rendering draws form fields through the document's own form environment.
+#[test]
+fn render_draws_form_fields() {
+    let Some(_pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("form-render");
+    let path = dir.join("form.pdf");
+    let data = form_pdf();
+    std::fs::write(&path, &data).expect("write fixture");
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(
+        mgr.execute(Command::Open { data, path }),
+        CommandResult::Ok
+    ));
+    let CommandResult::Rendered {
+        width,
+        height,
+        rgba_data,
+    } = mgr.execute(Command::RenderPage { page: 1, zoom: 1.0 })
+    else {
+        panic!("render failed");
+    };
+    assert_eq!((width, height), (400, 400));
+
+    // The widget box is [100 300 300 330]; the field text must paint inside it.
+    let mut ink = 0u32;
+    for y in (height - 330)..(height - 300) {
+        for x in 100..300 {
+            let i = ((y * width + x) * 4) as usize;
+            if rgba_data[i] < 250 || rgba_data[i + 1] < 250 || rgba_data[i + 2] < 250 {
+                ink += 1;
+            }
+        }
+    }
+    assert!(ink > 20, "no form field text rendered (ink {ink})");
+
+    common::remove_dir(&dir);
+}
+
+/// A new value replaces the field's value, survives saving and redraws.
+#[test]
+fn sets_form_field_value() {
+    let Some(_pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("form-set-value");
+    let path = dir.join("form.pdf");
+    let data = form_pdf();
+    std::fs::write(&path, &data).expect("write fixture");
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(
+        mgr.execute(Command::Open {
+            data,
+            path: path.clone()
+        }),
+        CommandResult::Ok
+    ));
+
+    let set = mgr.execute(Command::SetFormFieldValue {
+        page: 1,
+        index: 0,
+        value: "Snow Leopard".to_string(),
+    });
+    assert!(matches!(set, CommandResult::Ok), "set failed: {set:?}");
+
+    let fields = match mgr.execute(Command::ListFormFields { page: 1 }) {
+        CommandResult::FormFields(fields) => fields,
+        other => panic!("expected FormFields, got {other:?}"),
+    };
+    assert_eq!(fields[0].value, "Snow Leopard");
+
+    // The new value is part of the saved document.
+    let CommandResult::Saved { data } = mgr.execute(Command::Save) else {
+        panic!("save failed");
+    };
+    std::fs::write(&path, &data).expect("write saved");
+    let mut again = PdfOpsManager::new();
+    assert!(matches!(
+        again.execute(Command::Open {
+            data,
+            path: path.clone()
+        }),
+        CommandResult::Ok
+    ));
+    let fields = match again.execute(Command::ListFormFields { page: 1 }) {
+        CommandResult::FormFields(fields) => fields,
+        other => panic!("expected FormFields, got {other:?}"),
+    };
+    assert_eq!(fields[0].value, "Snow Leopard");
+
+    common::remove_dir(&dir);
+}
+
+/// Clicking a checkbox toggles it, and a second click toggles it back.
+#[test]
+fn toggles_form_checkbox() {
+    let Some(_pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("form-toggle");
+    let path = dir.join("checkbox.pdf");
+    let data = checkbox_pdf();
+    std::fs::write(&path, &data).expect("write fixture");
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(
+        mgr.execute(Command::Open { data, path }),
+        CommandResult::Ok
+    ));
+
+    let value = |mgr: &mut PdfOpsManager| match mgr.execute(Command::ListFormFields { page: 1 }) {
+        CommandResult::FormFields(fields) => fields[0].value.clone(),
+        other => panic!("expected FormFields, got {other:?}"),
+    };
+    assert_eq!(value(&mut mgr), "Off");
+
+    assert!(matches!(
+        mgr.execute(Command::ToggleFormField { page: 1, index: 0 }),
+        CommandResult::Ok
+    ));
+    assert_eq!(value(&mut mgr), "Yes");
+
+    assert!(matches!(
+        mgr.execute(Command::ToggleFormField { page: 1, index: 0 }),
+        CommandResult::Ok
+    ));
+    assert_eq!(value(&mut mgr), "Off");
+
+    common::remove_dir(&dir);
+}

@@ -91,6 +91,41 @@ pub struct FreeTextAnnotation {
     pub height: f32,
 }
 
+/// Kind of an interactive form field, as pdfium's form environment reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormFieldKind {
+    PushButton,
+    Checkbox,
+    Radio,
+    Text,
+    ListBox,
+    Combo,
+    Signature,
+    Unknown,
+}
+
+/// One interactive form field on a page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormField {
+    /// Position in the page's annotation list.
+    pub index: usize,
+    /// Fully qualified field name.
+    pub name: String,
+    pub kind: FormFieldKind,
+    /// `/Ff` field flags, as reported by pdfium.
+    pub flags: i32,
+    /// Current value, empty when unset.
+    pub value: String,
+    /// Choice options; empty for other kinds.
+    pub options: Vec<String>,
+    /// Font size from `/DA`, in points.
+    pub font_size: f32,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// Common annotation colors used by the annotation mode.
 pub mod palette {
     use super::AnnotationColor;

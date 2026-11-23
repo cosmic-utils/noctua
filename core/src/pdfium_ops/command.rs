@@ -4,7 +4,9 @@
 // The language of the annotation mode. All operations on an open PDF
 // document are expressed as commands.
 
-use crate::pdfium_ops::model::{AnnotationColor, BindSource, FreeTextAnnotation, MarkupKind};
+use crate::pdfium_ops::model::{
+    AnnotationColor, BindSource, FormField, FreeTextAnnotation, MarkupKind,
+};
 use std::path::PathBuf;
 
 /// Commands accepted by the PDF operations manager.
@@ -105,6 +107,32 @@ pub enum Command {
     /// List the free-text annotations on a 1-based page, in page points.
     ListFreeTextAnnotations { page: u32 },
 
+    /// List the interactive form fields on a 1-based page, in page points.
+    ListFormFields { page: u32 },
+
+    /// Set the value of a string-valued form field (text or choice).
+    SetFormFieldValue {
+        page: u32,
+        index: usize,
+        value: String,
+    },
+
+    /// Toggle a checkbox or radio button by clicking its centre.
+    ToggleFormField { page: u32, index: usize },
+
+    /// Select one option of a choice field by its 0-based option index.
+    SelectFormFieldOption {
+        page: u32,
+        index: usize,
+        option: usize,
+    },
+
+    /// Give a form field the form environment's input focus.
+    FocusFormField { page: u32, index: usize },
+
+    /// Drop the form environment's input focus.
+    BlurFormField,
+
     /// Change the text colour and font size of an existing free-text annotation.
     SetFreeTextStyle {
         page: u32,
@@ -144,6 +172,8 @@ pub enum CommandResult {
     PageSizes(Vec<(f32, f32)>),
     /// Free-text annotations on a page.
     FreeTextAnnotations(Vec<FreeTextAnnotation>),
+    /// Interactive form fields on a page.
+    FormFields(Vec<FormField>),
     /// A free-text annotation was written. `index` is `Some` for a creation;
     /// `caret` is the insertion marker rectangle in page points.
     FreeTextWritten {
