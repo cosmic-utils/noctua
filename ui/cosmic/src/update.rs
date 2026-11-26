@@ -2228,7 +2228,36 @@ impl AppModel {
         message: Message,
     ) -> iced::Task<cosmic::Action<Message>> {
         match message {
-            Message::Browser(BrowserMessage::TabActivated(id)) => {
+            Message::App(message) => self.update_app(message),
+            Message::Browser(message) => self.update_browser(message),
+            Message::Annotation(message) => self.update_annotation(message),
+            Message::View(message) => self.update_view(message),
+        }
+    }
+
+    fn update_app(&mut self, message: AppMessage) -> iced::Task<cosmic::Action<Message>> {
+        match message {
+            AppMessage::ModifiersChanged(modifiers) => {
+                self.keyboard_modifiers = modifiers;
+            }
+
+            AppMessage::Noop => {}
+
+            AppMessage::Surface(action) => {
+                return cosmic::task::message(cosmic::Action::Surface(action));
+            }
+
+            AppMessage::Quit => {
+                self.save_session();
+                return iced::exit();
+            }
+        }
+        iced::Task::none()
+    }
+
+    fn update_browser(&mut self, message: BrowserMessage) -> iced::Task<cosmic::Action<Message>> {
+        match message {
+            BrowserMessage::TabActivated(id) => {
                 // Leave the text being typed in the previous tab as it is.
                 let finish = self
                     .active_tab()
@@ -2240,13 +2269,13 @@ impl AppModel {
                 return cosmic::task::batch(vec![finish, command, title]);
             }
 
-            Message::Browser(BrowserMessage::TabCloseRequested(id)) => {
+            BrowserMessage::TabCloseRequested(id) => {
                 let command = self.close_tab(id);
                 let title = self.update_title();
                 return cosmic::task::batch(vec![command, title]);
             }
 
-            Message::Browser(BrowserMessage::CloseTab) => {
+            BrowserMessage::CloseTab => {
                 if let Some(tab) = self.active_tab() {
                     let command = self.close_tab(tab);
                     let title = self.update_title();
@@ -2254,7 +2283,7 @@ impl AppModel {
                 }
             }
 
-            Message::Browser(BrowserMessage::StripActivated(index)) => {
+            BrowserMessage::StripActivated(index) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2272,7 +2301,7 @@ impl AppModel {
                 return self.activate_target(target, is_pdf);
             }
 
-            Message::Browser(BrowserMessage::PrevEntry) => {
+            BrowserMessage::PrevEntry => {
                 if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, -1);
                 }
@@ -2300,7 +2329,7 @@ impl AppModel {
                 return self.activate_target(target, is_pdf);
             }
 
-            Message::Browser(BrowserMessage::NextEntry) => {
+            BrowserMessage::NextEntry => {
                 if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, 1);
                 }
@@ -2327,31 +2356,286 @@ impl AppModel {
                 return self.activate_target(target, is_pdf);
             }
 
-            Message::Browser(BrowserMessage::PrevPage) => {
+            BrowserMessage::PrevPage => {
                 if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, -1);
                 }
                 return self.scroll_preview_page(-1);
             }
 
-            Message::Browser(BrowserMessage::NextPage) => {
+            BrowserMessage::NextPage => {
                 if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, 1);
                 }
                 return self.scroll_preview_page(1);
             }
 
-            Message::Browser(BrowserMessage::OpenFolder) => {
+            BrowserMessage::OpenFolder => {
                 return self.open_folder_dialog();
             }
 
-            Message::Browser(BrowserMessage::FolderChosen(path)) => {
+            BrowserMessage::FolderChosen(path) => {
                 if let Some(dir) = path {
                     return self.open_folder(dir);
                 }
             }
 
-            Message::Annotation(AnnotationMessage::NewAnnotation) => {
+            BrowserMessage::ContextOpened { path } => {
+                self.context_target = Some(path);
+            }
+
+            BrowserMessage::FolderListed { dir, result } => {
+                let tab = self.tabs.iter().find_map(|(tab, content)| {
+                    matches!(content, TabContent::Folder { path, .. } if path == &dir)
+                        .then_some(*tab)
+                });
+
+                match (tab, result) {
+                    (Some(tab), Ok(entries)) => {
+                        self.tabs
+                            .insert(tab, TabContent::Folder { path: dir, entries });
+                        let active = self.active_tab() == Some(tab);
+                        if active {
+                            self.rebuild_strip(tab);
+                            if let Some(path) = self.pending_select.take()
+                                && let Some(state) = self.tab_ui.get_mut(&tab)
+                            {
+                                state.selected = state.entries.iter().position(|entry| {
+                                    matches!(&entry.target, Target::File { path: p } if p == &path)
+                                });
+                            }
+                            return self.activate_tab();
+                        }
+                    }
+                    (Some(_), Err(e)) => {
+                        tracing::error!("failed to list folder: {e}");
+                    }
+                    (None, _) => {}
+                }
+            }
+
+            BrowserMessage::PagesKnown { path, pages } => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                match pages {
+                    Some(pages) => {
+                        self.insert_pages(tab, &path, pages);
+                        let range = {
+                            let Some(state) = self.tab_ui.get(&tab) else {
+                                return iced::Task::none();
+                            };
+                            let Some(start) = state.entries.iter().position(|entry| {
+                                matches!(&entry.target, Target::File { path: p } if p == &path)
+                            }) else {
+                                return iced::Task::none();
+                            };
+                            let end = (start + 1 + STRIP_INITIAL_THUMBS).min(state.entries.len());
+                            start + 1..end
+                        };
+                        return self.request_strip_thumbs(tab, range);
+                    }
+                    None => {
+                        tracing::error!("failed to count pages of {path:?}");
+                        self.collapse_pdf(tab, &path);
+                    }
+                }
+            }
+
+            BrowserMessage::StripThumbsReady { tab, thumbs } => {
+                if let Some(state) = self.tab_ui.get_mut(&tab) {
+                    for (index, rgba) in thumbs {
+                        if let Some(entry) = state.entries.get_mut(index)
+                            && let Some((width, height, rgba)) = rgba
+                        {
+                            entry.thumb = Some(cosmic::widget::image::Handle::from_rgba(
+                                width, height, rgba,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            BrowserMessage::PreviewSizesKnown { path, sizes } => {
+                // Only for the target currently shown.
+                if self.displayed_target != Some(Target::File { path: path.clone() }) {
+                    return iced::Task::none();
+                }
+                match sizes {
+                    Some(sizes) if sizes.len() <= 1 => {
+                        // Single-page PDF: display as one image.
+                        self.displayed_target = Some(Target::Page {
+                            path: path.clone(),
+                            page: 1,
+                        });
+                        return self.render_page_task(path, 1);
+                    }
+                    Some(sizes) => {
+                        return self.build_preview(path, sizes);
+                    }
+                    None => {
+                        tracing::error!("failed to read page sizes of {path:?}");
+                    }
+                }
+            }
+
+            BrowserMessage::PreviewPagesRendered { path, zoom, pages } => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let Some(state) = self.tab_ui.get_mut(&tab) else {
+                    return iced::Task::none();
+                };
+                let Some(preview) = state.preview.as_mut() else {
+                    return iced::Task::none();
+                };
+                if preview.path != path {
+                    return iced::Task::none();
+                }
+
+                let is_thumb = (zoom - THUMB_ZOOM).abs() < f32::EPSILON;
+                let is_full = !is_thumb && (zoom - preview.zoom).abs() < f32::EPSILON;
+                if !is_thumb && !is_full {
+                    // Renders that raced with a zoom change are dropped.
+                    return iced::Task::none();
+                }
+
+                // Apply the cumulative view transform to every incoming page.
+                let rotation = preview.rotation;
+                let flip_h = preview.flip_h;
+
+                for (page, width, height, rgba) in pages {
+                    let index = page as usize - 1;
+                    if index >= preview.pages.len() {
+                        continue;
+                    }
+                    let (width, height, rgba) =
+                        transform_rgba(width, height, rgba, rotation, flip_h, false);
+                    let handle = cosmic::widget::image::Handle::from_rgba(width, height, rgba);
+                    if is_thumb {
+                        if matches!(preview.pages[index], PageSlot::Empty) {
+                            preview.pages[index] = PageSlot::Thumb { handle };
+                        }
+                    } else {
+                        preview.pages[index] = PageSlot::Full { handle };
+                        if !preview.full_order.contains(&page) {
+                            preview.full_order.push(page);
+                        }
+                    }
+                }
+
+                // LRU cap: drop the oldest full pages back to placeholders.
+                while preview.full_order.len() > PREVIEW_FULL_CACHE {
+                    let oldest = preview.full_order.remove(0);
+                    if let Some(slot) = preview.pages.get_mut(oldest as usize - 1) {
+                        *slot = PageSlot::Empty;
+                    }
+                }
+            }
+
+            BrowserMessage::PreviewScrolled {
+                path,
+                offset_y,
+                viewport_height,
+                viewport_width,
+            } => {
+                let Some(tab) = self.active_tab() else {
+                    return iced::Task::none();
+                };
+                let visible = {
+                    let Some(state) = self.tab_ui.get_mut(&tab) else {
+                        return iced::Task::none();
+                    };
+                    let Some(preview) = state.preview.as_mut() else {
+                        return iced::Task::none();
+                    };
+                    if preview.path != path {
+                        return iced::Task::none();
+                    }
+                    preview.scroll = offset_y;
+                    preview.viewport_height = viewport_height;
+                    preview.viewport_width = viewport_width;
+                    let visible = Self::preview_visible_range(preview);
+                    // Re-request only when the visible window changed; plain
+                    // scroll ticks within one window must stay quiet.
+                    if preview.requested == visible {
+                        return iced::Task::none();
+                    }
+                    preview.requested = visible;
+                    visible
+                };
+                return self.request_preview_window(&path, visible);
+            }
+
+            BrowserMessage::PreviewWheel { path, delta } => {
+                let steps = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
+                };
+                if steps == 0.0 {
+                    return iced::Task::none();
+                }
+                return self.zoom_preview(&path, steps);
+            }
+
+            BrowserMessage::StripScrolled {
+                tab,
+                offset_y,
+                viewport_height,
+            } => {
+                let Some(state) = self.tab_ui.get(&tab) else {
+                    return iced::Task::none();
+                };
+                if state.entries.is_empty() {
+                    return iced::Task::none();
+                }
+                let first = (offset_y / STRIP_TILE).floor() as usize;
+                let last = ((offset_y + viewport_height) / STRIP_TILE).ceil() as usize + 2;
+                return self.request_strip_thumbs(tab, first..last.min(state.entries.len()));
+            }
+
+            BrowserMessage::StripDoubleClicked(index) => {
+                return self.toggle_expand(index);
+            }
+
+            BrowserMessage::FileRendered { path, rgba } => {
+                if self.displayed_target == Some(Target::File { path }) {
+                    self.apply_image(rgba);
+                }
+            }
+
+            BrowserMessage::PageRendered { path, page, rgba } => {
+                if self.displayed_target == Some(Target::Page { path, page }) {
+                    self.apply_image(rgba);
+                }
+            }
+
+            BrowserMessage::ViewerStateChanged {
+                target,
+                scale,
+                offset_x,
+                offset_y,
+            } => {
+                // Only apply when the reported target is still displayed.
+                if self.displayed_target.as_ref() == Some(&target)
+                    && let Some(view) = self.displayed_view_mut()
+                {
+                    view.fit = false;
+                    view.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
+                    view.offset_x = offset_x;
+                    view.offset_y = offset_y;
+                }
+            }
+        }
+        iced::Task::none()
+    }
+
+    fn update_annotation(
+        &mut self,
+        message: AnnotationMessage,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        match message {
+            AnnotationMessage::NewAnnotation => {
                 let worker = self.worker.clone();
                 return cosmic::task::future(async move {
                     let (document, result) = worker.op(None, Command::New).await;
@@ -2377,7 +2661,7 @@ impl AppModel {
                 });
             }
 
-            Message::Annotation(AnnotationMessage::OpenAnnotationFile) => {
+            AnnotationMessage::OpenAnnotationFile => {
                 return cosmic::task::future(async move {
                     let path = cosmic::dialog::file_chooser::open::Dialog::new()
                         .open_file()
@@ -2388,32 +2672,28 @@ impl AppModel {
                 });
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationFileChosen(path)) => {
+            AnnotationMessage::AnnotationFileChosen(path) => {
                 let Some(path) = path else {
                     return iced::Task::none();
                 };
                 return self.open_annotation_task(path);
             }
 
-            Message::Annotation(AnnotationMessage::OpenForEditing) => {
+            AnnotationMessage::OpenForEditing => {
                 let Some(path) = self.take_action_target() else {
                     return iced::Task::none();
                 };
                 return self.open_annotation_task(path);
             }
 
-            Message::Browser(BrowserMessage::ContextOpened { path }) => {
-                self.context_target = Some(path);
-            }
-
-            Message::Annotation(AnnotationMessage::AddToAnnotation { document }) => {
+            AnnotationMessage::AddToAnnotation { document } => {
                 let Some(source) = self.take_action_target() else {
                     return iced::Task::none();
                 };
                 return self.add_to_annotation(document, source);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationPagesAdded { document, ok }) => {
+            AnnotationMessage::AnnotationPagesAdded { document, ok } => {
                 if !ok {
                     tracing::error!("failed to add source to annotation {document:?}");
                     return iced::Task::none();
@@ -2425,18 +2705,18 @@ impl AppModel {
                 return self.request_annotation_sizes(tab, document);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationOpened {
+            AnnotationMessage::AnnotationOpened {
                 document,
                 name,
                 save_target,
                 dirty,
-            }) => {
+            } => {
                 if let Some(document) = document {
                     return self.open_annotation_tab(document, name, save_target, dirty);
                 }
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationSizesKnown { tab, sizes }) => {
+            AnnotationMessage::AnnotationSizesKnown { tab, sizes } => {
                 let Some(sizes) = sizes else {
                     tracing::error!("failed to read annotation page sizes");
                     return iced::Task::none();
@@ -2462,7 +2742,7 @@ impl AppModel {
                 return cosmic::task::batch(vec![thumbs, page]);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationThumbsReady { tab, thumbs }) => {
+            AnnotationMessage::AnnotationThumbsReady { tab, thumbs } => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     for (page, rgba) in thumbs {
                         if let Some((width, height, rgba)) = rgba {
@@ -2476,7 +2756,7 @@ impl AppModel {
                 }
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationPageRendered { tab, page, rgba }) => {
+            AnnotationMessage::AnnotationPageRendered { tab, page, rgba } => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     if state.selected != page {
                         // A stale render raced a page change; drop it.
@@ -2503,17 +2783,17 @@ impl AppModel {
                 }
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationPageSelected { tab, page }) => {
+            AnnotationMessage::AnnotationPageSelected { tab, page } => {
                 let finish = self.finish_pending_text(tab);
                 let select = self.annotation_select_page(tab, page);
                 return cosmic::task::batch(vec![finish, select]);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationRotatePage {
+            AnnotationMessage::AnnotationRotatePage {
                 tab,
                 page,
                 clockwise,
-            }) => {
+            } => {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
@@ -2524,7 +2804,7 @@ impl AppModel {
                 );
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationDeletePage { tab, page }) => {
+            AnnotationMessage::AnnotationDeletePage { tab, page } => {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
@@ -2539,7 +2819,7 @@ impl AppModel {
                 return cosmic::task::batch(vec![finish, mutate]);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationMovePage { tab, page, up }) => {
+            AnnotationMessage::AnnotationMovePage { tab, page, up } => {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
@@ -2565,11 +2845,7 @@ impl AppModel {
                 return cosmic::task::batch(vec![finish, mutate]);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationFormOptionPicked {
-                tab,
-                field,
-                option,
-            }) => {
+            AnnotationMessage::AnnotationFormOptionPicked { tab, field, option } => {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
@@ -2598,7 +2874,7 @@ impl AppModel {
                 });
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationFormMenuClosed) => {
+            AnnotationMessage::AnnotationFormMenuClosed => {
                 if let Some(tab) = self.active_tab()
                     && let Some(state) = self.annotation_ui.get_mut(&tab)
                 {
@@ -2607,7 +2883,7 @@ impl AppModel {
                 return iced::Task::none();
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationFormMutated { tab, ok }) => {
+            AnnotationMessage::AnnotationFormMutated { tab, ok } => {
                 if !ok {
                     tracing::error!("form field interaction failed");
                     return iced::Task::none();
@@ -2616,7 +2892,7 @@ impl AppModel {
                 return self.render_current_annotation_page(tab);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationPageMutated { tab, ok }) => {
+            AnnotationMessage::AnnotationPageMutated { tab, ok } => {
                 if !ok {
                     tracing::error!("annotation page mutation failed");
                     return iced::Task::none();
@@ -2630,7 +2906,7 @@ impl AppModel {
                 return cosmic::task::batch(vec![sizes, title]);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationToolToggled(tool)) => {
+            AnnotationMessage::AnnotationToolToggled(tool) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2647,7 +2923,7 @@ impl AppModel {
                 return finish;
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationFontSizeChanged(size)) => {
+            AnnotationMessage::AnnotationFontSizeChanged(size) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2664,7 +2940,7 @@ impl AppModel {
                 return self.update_pending_text(tab, document, page);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationColorChanged(color)) => {
+            AnnotationMessage::AnnotationColorChanged(color) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2680,12 +2956,7 @@ impl AppModel {
                 return self.update_pending_text(tab, document, page);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationPointerClicked {
-                tab,
-                x,
-                y,
-                anchor,
-            }) => {
+            AnnotationMessage::AnnotationPointerClicked { tab, x, y, anchor } => {
                 // Any click dismisses an open option list first; a click on a
                 // choice field opens it again at the new position.
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
@@ -2742,14 +3013,14 @@ impl AppModel {
                 return cosmic::task::batch(vec![finish, click]);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationTargetsKnown {
+            AnnotationMessage::AnnotationTargetsKnown {
                 tab,
                 annotations,
                 fields,
                 x,
                 y,
                 anchor,
-            }) => {
+            } => {
                 let is_text = self
                     .annotation_ui
                     .get(&tab)
@@ -2760,7 +3031,7 @@ impl AppModel {
                 return self.hit_form_field(tab, fields, x, y, anchor);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationTextKey(key)) => {
+            AnnotationMessage::AnnotationTextKey(key) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2834,7 +3105,7 @@ impl AppModel {
                 return self.update_pending_text(tab, document, page);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationTextTyped(text)) => {
+            AnnotationMessage::AnnotationTextTyped(text) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2874,7 +3145,7 @@ impl AppModel {
                 return self.update_pending_text(tab, document, page);
             }
 
-            Message::Annotation(AnnotationMessage::CaretTicked) => {
+            AnnotationMessage::CaretTicked => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2886,13 +3157,13 @@ impl AppModel {
                 return iced::Task::none();
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationTextCreated {
+            AnnotationMessage::AnnotationTextCreated {
                 tab,
                 index,
                 origin,
                 max_width,
                 caret,
-            }) => {
+            } => {
                 let Some(index) = index else {
                     tracing::error!("failed to create the free-text annotation");
                     return iced::Task::none();
@@ -2916,7 +3187,7 @@ impl AppModel {
                 return cosmic::task::batch(vec![title, render]);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationTextMutated { tab, ok, caret }) => {
+            AnnotationMessage::AnnotationTextMutated { tab, ok, caret } => {
                 if !ok {
                     tracing::error!("free-text annotation update failed");
                     return iced::Task::none();
@@ -2932,12 +3203,12 @@ impl AppModel {
                 return cosmic::task::batch(vec![title, render]);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationViewerStateChanged {
+            AnnotationMessage::AnnotationViewerStateChanged {
                 tab,
                 scale,
                 offset_x,
                 offset_y,
-            }) => {
+            } => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     state.view.fit = false;
                     state.view.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
@@ -2949,15 +3220,15 @@ impl AppModel {
                 }
             }
 
-            Message::Annotation(AnnotationMessage::SaveAnnotation) => {
+            AnnotationMessage::SaveAnnotation => {
                 return self.save_active_annotation(false);
             }
 
-            Message::Annotation(AnnotationMessage::SaveAnnotationAs) => {
+            AnnotationMessage::SaveAnnotationAs => {
                 return self.save_active_annotation(true);
             }
 
-            Message::Annotation(AnnotationMessage::RenameAnnotation) => {
+            AnnotationMessage::RenameAnnotation => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2979,19 +3250,19 @@ impl AppModel {
                 return iced::Task::none();
             }
 
-            Message::Annotation(AnnotationMessage::RenameAnnotationChanged(text)) => {
+            AnnotationMessage::RenameAnnotationChanged(text) => {
                 if let Some(draft) = self.rename.as_mut() {
                     draft.text = text;
                 }
                 return iced::Task::none();
             }
 
-            Message::Annotation(AnnotationMessage::RenameAnnotationCancelled) => {
+            AnnotationMessage::RenameAnnotationCancelled => {
                 self.rename = None;
                 return iced::Task::none();
             }
 
-            Message::Annotation(AnnotationMessage::RenameAnnotationConfirmed) => {
+            AnnotationMessage::RenameAnnotationConfirmed => {
                 let Some(draft) = self.rename.take() else {
                     return iced::Task::none();
                 };
@@ -3013,7 +3284,7 @@ impl AppModel {
                 });
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationRenamed { tab, stem, result }) => {
+            AnnotationMessage::AnnotationRenamed { tab, stem, result } => {
                 match result {
                     Ok(path) => {
                         let new_name = path
@@ -3044,7 +3315,7 @@ impl AppModel {
                 }
             }
 
-            Message::Annotation(AnnotationMessage::SaveTargetChosen(path)) => {
+            AnnotationMessage::SaveTargetChosen(path) => {
                 let Some(path) = path else {
                     return iced::Task::none();
                 };
@@ -3057,7 +3328,7 @@ impl AppModel {
                 return self.save_annotation_to(tab, document, path);
             }
 
-            Message::Annotation(AnnotationMessage::AnnotationSaved { tab, path, ok }) => {
+            AnnotationMessage::AnnotationSaved { tab, path, ok } => {
                 if ok {
                     if let Some(TabContent::Annotation {
                         name,
@@ -3081,320 +3352,67 @@ impl AppModel {
                 }
                 return self.update_title();
             }
+        }
+        iced::Task::none()
+    }
 
-            Message::Browser(BrowserMessage::FolderListed { dir, result }) => {
-                let tab = self.tabs.iter().find_map(|(tab, content)| {
-                    matches!(content, TabContent::Folder { path, .. } if path == &dir)
-                        .then_some(*tab)
-                });
+    fn update_view(&mut self, message: ViewMessage) -> iced::Task<cosmic::Action<Message>> {
+        match message {
+            ViewMessage::ZoomIn => return self.zoom_by(1.0),
 
-                match (tab, result) {
-                    (Some(tab), Ok(entries)) => {
-                        self.tabs
-                            .insert(tab, TabContent::Folder { path: dir, entries });
-                        let active = self.active_tab() == Some(tab);
-                        if active {
-                            self.rebuild_strip(tab);
-                            if let Some(path) = self.pending_select.take()
-                                && let Some(state) = self.tab_ui.get_mut(&tab)
-                            {
-                                state.selected = state.entries.iter().position(|entry| {
-                                    matches!(&entry.target, Target::File { path: p } if p == &path)
-                                });
-                            }
-                            return self.activate_tab();
-                        }
-                    }
-                    (Some(_), Err(e)) => {
-                        tracing::error!("failed to list folder: {e}");
-                    }
-                    (None, _) => {}
-                }
-            }
+            ViewMessage::ZoomOut => return self.zoom_by(-1.0),
 
-            Message::Browser(BrowserMessage::PagesKnown { path, pages }) => {
-                let Some(tab) = self.active_tab() else {
-                    return iced::Task::none();
-                };
-                match pages {
-                    Some(pages) => {
-                        self.insert_pages(tab, &path, pages);
-                        let range = {
-                            let Some(state) = self.tab_ui.get(&tab) else {
-                                return iced::Task::none();
-                            };
-                            let Some(start) = state.entries.iter().position(|entry| {
-                                matches!(&entry.target, Target::File { path: p } if p == &path)
-                            }) else {
-                                return iced::Task::none();
-                            };
-                            let end = (start + 1 + STRIP_INITIAL_THUMBS).min(state.entries.len());
-                            start + 1..end
-                        };
-                        return self.request_strip_thumbs(tab, range);
-                    }
-                    None => {
-                        tracing::error!("failed to count pages of {path:?}");
-                        self.collapse_pdf(tab, &path);
-                    }
-                }
-            }
-
-            Message::Browser(BrowserMessage::StripThumbsReady { tab, thumbs }) => {
-                if let Some(state) = self.tab_ui.get_mut(&tab) {
-                    for (index, rgba) in thumbs {
-                        if let Some(entry) = state.entries.get_mut(index)
-                            && let Some((width, height, rgba)) = rgba
-                        {
-                            entry.thumb = Some(cosmic::widget::image::Handle::from_rgba(
-                                width, height, rgba,
-                            ));
-                        }
-                    }
-                }
-            }
-
-            Message::Browser(BrowserMessage::PreviewSizesKnown { path, sizes }) => {
-                // Only for the target currently shown.
-                if self.displayed_target != Some(Target::File { path: path.clone() }) {
-                    return iced::Task::none();
-                }
-                match sizes {
-                    Some(sizes) if sizes.len() <= 1 => {
-                        // Single-page PDF: display as one image.
-                        self.displayed_target = Some(Target::Page {
-                            path: path.clone(),
-                            page: 1,
-                        });
-                        return self.render_page_task(path, 1);
-                    }
-                    Some(sizes) => {
-                        return self.build_preview(path, sizes);
-                    }
-                    None => {
-                        tracing::error!("failed to read page sizes of {path:?}");
-                    }
-                }
-            }
-
-            Message::Browser(BrowserMessage::PreviewPagesRendered { path, zoom, pages }) => {
-                let Some(tab) = self.active_tab() else {
-                    return iced::Task::none();
-                };
-                let Some(state) = self.tab_ui.get_mut(&tab) else {
-                    return iced::Task::none();
-                };
-                let Some(preview) = state.preview.as_mut() else {
-                    return iced::Task::none();
-                };
-                if preview.path != path {
-                    return iced::Task::none();
-                }
-
-                let is_thumb = (zoom - THUMB_ZOOM).abs() < f32::EPSILON;
-                let is_full = !is_thumb && (zoom - preview.zoom).abs() < f32::EPSILON;
-                if !is_thumb && !is_full {
-                    // Renders that raced with a zoom change are dropped.
-                    return iced::Task::none();
-                }
-
-                // Apply the cumulative view transform to every incoming page.
-                let rotation = preview.rotation;
-                let flip_h = preview.flip_h;
-
-                for (page, width, height, rgba) in pages {
-                    let index = page as usize - 1;
-                    if index >= preview.pages.len() {
-                        continue;
-                    }
-                    let (width, height, rgba) =
-                        transform_rgba(width, height, rgba, rotation, flip_h, false);
-                    let handle = cosmic::widget::image::Handle::from_rgba(width, height, rgba);
-                    if is_thumb {
-                        if matches!(preview.pages[index], PageSlot::Empty) {
-                            preview.pages[index] = PageSlot::Thumb { handle };
-                        }
-                    } else {
-                        preview.pages[index] = PageSlot::Full { handle };
-                        if !preview.full_order.contains(&page) {
-                            preview.full_order.push(page);
-                        }
-                    }
-                }
-
-                // LRU cap: drop the oldest full pages back to placeholders.
-                while preview.full_order.len() > PREVIEW_FULL_CACHE {
-                    let oldest = preview.full_order.remove(0);
-                    if let Some(slot) = preview.pages.get_mut(oldest as usize - 1) {
-                        *slot = PageSlot::Empty;
-                    }
-                }
-            }
-
-            Message::Browser(BrowserMessage::PreviewScrolled {
-                path,
-                offset_y,
-                viewport_height,
-                viewport_width,
-            }) => {
-                let Some(tab) = self.active_tab() else {
-                    return iced::Task::none();
-                };
-                let visible = {
-                    let Some(state) = self.tab_ui.get_mut(&tab) else {
-                        return iced::Task::none();
-                    };
-                    let Some(preview) = state.preview.as_mut() else {
-                        return iced::Task::none();
-                    };
-                    if preview.path != path {
-                        return iced::Task::none();
-                    }
-                    preview.scroll = offset_y;
-                    preview.viewport_height = viewport_height;
-                    preview.viewport_width = viewport_width;
-                    let visible = Self::preview_visible_range(preview);
-                    // Re-request only when the visible window changed; plain
-                    // scroll ticks within one window must stay quiet.
-                    if preview.requested == visible {
-                        return iced::Task::none();
-                    }
-                    preview.requested = visible;
-                    visible
-                };
-                return self.request_preview_window(&path, visible);
-            }
-
-            Message::Browser(BrowserMessage::PreviewWheel { path, delta }) => {
-                let steps = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => y,
-                    mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
-                };
-                if steps == 0.0 {
-                    return iced::Task::none();
-                }
-                return self.zoom_preview(&path, steps);
-            }
-
-            Message::Browser(BrowserMessage::StripScrolled {
-                tab,
-                offset_y,
-                viewport_height,
-            }) => {
-                let Some(state) = self.tab_ui.get(&tab) else {
-                    return iced::Task::none();
-                };
-                if state.entries.is_empty() {
-                    return iced::Task::none();
-                }
-                let first = (offset_y / STRIP_TILE).floor() as usize;
-                let last = ((offset_y + viewport_height) / STRIP_TILE).ceil() as usize + 2;
-                return self.request_strip_thumbs(tab, first..last.min(state.entries.len()));
-            }
-
-            Message::Browser(BrowserMessage::StripDoubleClicked(index)) => {
-                return self.toggle_expand(index);
-            }
-
-            Message::Browser(BrowserMessage::FileRendered { path, rgba }) => {
-                if self.displayed_target == Some(Target::File { path }) {
-                    self.apply_image(rgba);
-                }
-            }
-
-            Message::Browser(BrowserMessage::PageRendered { path, page, rgba }) => {
-                if self.displayed_target == Some(Target::Page { path, page }) {
-                    self.apply_image(rgba);
-                }
-            }
-
-            Message::Browser(BrowserMessage::ViewerStateChanged {
-                target,
-                scale,
-                offset_x,
-                offset_y,
-            }) => {
-                // Only apply when the reported target is still displayed.
-                if self.displayed_target.as_ref() == Some(&target)
-                    && let Some(view) = self.displayed_view_mut()
-                {
-                    view.fit = false;
-                    view.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
-                    view.offset_x = offset_x;
-                    view.offset_y = offset_y;
-                }
-            }
-
-            Message::View(ViewMessage::ZoomIn) => return self.zoom_by(1.0),
-
-            Message::View(ViewMessage::ZoomOut) => return self.zoom_by(-1.0),
-
-            Message::View(ViewMessage::ZoomBy(steps)) => {
+            ViewMessage::ZoomBy(steps) => {
                 if steps == 0.0 {
                     return iced::Task::none();
                 }
                 return self.zoom_by(steps);
             }
 
-            Message::View(ViewMessage::Zoom100) => {
+            ViewMessage::Zoom100 => {
                 return self.set_zoom(1.0);
             }
 
-            Message::App(AppMessage::ModifiersChanged(modifiers)) => {
-                self.keyboard_modifiers = modifiers;
-            }
-
-            Message::View(ViewMessage::ZoomToFit) => {
+            ViewMessage::ZoomToFit => {
                 return self.set_fit();
             }
 
-            Message::View(ViewMessage::RotateClockwise) => {
+            ViewMessage::RotateClockwise => {
                 return self.transform_view(90, false, false);
             }
 
-            Message::View(ViewMessage::RotateCounterClockwise) => {
+            ViewMessage::RotateCounterClockwise => {
                 return self.transform_view(270, false, false);
             }
 
-            Message::View(ViewMessage::FlipHorizontal) => {
+            ViewMessage::FlipHorizontal => {
                 return self.transform_view(0, true, false);
             }
 
-            Message::View(ViewMessage::FlipVertical) => {
+            ViewMessage::FlipVertical => {
                 return self.transform_view(0, false, true);
             }
 
-            Message::View(ViewMessage::ToggleFullscreen) => {
+            ViewMessage::ToggleFullscreen => {
                 if let Some(window_id) = self.core.main_window_id() {
                     return cosmic::command::toggle_maximize(window_id);
                 }
             }
 
-            Message::View(ViewMessage::ToggleNavPanel) => {
+            ViewMessage::ToggleNavPanel => {
                 self.show_nav_panel = !self.show_nav_panel;
             }
 
-            Message::View(ViewMessage::ToggleAbout) => {
+            ViewMessage::ToggleAbout => {
                 self.core.window.show_context = !self.core.window.show_context;
             }
 
-            Message::View(ViewMessage::LaunchUrl(url)) => match open::that_detached(&url) {
+            ViewMessage::LaunchUrl(url) => match open::that_detached(&url) {
                 Ok(()) => {}
                 Err(err) => {
                     tracing::error!("failed to open {url:?}: {err}");
                 }
             },
-
-            Message::App(AppMessage::Noop) => {}
-
-            Message::App(AppMessage::Surface(action)) => {
-                return cosmic::task::message(cosmic::Action::Surface(action));
-            }
-
-            Message::App(AppMessage::Quit) => {
-                self.save_session();
-                return iced::exit();
-            }
         }
         iced::Task::none()
     }
