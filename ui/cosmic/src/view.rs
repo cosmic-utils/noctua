@@ -8,17 +8,15 @@ use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::mouse;
 use cosmic::iced::{Length, Point, Size};
 use cosmic::prelude::*;
-use cosmic::widget::segmented_button::Entity;
-use cosmic::widget::{self, menu, tab_bar};
+use cosmic::widget::{self, tab_bar};
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::storage;
 
 use crate::fl;
-use crate::message::{MenuAction, Message};
+use crate::message::Message;
 use crate::model::{AnnotationTool, AppModel, TabContent, Target};
 use crate::widget::annotation_strip::annotation_strip;
 use crate::widget::document_preview::document_preview;
@@ -120,7 +118,9 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
         let Some(state) = app.annotation_ui.get(&tab) else {
             return widget::container(widget::text::body("")).into();
         };
-        return annotation_strip(state, tab, &|page| page_context_menu(tab, page));
+        return annotation_strip(state, tab, &|page| {
+            crate::menu::page_context_menu(tab, page)
+        });
     }
     let Some(state) = app.tab_ui.get(&tab) else {
         return widget::container(widget::text::body("")).into();
@@ -131,40 +131,8 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
         state.selected,
         state.expanded.as_ref(),
         tab,
-        &|_| file_context_menu(app),
+        &|_| crate::menu::file_context_menu(app),
     )
-}
-
-/// Build the right-click context menu for a source file: open it for editing
-/// or add it to an open annotation tab.
-fn file_context_menu(app: &AppModel) -> Option<Vec<menu::Tree<Message>>> {
-    let mut items: Vec<menu::Item<MenuAction, String>> = vec![menu::Item::Button(
-        fl!("open-for-editing"),
-        None,
-        MenuAction::OpenForEditing,
-    )];
-
-    let annotation_tabs: Vec<menu::Item<MenuAction, String>> = app
-        .tabs
-        .values()
-        .filter_map(|content| match content {
-            TabContent::Annotation { name, document, .. } => Some(menu::Item::Button(
-                name.clone(),
-                None,
-                MenuAction::AddToAnnotation(*document),
-            )),
-            _ => None,
-        })
-        .collect();
-    if !annotation_tabs.is_empty() {
-        items.push(menu::Item::Folder(
-            fl!("add-to-annotation"),
-            annotation_tabs,
-        ));
-    }
-
-    let empty_binds: HashMap<menu::KeyBind, MenuAction> = HashMap::new();
-    Some(menu::items(&empty_binds, items))
 }
 
 /// Wrap `content` in a right-click context menu for `path`, if applicable.
@@ -177,7 +145,7 @@ fn with_file_context_menu<'a>(
     path: &Path,
     content: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    let Some(menu) = file_context_menu(app) else {
+    let Some(menu) = crate::menu::file_context_menu(app) else {
         return content;
     };
     cosmic::widget::context_menu(content, Some(menu))
@@ -186,42 +154,6 @@ fn with_file_context_menu<'a>(
         })
         .on_surface_action(Message::Surface)
         .into()
-}
-
-/// Build the right-click context menu for a page of an annotation tab:
-/// rotate, move and delete the page.
-fn page_context_menu(tab: Entity, page: u32) -> Vec<menu::Tree<Message>> {
-    let items: Vec<menu::Item<MenuAction, String>> = vec![
-        menu::Item::Button(
-            fl!("rotate-page-clockwise"),
-            None,
-            MenuAction::RotatePageClockwise { tab, page },
-        ),
-        menu::Item::Button(
-            fl!("rotate-page-counter-clockwise"),
-            None,
-            MenuAction::RotatePageCounterClockwise { tab, page },
-        ),
-        menu::Item::Divider,
-        menu::Item::Button(
-            fl!("move-page-up"),
-            None,
-            MenuAction::MovePageUp { tab, page },
-        ),
-        menu::Item::Button(
-            fl!("move-page-down"),
-            None,
-            MenuAction::MovePageDown { tab, page },
-        ),
-        menu::Item::Divider,
-        menu::Item::Button(
-            fl!("delete-page"),
-            None,
-            MenuAction::DeletePage { tab, page },
-        ),
-    ];
-    let empty_binds: HashMap<menu::KeyBind, MenuAction> = HashMap::new();
-    menu::items(&empty_binds, items)
 }
 
 /// The content view of an annotation tab: the selected page, fitted. The text
