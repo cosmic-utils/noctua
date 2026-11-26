@@ -20,7 +20,7 @@ use cosmic::widget::menu::key_bind::Modifier;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::{iced, prelude::*};
 
-use noctua_core::pdfium_ops::{BindSource, Command, CommandResult};
+use noctua_core::pdfium_ops::{BindSource, Command, CommandResult, FormField, FreeTextAnnotation};
 use noctua_core::render::transform_rgba;
 use noctua_core::render::worker::{DocumentId, Job, JobResult, Priority, SharedWorker};
 use noctua_core::session::Session;
@@ -1690,6 +1690,151 @@ impl AppModel {
         }
     }
 
+    /// Start editing the free-text annotation under the click, or create one.
+    fn hit_free_text(
+        &mut self,
+        tab: Entity,
+        annotations: Vec<FreeTextAnnotation>,
+        x: f32,
+        y: f32,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let Some(position) = self.annotation_page_coords(tab, x, y) else {
+            return iced::Task::none();
+        };
+        let (document, page, font_size, max_width) = {
+            let Some(state) = self.annotation_ui.get(&tab) else {
+                return iced::Task::none();
+            };
+            let Some(document) = self.annotation_document(tab) else {
+                return iced::Task::none();
+            };
+            let page_width = state
+                .page_sizes
+                .get(state.selected as usize - 1)
+                .map(|(width, _)| *width)
+                .unwrap_or(0.0);
+            (
+                document,
+                state.selected,
+                state.font_size_pt,
+                (page_width - position.0).max(0.0),
+            )
+        };
+
+        // Hit-test the click (page points) against the annotations.
+        let hit = annotations.iter().find(|annotation| {
+            position.0 >= annotation.x
+                && position.0 <= annotation.x + annotation.width
+                && position.1 >= annotation.y
+                && position.1 <= annotation.y + annotation.height
+        });
+
+        if let Some(annotation) = hit {
+            // Editing keeps the text and the box; only the insertion marker is
+            // redrawn.
+            let pending = PendingText {
+                index: annotation.index,
+                original_text: annotation.contents.clone(),
+                is_new: false,
+                text: annotation.contents.clone(),
+                cursor: text_char_count(&annotation.contents),
+                origin: (annotation.x, annotation.y + annotation.height),
+                max_width: annotation.width,
+                // Filled in by the first update that reaches the core.
+                caret: (0.0, 0.0, 0.0, 0.0),
+            };
+            let (color, font_size) = (annotation.color, annotation.font_size);
+            if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                state.pending_text = Some(pending);
+                // Start the toolbar from the annotation's real style.
+                state.annotation_color = color;
+                state.font_size_pt = font_size;
+                state.caret_visible = true;
+            }
+            return self.update_pending_text(tab, document, page);
+        }
+
+        self.add_pending_text(tab, document, page, font_size, position, max_width)
+    }
+
+    /// Focus, toggle or open the option list of the form field under the click.
+    fn hit_form_field(
+        &mut self,
+        tab: Entity,
+        fields: Vec<FormField>,
+        x: f32,
+        y: f32,
+        anchor: Point,
+    ) -> iced::Task<cosmic::Action<Message>> {
+        let Some(image_height) = self
+            .annotation_ui
+            .get(&tab)
+            .and_then(|state| state.current.as_ref())
+            .map(|current| current.rgba.1 as f32)
+        else {
+            return iced::Task::none();
+        };
+        if let Some(state) = self.annotation_ui.get_mut(&tab) {
+            state.form_fields = fields.clone();
+            state.form_focus = None;
+            state.form_menu = None;
+        }
+        let Some(index) =
+            crate::widget::form_fields::field_at(&fields, Point::new(x, y), image_height)
+        else {
+            return iced::Task::none();
+        };
+        let kind = fields[index].kind;
+        if !crate::widget::form_fields::is_focusable(kind) {
+            return iced::Task::none();
+        }
+        let Some(document) = self.annotation_document(tab) else {
+            return iced::Task::none();
+        };
+        let Some(page) = self.selected_page(tab) else {
+            return iced::Task::none();
+        };
+
+        // Choice fields open their option list where the field was clicked;
+        // text fields take a draft and the caret; boxes toggle immediately,
+        // like they do in other viewers.
+        let field = &fields[index];
+        let has_options = crate::widget::form_fields::has_options(field);
+        if !has_options && !crate::widget::form_fields::accepts_text(field) {
+            let annotation = field.index;
+            if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                state.form_focus = None;
+            }
+            let worker = self.worker.clone();
+            return cosmic::task::future(async move {
+                let (_, result) = worker
+                    .op(
+                        Some(document),
+                        Command::ToggleFormField {
+                            page,
+                            index: annotation,
+                        },
+                    )
+                    .await;
+                Message::AnnotationFormMutated {
+                    tab,
+                    ok: matches!(result, CommandResult::Ok),
+                }
+            });
+        }
+
+        let value = field.value.clone();
+        if let Some(state) = self.annotation_ui.get_mut(&tab) {
+            state.form_focus = Some(index);
+            state.form_draft = value.clone();
+            state.form_original = value;
+            state.form_caret = text_char_count(&state.form_draft);
+            state.caret_visible = true;
+            state.form_menu = has_options.then_some(anchor);
+        }
+        self.focus_form_field(tab, index)
+    }
+
     fn render_current_annotation_page(&self, tab: Entity) -> iced::Task<cosmic::Action<Message>> {
         let Some(document) = self.annotation_document(tab) else {
             return iced::Task::none();
@@ -2514,82 +2659,6 @@ impl AppModel {
                 return cosmic::task::batch(vec![finish, mutate]);
             }
 
-            Message::AnnotationFormFieldsListed {
-                tab,
-                fields,
-                x,
-                y,
-                anchor,
-            } => {
-                let Some(image_height) = self
-                    .annotation_ui
-                    .get(&tab)
-                    .and_then(|state| state.current.as_ref())
-                    .map(|current| current.rgba.1 as f32)
-                else {
-                    return iced::Task::none();
-                };
-                if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_fields = fields.clone();
-                    state.form_focus = None;
-                    state.form_menu = None;
-                }
-                let Some(index) =
-                    crate::widget::form_fields::field_at(&fields, Point::new(x, y), image_height)
-                else {
-                    return iced::Task::none();
-                };
-                let kind = fields[index].kind;
-                if !crate::widget::form_fields::is_focusable(kind) {
-                    return iced::Task::none();
-                }
-                let Some(document) = self.annotation_document(tab) else {
-                    return iced::Task::none();
-                };
-                let Some(page) = self.selected_page(tab) else {
-                    return iced::Task::none();
-                };
-
-                // Choice fields open their option list where the field was
-                // clicked; text fields take a draft and the caret; boxes toggle
-                // immediately, like they do in other viewers.
-                let field = &fields[index];
-                let has_options = crate::widget::form_fields::has_options(field);
-                if !has_options && !crate::widget::form_fields::accepts_text(field) {
-                    let annotation = field.index;
-                    if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                        state.form_focus = None;
-                    }
-                    let worker = self.worker.clone();
-                    return cosmic::task::future(async move {
-                        let (_, result) = worker
-                            .op(
-                                Some(document),
-                                Command::ToggleFormField {
-                                    page,
-                                    index: annotation,
-                                },
-                            )
-                            .await;
-                        Message::AnnotationFormMutated {
-                            tab,
-                            ok: matches!(result, CommandResult::Ok),
-                        }
-                    });
-                }
-
-                let value = field.value.clone();
-                if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_focus = Some(index);
-                    state.form_draft = value.clone();
-                    state.form_original = value;
-                    state.form_caret = text_char_count(&state.form_draft);
-                    state.caret_visible = true;
-                    state.form_menu = has_options.then_some(anchor);
-                }
-                return self.focus_form_field(tab, index);
-            }
-
             Message::AnnotationFormOptionPicked { tab, field, option } => {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
@@ -2723,38 +2792,6 @@ impl AppModel {
                     // cannot create an annotation or hit a field.
                     return self.finish_pending_text(tab);
                 }
-                let is_text = self
-                    .annotation_ui
-                    .get(&tab)
-                    .is_some_and(|state| state.active_tool == Some(AnnotationTool::Text));
-                if !is_text {
-                    // Without the text tool a click belongs to the form fields,
-                    // if the page has any. The list is fetched per click, like
-                    // the free-text annotations above.
-                    let Some(document) = self.annotation_document(tab) else {
-                        return iced::Task::none();
-                    };
-                    let Some(page) = self.selected_page(tab) else {
-                        return iced::Task::none();
-                    };
-                    let worker = self.worker.clone();
-                    return cosmic::task::future(async move {
-                        let (_, result) = worker
-                            .op(Some(document), Command::ListFormFields { page })
-                            .await;
-                        let fields = match result {
-                            CommandResult::FormFields(list) => list,
-                            _ => Vec::new(),
-                        };
-                        Message::AnnotationFormFieldsListed {
-                            tab,
-                            fields,
-                            x,
-                            y,
-                            anchor,
-                        }
-                    });
-                }
                 // Finish the previous edit before starting a new one, so its
                 // insertion marker is removed.
                 let finish = self.finish_pending_text(tab);
@@ -2764,90 +2801,48 @@ impl AppModel {
                 let Some(page) = self.selected_page(tab) else {
                     return finish;
                 };
-                // Query the page's free-text annotations so the click can edit
-                // an existing one instead of always creating a new one.
+                // One round trip: the click decides between free text and form
+                // fields, so both lists come back together.
                 let worker = self.worker.clone();
                 let click = cosmic::task::future(async move {
                     let (_, result) = worker
-                        .op(Some(document), Command::ListFreeTextAnnotations { page })
+                        .op(Some(document), Command::PageTargets { page })
                         .await;
-                    let annotations = match result {
-                        CommandResult::FreeTextAnnotations(list) => list,
-                        _ => Vec::new(),
+                    let (annotations, fields) = match result {
+                        CommandResult::PageTargets {
+                            annotations,
+                            fields,
+                        } => (annotations, fields),
+                        _ => (Vec::new(), Vec::new()),
                     };
-                    Message::AnnotationAnnotationsListed {
+                    Message::AnnotationTargetsKnown {
                         tab,
                         annotations,
+                        fields,
                         x,
                         y,
+                        anchor,
                     }
                 });
                 return cosmic::task::batch(vec![finish, click]);
             }
 
-            Message::AnnotationAnnotationsListed {
+            Message::AnnotationTargetsKnown {
                 tab,
                 annotations,
+                fields,
                 x,
                 y,
+                anchor,
             } => {
-                let Some(position) = self.annotation_page_coords(tab, x, y) else {
-                    return iced::Task::none();
-                };
-                let (document, page, font_size, max_width) = {
-                    let Some(state) = self.annotation_ui.get(&tab) else {
-                        return iced::Task::none();
-                    };
-                    let Some(document) = self.annotation_document(tab) else {
-                        return iced::Task::none();
-                    };
-                    let page_width = state
-                        .page_sizes
-                        .get(state.selected as usize - 1)
-                        .map(|(width, _)| *width)
-                        .unwrap_or(0.0);
-                    (
-                        document,
-                        state.selected,
-                        state.font_size_pt,
-                        (page_width - position.0).max(0.0),
-                    )
-                };
-
-                // Hit-test the click (page points) against the annotations.
-                let hit = annotations.iter().find(|annotation| {
-                    position.0 >= annotation.x
-                        && position.0 <= annotation.x + annotation.width
-                        && position.1 >= annotation.y
-                        && position.1 <= annotation.y + annotation.height
-                });
-
-                if let Some(annotation) = hit {
-                    // Editing keeps the text and the box; only the insertion
-                    // marker is redrawn.
-                    let pending = PendingText {
-                        index: annotation.index,
-                        original_text: annotation.contents.clone(),
-                        is_new: false,
-                        text: annotation.contents.clone(),
-                        cursor: text_char_count(&annotation.contents),
-                        origin: (annotation.x, annotation.y + annotation.height),
-                        max_width: annotation.width,
-                        // Filled in by the first update that reaches the core.
-                        caret: (0.0, 0.0, 0.0, 0.0),
-                    };
-                    let (color, font_size) = (annotation.color, annotation.font_size);
-                    if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                        state.pending_text = Some(pending);
-                        // Start the toolbar from the annotation's real style.
-                        state.annotation_color = color;
-                        state.font_size_pt = font_size;
-                        state.caret_visible = true;
-                    }
-                    return self.update_pending_text(tab, document, page);
+                let is_text = self
+                    .annotation_ui
+                    .get(&tab)
+                    .is_some_and(|state| state.active_tool == Some(AnnotationTool::Text));
+                if is_text {
+                    return self.hit_free_text(tab, annotations, x, y);
                 }
-
-                return self.add_pending_text(tab, document, page, font_size, position, max_width);
+                return self.hit_form_field(tab, fields, x, y, anchor);
             }
 
             Message::AnnotationTextKey(key) => {

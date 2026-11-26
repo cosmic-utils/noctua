@@ -110,6 +110,10 @@ pub enum Command {
     /// List the interactive form fields on a 1-based page, in page points.
     ListFormFields { page: u32 },
 
+    /// Free-text annotations and form fields on a 1-based page, so one click
+    /// can decide between them with a single round trip.
+    PageTargets { page: u32 },
+
     /// Set the value of a string-valued form field (text or choice).
     SetFormFieldValue {
         page: u32,
@@ -174,6 +178,11 @@ pub enum CommandResult {
     FreeTextAnnotations(Vec<FreeTextAnnotation>),
     /// Interactive form fields on a page.
     FormFields(Vec<FormField>),
+    /// Free-text annotations and form fields of a page, for hit-testing.
+    PageTargets {
+        annotations: Vec<FreeTextAnnotation>,
+        fields: Vec<FormField>,
+    },
     /// A free-text annotation was written. `index` is `Some` for a creation;
     /// `caret` is the insertion marker rectangle in page points.
     FreeTextWritten {

@@ -535,6 +535,13 @@ impl PdfOpsManager {
                 Ok(list) => CommandResult::FormFields(list),
                 Err(e) => CommandResult::Error(e),
             },
+            Command::PageTargets { page } => match self.page_targets(page) {
+                Ok((annotations, fields)) => CommandResult::PageTargets {
+                    annotations,
+                    fields,
+                },
+                Err(e) => CommandResult::Error(e),
+            },
             Command::SetFormFieldValue { page, index, value } => {
                 self.set_form_field_value(page, index, &value).into()
             }
@@ -951,6 +958,18 @@ impl PdfOpsManager {
             });
         }
         Ok(annotations)
+    }
+
+    /// Free-text annotations and form fields of one page, for hit-testing a
+    /// click with a single round trip.
+    fn page_targets(
+        &self,
+        page: u32,
+    ) -> Result<(Vec<FreeTextAnnotation>, Vec<FormField>), PdfOpsError> {
+        Ok((
+            self.list_free_text_annotations(page)?,
+            self.list_form_fields(page)?,
+        ))
     }
 
     /// List the interactive form fields on a page, in page points.

@@ -132,13 +132,15 @@ pub enum Message {
         y: f32,
         anchor: Point,
     },
-    /// The free-text annotations of the clicked page were listed; carries the
-    /// click context so the handler can hit-test and start an edit.
-    AnnotationAnnotationsListed {
+    /// The free-text annotations and form fields of the clicked page were
+    /// listed; carries the click context so the handler can hit-test both.
+    AnnotationTargetsKnown {
         tab: Entity,
         annotations: Vec<FreeTextAnnotation>,
+        fields: Vec<FormField>,
         x: f32,
         y: f32,
+        anchor: Point,
     },
     /// A key press routed to the in-place free-text editor: named keys such as
     /// Backspace, Delete, Enter, Escape or the arrow keys.
@@ -198,15 +200,6 @@ pub enum Message {
         tab: Entity,
         stem: String,
         result: Result<PathBuf, String>,
-    },
-    /// Form fields on an annotation page were listed for a click, which then
-    /// decides whether it toggled a field or started editing one.
-    AnnotationFormFieldsListed {
-        tab: Entity,
-        fields: Vec<FormField>,
-        x: f32,
-        y: f32,
-        anchor: Point,
     },
     /// A form field was toggled or focused; the page is re-rendered so the new
     /// state is visible.
