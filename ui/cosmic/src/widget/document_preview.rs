@@ -9,7 +9,7 @@ use cosmic::iced::{ContentFit, Length};
 use cosmic::prelude::*;
 use cosmic::widget;
 
-use crate::message::Message;
+use crate::message::{BrowserMessage, Message};
 use crate::model::{DocumentPreview, PREVIEW_SCROLL_ID, PageSlot};
 use crate::widget::scroll_zoom::ScrollZoom;
 
@@ -46,20 +46,24 @@ pub(crate) fn document_preview<'a>(
     let path = preview.path.clone();
     let content = ScrollZoom::new(column)
         .modifiers(modifiers)
-        .on_zoom(move |delta| Message::PreviewWheel {
-            path: path.clone(),
-            delta,
+        .on_zoom(move |delta| {
+            Message::Browser(BrowserMessage::PreviewWheel {
+                path: path.clone(),
+                delta,
+            })
         });
 
     widget::scrollable(content)
         .width(Length::Fill)
         .height(Length::Fill)
         .id(widget::Id::new(PREVIEW_SCROLL_ID))
-        .on_scroll(|viewport| Message::PreviewScrolled {
-            path: preview.path.clone(),
-            offset_y: viewport.absolute_offset().y,
-            viewport_height: viewport.bounds().height,
-            viewport_width: viewport.bounds().width,
+        .on_scroll(|viewport| {
+            Message::Browser(BrowserMessage::PreviewScrolled {
+                path: preview.path.clone(),
+                offset_y: viewport.absolute_offset().y,
+                viewport_height: viewport.bounds().height,
+                viewport_width: viewport.bounds().width,
+            })
         })
         .into()
 }

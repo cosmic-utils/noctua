@@ -16,7 +16,7 @@ use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::storage;
 
 use crate::fl;
-use crate::message::Message;
+use crate::message::{AnnotationMessage, AppMessage, BrowserMessage, Message, ViewMessage};
 use crate::model::{AnnotationTool, AppModel, TabContent, Target};
 use crate::widget::annotation_strip::annotation_strip;
 use crate::widget::document_preview::document_preview;
@@ -41,8 +41,8 @@ pub(crate) fn view(app: &AppModel) -> Element<'_, Message> {
     // matching COSMIC Terminal.
     if app.tabs.len() > 1 {
         let tab_strip = tab_bar::horizontal(&app.tab_model)
-            .on_activate(Message::TabActivated)
-            .on_close(Message::TabCloseRequested)
+            .on_activate(|id| Message::Browser(BrowserMessage::TabActivated(id)))
+            .on_close(|id| Message::Browser(BrowserMessage::TabCloseRequested(id)))
             .button_height(32)
             .button_spacing(space.space_xxs);
         column = column.push(tab_strip);
@@ -89,8 +89,8 @@ pub(crate) fn rename_dialog(app: &AppModel) -> Option<Element<'_, Message>> {
     let draft = app.rename.as_ref()?;
 
     let field = widget::text_input("", draft.text.as_str())
-        .on_input(Message::RenameAnnotationChanged)
-        .on_submit(|_| Message::RenameAnnotationConfirmed);
+        .on_input(|text| Message::Annotation(AnnotationMessage::RenameAnnotationChanged(text)))
+        .on_submit(|_| Message::Annotation(AnnotationMessage::RenameAnnotationConfirmed));
 
     Some(
         widget::dialog()
@@ -98,13 +98,13 @@ pub(crate) fn rename_dialog(app: &AppModel) -> Option<Element<'_, Message>> {
             .body(fl!("rename-annotation-body"))
             .control(field)
             .primary_action(
-                widget::button::suggested(fl!("rename"))
-                    .on_press(Message::RenameAnnotationConfirmed),
+                widget::button::suggested(fl!("rename")).on_press(Message::Annotation(
+                    AnnotationMessage::RenameAnnotationConfirmed,
+                )),
             )
-            .secondary_action(
-                widget::button::standard(fl!("cancel"))
-                    .on_press(Message::RenameAnnotationCancelled),
-            )
+            .secondary_action(widget::button::standard(fl!("cancel")).on_press(
+                Message::Annotation(AnnotationMessage::RenameAnnotationCancelled),
+            ))
             .into(),
     )
 }
@@ -149,10 +149,10 @@ fn with_file_context_menu<'a>(
         return content;
     };
     cosmic::widget::context_menu(content, Some(menu))
-        .on_open(Message::ContextOpened {
+        .on_open(Message::Browser(BrowserMessage::ContextOpened {
             path: path.to_path_buf(),
-        })
-        .on_surface_action(Message::Surface)
+        }))
+        .on_surface_action(|action| Message::App(AppMessage::Surface(action)))
         .into()
 }
 
@@ -221,19 +221,21 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
         app.keyboard_modifiers,
         app.viewer_bounds.clone(),
         cursor,
-        move |scale, offset_x, offset_y| Message::AnnotationViewerStateChanged {
-            tab,
-            scale,
-            offset_x,
-            offset_y,
+        move |scale, offset_x, offset_y| {
+            Message::Annotation(AnnotationMessage::AnnotationViewerStateChanged {
+                tab,
+                scale,
+                offset_x,
+                offset_y,
+            })
         },
         Some(Box::new(move |native, anchor| {
-            Message::AnnotationPointerClicked {
+            Message::Annotation(AnnotationMessage::AnnotationPointerClicked {
                 tab,
                 x: native.x,
                 y: native.y,
                 anchor,
-            }
+            })
         })),
         Some(Box::new({
             let fields = state.form_fields.clone();
@@ -243,7 +245,7 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     ))
     .active(editing)
     .capture(&[Named::Tab, Named::Escape])
-    .on_key(Message::AnnotationTextKey)
+    .on_key(|key| Message::Annotation(AnnotationMessage::AnnotationTextKey(key)))
     .into();
 
     // The option list of a choice field is drawn over the page where the field
@@ -266,7 +268,9 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
             anchor.y + padding,
         )))
         .popup(crate::widget::form_fields::form_option_list(tab, field))
-        .on_close(Message::AnnotationFormMenuClosed)
+        .on_close(Message::Annotation(
+            AnnotationMessage::AnnotationFormMenuClosed,
+        ))
         .into()
 }
 
@@ -331,18 +335,21 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
     });
     let (rotate_left, rotate_right) = match annotation_page {
         Some((tab, page)) => (
-            Message::AnnotationRotatePage {
+            Message::Annotation(AnnotationMessage::AnnotationRotatePage {
                 tab,
                 page,
                 clockwise: false,
-            },
-            Message::AnnotationRotatePage {
+            }),
+            Message::Annotation(AnnotationMessage::AnnotationRotatePage {
                 tab,
                 page,
                 clockwise: true,
-            },
+            }),
         ),
-        None => (Message::RotateCounterClockwise, Message::RotateClockwise),
+        None => (
+            Message::View(ViewMessage::RotateCounterClockwise),
+            Message::View(ViewMessage::RotateClockwise),
+        ),
     };
 
     let mut toolbar = ResponsiveToolbar::new();
@@ -357,7 +364,9 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
             widget::button::icon(widget::icon::from_name("insert-text-symbolic"))
                 .tooltip(fl!("text-tool"))
                 .selected(text_active)
-                .on_press(Message::AnnotationToolToggled(AnnotationTool::Text)),
+                .on_press(Message::Annotation(
+                    AnnotationMessage::AnnotationToolToggled(AnnotationTool::Text),
+                )),
         );
         if text_active {
             let labels: Vec<String> = FONT_SIZE_PRESETS
@@ -368,7 +377,9 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
                 .iter()
                 .position(|size| (*size - state.font_size_pt).abs() < f32::EPSILON);
             toolbar = toolbar.start(cosmic::widget::dropdown(labels, selected, |index| {
-                Message::AnnotationFontSizeChanged(FONT_SIZE_PRESETS[index])
+                Message::Annotation(AnnotationMessage::AnnotationFontSizeChanged(
+                    FONT_SIZE_PRESETS[index],
+                ))
             }));
 
             let colors = text_color_presets();
@@ -379,7 +390,9 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
             toolbar = toolbar.start(cosmic::widget::dropdown(
                 color_labels,
                 color_selected,
-                move |index| Message::AnnotationColorChanged(colors[index].1),
+                move |index| {
+                    Message::Annotation(AnnotationMessage::AnnotationColorChanged(colors[index].1))
+                },
             ));
         }
     }
@@ -388,12 +401,12 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
         .start(icon_button(
             "go-previous-symbolic",
             fl!("previous"),
-            Message::PrevEntry,
+            Message::Browser(BrowserMessage::PrevEntry),
         ))
         .start(icon_button(
             "go-next-symbolic",
             fl!("next"),
-            Message::NextEntry,
+            Message::Browser(BrowserMessage::NextEntry),
         ))
         .start(icon_button(
             "object-rotate-left-symbolic",
@@ -417,27 +430,27 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
             .start(page_button(
                 "go-up-symbolic",
                 fl!("move-page-up"),
-                Message::AnnotationMovePage {
+                Message::Annotation(AnnotationMessage::AnnotationMovePage {
                     tab,
                     page,
                     up: true,
-                },
+                }),
                 page > 1,
             ))
             .start(page_button(
                 "go-down-symbolic",
                 fl!("move-page-down"),
-                Message::AnnotationMovePage {
+                Message::Annotation(AnnotationMessage::AnnotationMovePage {
                     tab,
                     page,
                     up: false,
-                },
+                }),
                 page < page_count,
             ))
             .start(page_button(
                 "user-trash-symbolic",
                 fl!("delete-page"),
-                Message::AnnotationDeletePage { tab, page },
+                Message::Annotation(AnnotationMessage::AnnotationDeletePage { tab, page }),
                 // A document needs at least one page.
                 page_count > 1,
             ));
@@ -447,12 +460,12 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
         .start(icon_button(
             "object-flip-horizontal-symbolic",
             fl!("flip-horizontal"),
-            Message::FlipHorizontal,
+            Message::View(ViewMessage::FlipHorizontal),
         ))
         .start(icon_button(
             "object-flip-vertical-symbolic",
             fl!("flip-vertical"),
-            Message::FlipVertical,
+            Message::View(ViewMessage::FlipVertical),
         ))
         .center(
             widget::row::with_capacity(3)
@@ -461,7 +474,7 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
                 .push(icon_button(
                     "zoom-out-symbolic",
                     fl!("zoom-out"),
-                    Message::ZoomOut,
+                    Message::View(ViewMessage::ZoomOut),
                 ))
                 .push(
                     ScrollZoom::new(
@@ -470,28 +483,28 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
                             .force_enabled(true),
                     )
                     .require_ctrl(false)
-                    .on_zoom(|delta| Message::ZoomBy(scroll_steps(delta))),
+                    .on_zoom(|delta| Message::View(ViewMessage::ZoomBy(scroll_steps(delta)))),
                 )
                 .push(icon_button(
                     "zoom-in-symbolic",
                     fl!("zoom-in"),
-                    Message::ZoomIn,
+                    Message::View(ViewMessage::ZoomIn),
                 )),
         )
         .end(icon_button(
             "view-actual-size-symbolic",
             fl!("zoom-100"),
-            Message::Zoom100,
+            Message::View(ViewMessage::Zoom100),
         ))
         .end(icon_button(
             "view-fit-symbolic",
             fl!("zoom-fit"),
-            Message::ZoomToFit,
+            Message::View(ViewMessage::ZoomToFit),
         ))
         .end(icon_button(
             "view-fullscreen-symbolic",
             fl!("fullscreen"),
-            Message::ToggleFullscreen,
+            Message::View(ViewMessage::ToggleFullscreen),
         ));
 
     toolbar.view()
@@ -537,11 +550,13 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                 app.keyboard_modifiers,
                 app.viewer_bounds.clone(),
                 mouse::Interaction::Grab,
-                move |scale, offset_x, offset_y| Message::ViewerStateChanged {
-                    target: target.clone(),
-                    scale,
-                    offset_x,
-                    offset_y,
+                move |scale, offset_x, offset_y| {
+                    Message::Browser(BrowserMessage::ViewerStateChanged {
+                        target: target.clone(),
+                        scale,
+                        offset_x,
+                        offset_y,
+                    })
                 },
                 None,
                 None,

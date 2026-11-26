@@ -26,7 +26,7 @@ use noctua_core::storage;
 use noctua_core::storage::thumbcache::ThumbSize;
 
 use crate::fl;
-use crate::message::Message;
+use crate::message::{AnnotationMessage, AppMessage, BrowserMessage, Message, ViewMessage};
 use crate::model::{
     AnnotationTool, AnnotationUiState, AppModel, CurrentImage, DocumentPreview, MAX_SCALE,
     MIN_SCALE, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, PendingText,
@@ -166,7 +166,7 @@ fn save_annotation_dialog(name: String) -> iced::Task<cosmic::Action<Message>> {
             .await
             .ok()
             .and_then(|response| response.url().and_then(|url| url.to_file_path().ok()));
-        Message::SaveTargetChosen(path)
+        Message::Annotation(AnnotationMessage::SaveTargetChosen(path))
     })
 }
 
@@ -527,7 +527,7 @@ impl AppModel {
         let worker_path = path.clone();
         cosmic::task::future(async move {
             let sizes = worker.page_sizes(worker_path).await;
-            Message::PreviewSizesKnown { path, sizes }
+            Message::Browser(BrowserMessage::PreviewSizesKnown { path, sizes })
         })
     }
 
@@ -652,11 +652,11 @@ impl AppModel {
                 .render_pages(worker_path, wanted, zoom, priority)
                 .await
                 .unwrap_or_default();
-            Message::PreviewPagesRendered {
+            Message::Browser(BrowserMessage::PreviewPagesRendered {
                 path: result_path,
                 zoom,
                 pages,
-            }
+            })
         })
     }
 
@@ -785,10 +785,10 @@ impl AppModel {
                 }
             }
 
-            Message::StripThumbsReady {
+            Message::Browser(BrowserMessage::StripThumbsReady {
                 tab,
                 thumbs: results,
-            }
+            })
         })
     }
 
@@ -847,7 +847,7 @@ impl AppModel {
                 Ok(JobResult::PageCount(count)) => Some(count),
                 _ => None,
             };
-            Message::PagesKnown { path, pages }
+            Message::Browser(BrowserMessage::PagesKnown { path, pages })
         })
     }
 
@@ -906,7 +906,7 @@ impl AppModel {
         let max_edge = self.config.max_texture_edge;
         cosmic::task::future(async move {
             let rgba = worker.display(path.clone(), max_edge).await;
-            Message::FileRendered { path, rgba }
+            Message::Browser(BrowserMessage::FileRendered { path, rgba })
         })
     }
 
@@ -916,7 +916,7 @@ impl AppModel {
         let worker = self.worker.clone();
         cosmic::task::future(async move {
             let rgba = worker.render(path.clone(), Some(page), 1.0).await;
-            Message::PageRendered { path, page, rgba }
+            Message::Browser(BrowserMessage::PageRendered { path, page, rgba })
         })
     }
 
@@ -1101,7 +1101,7 @@ impl AppModel {
                 .await
                 .ok()
                 .and_then(|response| response.url().to_file_path().ok());
-            Message::FolderChosen(path)
+            Message::Browser(BrowserMessage::FolderChosen(path))
         })
     }
 
@@ -1128,7 +1128,7 @@ impl AppModel {
             let result = storage::browser::list_documents_async(dir.clone())
                 .await
                 .map_err(|e| e.to_string());
-            Message::FolderListed { dir, result }
+            Message::Browser(BrowserMessage::FolderListed { dir, result })
         })
     }
 
@@ -1167,20 +1167,22 @@ impl AppModel {
         let worker = self.worker.clone();
         cosmic::task::future(async move {
             match open_source(&worker, &path).await {
-                Ok((document, name, save_target, dirty)) => Message::AnnotationOpened {
-                    document: Some(document),
-                    name,
-                    save_target,
-                    dirty,
-                },
+                Ok((document, name, save_target, dirty)) => {
+                    Message::Annotation(AnnotationMessage::AnnotationOpened {
+                        document: Some(document),
+                        name,
+                        save_target,
+                        dirty,
+                    })
+                }
                 Err(err) => {
                     tracing::error!("failed to open {path:?} for editing: {err}");
-                    Message::AnnotationOpened {
+                    Message::Annotation(AnnotationMessage::AnnotationOpened {
                         document: None,
                         name: String::new(),
                         save_target: None,
                         dirty: false,
-                    }
+                    })
                 }
             }
         })
@@ -1197,7 +1199,7 @@ impl AppModel {
             let ok = add_source_to_document(&worker, document, &source)
                 .await
                 .is_ok();
-            Message::AnnotationPagesAdded { document, ok }
+            Message::Annotation(AnnotationMessage::AnnotationPagesAdded { document, ok })
         })
     }
 
@@ -1214,7 +1216,7 @@ impl AppModel {
                 CommandResult::PageSizes(sizes) => Some(sizes),
                 _ => None,
             };
-            Message::AnnotationSizesKnown { tab, sizes }
+            Message::Annotation(AnnotationMessage::AnnotationSizesKnown { tab, sizes })
         })
     }
 
@@ -1238,7 +1240,7 @@ impl AppModel {
                 } => Some((width, height, rgba_data)),
                 _ => None,
             };
-            Message::AnnotationPageRendered { tab, page, rgba }
+            Message::Annotation(AnnotationMessage::AnnotationPageRendered { tab, page, rgba })
         })
     }
 
@@ -1273,7 +1275,7 @@ impl AppModel {
                 };
                 thumbs.push((page, rgba));
             }
-            Message::AnnotationThumbsReady { tab, thumbs }
+            Message::Annotation(AnnotationMessage::AnnotationThumbsReady { tab, thumbs })
         })
     }
 
@@ -1351,7 +1353,7 @@ impl AppModel {
                 CommandResult::Saved { data } => storage::document::save(&path, &data).is_ok(),
                 _ => false,
             };
-            Message::AnnotationSaved { tab, path, ok }
+            Message::Annotation(AnnotationMessage::AnnotationSaved { tab, path, ok })
         })
     }
 
@@ -1367,7 +1369,7 @@ impl AppModel {
         cosmic::task::future(async move {
             let (_, result) = worker.op(Some(document), command).await;
             let ok = matches!(result, CommandResult::Ok);
-            Message::AnnotationPageMutated { tab, ok }
+            Message::Annotation(AnnotationMessage::AnnotationPageMutated { tab, ok })
         })
     }
 
@@ -1383,21 +1385,25 @@ impl AppModel {
         cosmic::task::future(async move {
             let (_, result) = worker.op(Some(document), command).await;
             match result {
-                CommandResult::FreeTextWritten { caret, .. } => Message::AnnotationTextMutated {
-                    tab,
-                    ok: true,
-                    caret: Some(caret),
-                },
-                CommandResult::Ok => Message::AnnotationTextMutated {
-                    tab,
-                    ok: true,
-                    caret: None,
-                },
-                _ => Message::AnnotationTextMutated {
+                CommandResult::FreeTextWritten { caret, .. } => {
+                    Message::Annotation(AnnotationMessage::AnnotationTextMutated {
+                        tab,
+                        ok: true,
+                        caret: Some(caret),
+                    })
+                }
+                CommandResult::Ok => {
+                    Message::Annotation(AnnotationMessage::AnnotationTextMutated {
+                        tab,
+                        ok: true,
+                        caret: None,
+                    })
+                }
+                _ => Message::Annotation(AnnotationMessage::AnnotationTextMutated {
                     tab,
                     ok: false,
                     caret: None,
-                },
+                }),
             }
         })
     }
@@ -1448,10 +1454,10 @@ impl AppModel {
                     Command::SetFormFieldValue { page, index, value },
                 )
                 .await;
-            Message::AnnotationFormMutated {
+            Message::Annotation(AnnotationMessage::AnnotationFormMutated {
                 tab,
                 ok: matches!(result, CommandResult::Ok),
-            }
+            })
         })
     }
 
@@ -1479,7 +1485,7 @@ impl AppModel {
                     },
                 )
                 .await;
-            Message::Noop
+            Message::App(AppMessage::Noop)
         })
     }
 
@@ -1714,10 +1720,10 @@ impl AppModel {
                         },
                     )
                     .await;
-                Message::AnnotationFormMutated {
+                Message::Annotation(AnnotationMessage::AnnotationFormMutated {
                     tab,
                     ok: matches!(result, CommandResult::Ok),
-                }
+                })
             });
         }
 
@@ -1775,20 +1781,20 @@ impl AppModel {
             let (index, caret) = match result {
                 CommandResult::FreeTextWritten { index, caret } => (index, caret),
                 _ => {
-                    return Message::AnnotationTextMutated {
+                    return Message::Annotation(AnnotationMessage::AnnotationTextMutated {
                         tab,
                         ok: false,
                         caret: None,
-                    };
+                    });
                 }
             };
-            Message::AnnotationTextCreated {
+            Message::Annotation(AnnotationMessage::AnnotationTextCreated {
                 tab,
                 index,
                 origin,
                 max_width,
                 caret,
-            }
+            })
         })
     }
 
@@ -2014,7 +2020,7 @@ impl AppModel {
                 let document = *document;
                 Some(cosmic::task::future(async move {
                     let _ = worker.op(Some(document), Command::Close).await;
-                    Message::Noop
+                    Message::App(AppMessage::Noop)
                 }))
             }
             _ => None,
@@ -2222,7 +2228,7 @@ impl AppModel {
         message: Message,
     ) -> iced::Task<cosmic::Action<Message>> {
         match message {
-            Message::TabActivated(id) => {
+            Message::Browser(BrowserMessage::TabActivated(id)) => {
                 // Leave the text being typed in the previous tab as it is.
                 let finish = self
                     .active_tab()
@@ -2234,13 +2240,13 @@ impl AppModel {
                 return cosmic::task::batch(vec![finish, command, title]);
             }
 
-            Message::TabCloseRequested(id) => {
+            Message::Browser(BrowserMessage::TabCloseRequested(id)) => {
                 let command = self.close_tab(id);
                 let title = self.update_title();
                 return cosmic::task::batch(vec![command, title]);
             }
 
-            Message::CloseTab => {
+            Message::Browser(BrowserMessage::CloseTab) => {
                 if let Some(tab) = self.active_tab() {
                     let command = self.close_tab(tab);
                     let title = self.update_title();
@@ -2248,7 +2254,7 @@ impl AppModel {
                 }
             }
 
-            Message::StripActivated(index) => {
+            Message::Browser(BrowserMessage::StripActivated(index)) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2266,7 +2272,7 @@ impl AppModel {
                 return self.activate_target(target, is_pdf);
             }
 
-            Message::PrevEntry => {
+            Message::Browser(BrowserMessage::PrevEntry) => {
                 if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, -1);
                 }
@@ -2294,7 +2300,7 @@ impl AppModel {
                 return self.activate_target(target, is_pdf);
             }
 
-            Message::NextEntry => {
+            Message::Browser(BrowserMessage::NextEntry) => {
                 if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, 1);
                 }
@@ -2321,91 +2327,93 @@ impl AppModel {
                 return self.activate_target(target, is_pdf);
             }
 
-            Message::PrevPage => {
+            Message::Browser(BrowserMessage::PrevPage) => {
                 if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, -1);
                 }
                 return self.scroll_preview_page(-1);
             }
 
-            Message::NextPage => {
+            Message::Browser(BrowserMessage::NextPage) => {
                 if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, 1);
                 }
                 return self.scroll_preview_page(1);
             }
 
-            Message::OpenFolder => {
+            Message::Browser(BrowserMessage::OpenFolder) => {
                 return self.open_folder_dialog();
             }
 
-            Message::FolderChosen(path) => {
+            Message::Browser(BrowserMessage::FolderChosen(path)) => {
                 if let Some(dir) = path {
                     return self.open_folder(dir);
                 }
             }
 
-            Message::NewAnnotation => {
+            Message::Annotation(AnnotationMessage::NewAnnotation) => {
                 let worker = self.worker.clone();
                 return cosmic::task::future(async move {
                     let (document, result) = worker.op(None, Command::New).await;
                     match document {
-                        Some(document) => Message::AnnotationOpened {
-                            document: Some(document),
-                            name: String::from("Untitled"),
-                            save_target: None,
-                            dirty: true,
-                        },
+                        Some(document) => {
+                            Message::Annotation(AnnotationMessage::AnnotationOpened {
+                                document: Some(document),
+                                name: String::from("Untitled"),
+                                save_target: None,
+                                dirty: true,
+                            })
+                        }
                         None => {
                             tracing::error!("failed to create annotation: {result:?}");
-                            Message::AnnotationOpened {
+                            Message::Annotation(AnnotationMessage::AnnotationOpened {
                                 document: None,
                                 name: String::new(),
                                 save_target: None,
                                 dirty: false,
-                            }
+                            })
                         }
                     }
                 });
             }
 
-            Message::OpenAnnotationFile => {
+            Message::Annotation(AnnotationMessage::OpenAnnotationFile) => {
                 return cosmic::task::future(async move {
                     let path = cosmic::dialog::file_chooser::open::Dialog::new()
                         .open_file()
                         .await
                         .ok()
                         .and_then(|response| response.url().to_file_path().ok());
-                    Message::AnnotationFileChosen(path)
+                    Message::Annotation(AnnotationMessage::AnnotationFileChosen(path))
                 });
             }
 
-            Message::AnnotationFileChosen(path) => {
+            Message::Annotation(AnnotationMessage::AnnotationFileChosen(path)) => {
                 let Some(path) = path else {
                     return iced::Task::none();
                 };
                 return self.open_annotation_task(path);
             }
 
-            Message::OpenForEditing => {
+            Message::Annotation(AnnotationMessage::OpenForEditing) => {
                 let Some(path) = self.take_action_target() else {
                     return iced::Task::none();
                 };
                 return self.open_annotation_task(path);
             }
 
-            Message::ContextOpened { path } => {
+            Message::Browser(BrowserMessage::ContextOpened { path }) => {
                 self.context_target = Some(path);
             }
 
-            Message::AddToAnnotation { document } => {
+            Message::Annotation(AnnotationMessage::AddToAnnotation { document }) => {
                 let Some(source) = self.take_action_target() else {
                     return iced::Task::none();
                 };
                 return self.add_to_annotation(document, source);
             }
 
-            Message::AnnotationPagesAdded { document, ok } => {
+            Message::Annotation(AnnotationMessage::AnnotationPagesAdded { document, ok }) => {
                 if !ok {
                     tracing::error!("failed to add source to annotation {document:?}");
                     return iced::Task::none();
@@ -2417,18 +2425,18 @@ impl AppModel {
                 return self.request_annotation_sizes(tab, document);
             }
 
-            Message::AnnotationOpened {
+            Message::Annotation(AnnotationMessage::AnnotationOpened {
                 document,
                 name,
                 save_target,
                 dirty,
-            } => {
+            }) => {
                 if let Some(document) = document {
                     return self.open_annotation_tab(document, name, save_target, dirty);
                 }
             }
 
-            Message::AnnotationSizesKnown { tab, sizes } => {
+            Message::Annotation(AnnotationMessage::AnnotationSizesKnown { tab, sizes }) => {
                 let Some(sizes) = sizes else {
                     tracing::error!("failed to read annotation page sizes");
                     return iced::Task::none();
@@ -2454,7 +2462,7 @@ impl AppModel {
                 return cosmic::task::batch(vec![thumbs, page]);
             }
 
-            Message::AnnotationThumbsReady { tab, thumbs } => {
+            Message::Annotation(AnnotationMessage::AnnotationThumbsReady { tab, thumbs }) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     for (page, rgba) in thumbs {
                         if let Some((width, height, rgba)) = rgba {
@@ -2468,7 +2476,7 @@ impl AppModel {
                 }
             }
 
-            Message::AnnotationPageRendered { tab, page, rgba } => {
+            Message::Annotation(AnnotationMessage::AnnotationPageRendered { tab, page, rgba }) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     if state.selected != page {
                         // A stale render raced a page change; drop it.
@@ -2495,17 +2503,17 @@ impl AppModel {
                 }
             }
 
-            Message::AnnotationPageSelected { tab, page } => {
+            Message::Annotation(AnnotationMessage::AnnotationPageSelected { tab, page }) => {
                 let finish = self.finish_pending_text(tab);
                 let select = self.annotation_select_page(tab, page);
                 return cosmic::task::batch(vec![finish, select]);
             }
 
-            Message::AnnotationRotatePage {
+            Message::Annotation(AnnotationMessage::AnnotationRotatePage {
                 tab,
                 page,
                 clockwise,
-            } => {
+            }) => {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
@@ -2516,7 +2524,7 @@ impl AppModel {
                 );
             }
 
-            Message::AnnotationDeletePage { tab, page } => {
+            Message::Annotation(AnnotationMessage::AnnotationDeletePage { tab, page }) => {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
@@ -2531,7 +2539,7 @@ impl AppModel {
                 return cosmic::task::batch(vec![finish, mutate]);
             }
 
-            Message::AnnotationMovePage { tab, page, up } => {
+            Message::Annotation(AnnotationMessage::AnnotationMovePage { tab, page, up }) => {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
@@ -2557,7 +2565,11 @@ impl AppModel {
                 return cosmic::task::batch(vec![finish, mutate]);
             }
 
-            Message::AnnotationFormOptionPicked { tab, field, option } => {
+            Message::Annotation(AnnotationMessage::AnnotationFormOptionPicked {
+                tab,
+                field,
+                option,
+            }) => {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
@@ -2579,14 +2591,14 @@ impl AppModel {
                             },
                         )
                         .await;
-                    Message::AnnotationFormMutated {
+                    Message::Annotation(AnnotationMessage::AnnotationFormMutated {
                         tab,
                         ok: matches!(result, CommandResult::Ok),
-                    }
+                    })
                 });
             }
 
-            Message::AnnotationFormMenuClosed => {
+            Message::Annotation(AnnotationMessage::AnnotationFormMenuClosed) => {
                 if let Some(tab) = self.active_tab()
                     && let Some(state) = self.annotation_ui.get_mut(&tab)
                 {
@@ -2595,7 +2607,7 @@ impl AppModel {
                 return iced::Task::none();
             }
 
-            Message::AnnotationFormMutated { tab, ok } => {
+            Message::Annotation(AnnotationMessage::AnnotationFormMutated { tab, ok }) => {
                 if !ok {
                     tracing::error!("form field interaction failed");
                     return iced::Task::none();
@@ -2604,7 +2616,7 @@ impl AppModel {
                 return self.render_current_annotation_page(tab);
             }
 
-            Message::AnnotationPageMutated { tab, ok } => {
+            Message::Annotation(AnnotationMessage::AnnotationPageMutated { tab, ok }) => {
                 if !ok {
                     tracing::error!("annotation page mutation failed");
                     return iced::Task::none();
@@ -2618,7 +2630,7 @@ impl AppModel {
                 return cosmic::task::batch(vec![sizes, title]);
             }
 
-            Message::AnnotationToolToggled(tool) => {
+            Message::Annotation(AnnotationMessage::AnnotationToolToggled(tool)) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2635,7 +2647,7 @@ impl AppModel {
                 return finish;
             }
 
-            Message::AnnotationFontSizeChanged(size) => {
+            Message::Annotation(AnnotationMessage::AnnotationFontSizeChanged(size)) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2652,7 +2664,7 @@ impl AppModel {
                 return self.update_pending_text(tab, document, page);
             }
 
-            Message::AnnotationColorChanged(color) => {
+            Message::Annotation(AnnotationMessage::AnnotationColorChanged(color)) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2668,7 +2680,12 @@ impl AppModel {
                 return self.update_pending_text(tab, document, page);
             }
 
-            Message::AnnotationPointerClicked { tab, x, y, anchor } => {
+            Message::Annotation(AnnotationMessage::AnnotationPointerClicked {
+                tab,
+                x,
+                y,
+                anchor,
+            }) => {
                 // Any click dismisses an open option list first; a click on a
                 // choice field opens it again at the new position.
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
@@ -2713,26 +2730,26 @@ impl AppModel {
                         } => (annotations, fields),
                         _ => (Vec::new(), Vec::new()),
                     };
-                    Message::AnnotationTargetsKnown {
+                    Message::Annotation(AnnotationMessage::AnnotationTargetsKnown {
                         tab,
                         annotations,
                         fields,
                         x,
                         y,
                         anchor,
-                    }
+                    })
                 });
                 return cosmic::task::batch(vec![finish, click]);
             }
 
-            Message::AnnotationTargetsKnown {
+            Message::Annotation(AnnotationMessage::AnnotationTargetsKnown {
                 tab,
                 annotations,
                 fields,
                 x,
                 y,
                 anchor,
-            } => {
+            }) => {
                 let is_text = self
                     .annotation_ui
                     .get(&tab)
@@ -2743,7 +2760,7 @@ impl AppModel {
                 return self.hit_form_field(tab, fields, x, y, anchor);
             }
 
-            Message::AnnotationTextKey(key) => {
+            Message::Annotation(AnnotationMessage::AnnotationTextKey(key)) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2817,7 +2834,7 @@ impl AppModel {
                 return self.update_pending_text(tab, document, page);
             }
 
-            Message::AnnotationTextTyped(text) => {
+            Message::Annotation(AnnotationMessage::AnnotationTextTyped(text)) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2857,7 +2874,7 @@ impl AppModel {
                 return self.update_pending_text(tab, document, page);
             }
 
-            Message::CaretTicked => {
+            Message::Annotation(AnnotationMessage::CaretTicked) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2869,13 +2886,13 @@ impl AppModel {
                 return iced::Task::none();
             }
 
-            Message::AnnotationTextCreated {
+            Message::Annotation(AnnotationMessage::AnnotationTextCreated {
                 tab,
                 index,
                 origin,
                 max_width,
                 caret,
-            } => {
+            }) => {
                 let Some(index) = index else {
                     tracing::error!("failed to create the free-text annotation");
                     return iced::Task::none();
@@ -2899,7 +2916,7 @@ impl AppModel {
                 return cosmic::task::batch(vec![title, render]);
             }
 
-            Message::AnnotationTextMutated { tab, ok, caret } => {
+            Message::Annotation(AnnotationMessage::AnnotationTextMutated { tab, ok, caret }) => {
                 if !ok {
                     tracing::error!("free-text annotation update failed");
                     return iced::Task::none();
@@ -2915,12 +2932,12 @@ impl AppModel {
                 return cosmic::task::batch(vec![title, render]);
             }
 
-            Message::AnnotationViewerStateChanged {
+            Message::Annotation(AnnotationMessage::AnnotationViewerStateChanged {
                 tab,
                 scale,
                 offset_x,
                 offset_y,
-            } => {
+            }) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     state.view.fit = false;
                     state.view.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
@@ -2932,15 +2949,15 @@ impl AppModel {
                 }
             }
 
-            Message::SaveAnnotation => {
+            Message::Annotation(AnnotationMessage::SaveAnnotation) => {
                 return self.save_active_annotation(false);
             }
 
-            Message::SaveAnnotationAs => {
+            Message::Annotation(AnnotationMessage::SaveAnnotationAs) => {
                 return self.save_active_annotation(true);
             }
 
-            Message::RenameAnnotation => {
+            Message::Annotation(AnnotationMessage::RenameAnnotation) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -2962,19 +2979,19 @@ impl AppModel {
                 return iced::Task::none();
             }
 
-            Message::RenameAnnotationChanged(text) => {
+            Message::Annotation(AnnotationMessage::RenameAnnotationChanged(text)) => {
                 if let Some(draft) = self.rename.as_mut() {
                     draft.text = text;
                 }
                 return iced::Task::none();
             }
 
-            Message::RenameAnnotationCancelled => {
+            Message::Annotation(AnnotationMessage::RenameAnnotationCancelled) => {
                 self.rename = None;
                 return iced::Task::none();
             }
 
-            Message::RenameAnnotationConfirmed => {
+            Message::Annotation(AnnotationMessage::RenameAnnotationConfirmed) => {
                 let Some(draft) = self.rename.take() else {
                     return iced::Task::none();
                 };
@@ -2992,40 +3009,42 @@ impl AppModel {
                 return cosmic::task::future(async move {
                     let result = storage::document::rename_stem(&source, &stem)
                         .map_err(|err| err.to_string());
-                    Message::AnnotationRenamed { tab, stem, result }
+                    Message::Annotation(AnnotationMessage::AnnotationRenamed { tab, stem, result })
                 });
             }
 
-            Message::AnnotationRenamed { tab, stem, result } => match result {
-                Ok(path) => {
-                    let new_name = path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .map(str::to_string);
-                    if let Some(TabContent::Annotation {
-                        name, save_target, ..
-                    }) = self.tabs.get_mut(&tab)
-                    {
-                        *save_target = Some(path);
-                        if let Some(new_name) = new_name {
-                            *name = new_name;
+            Message::Annotation(AnnotationMessage::AnnotationRenamed { tab, stem, result }) => {
+                match result {
+                    Ok(path) => {
+                        let new_name = path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .map(str::to_string);
+                        if let Some(TabContent::Annotation {
+                            name, save_target, ..
+                        }) = self.tabs.get_mut(&tab)
+                        {
+                            *save_target = Some(path);
+                            if let Some(new_name) = new_name {
+                                *name = new_name;
+                            }
                         }
+                        // The tab title follows the display name.
+                        if let Some(TabContent::Annotation { name, .. }) = self.tabs.get(&tab) {
+                            self.tab_model.text_set(tab, name.clone());
+                        }
+                        return self.update_title();
                     }
-                    // The tab title follows the display name.
-                    if let Some(TabContent::Annotation { name, .. }) = self.tabs.get(&tab) {
-                        self.tab_model.text_set(tab, name.clone());
+                    Err(err) => {
+                        // Reopen the dialog with the input, so it is not lost.
+                        tracing::error!("failed to rename annotation: {err}");
+                        self.rename = Some(RenameDraft { tab, text: stem });
+                        return iced::Task::none();
                     }
-                    return self.update_title();
                 }
-                Err(err) => {
-                    // Reopen the dialog with the input, so it is not lost.
-                    tracing::error!("failed to rename annotation: {err}");
-                    self.rename = Some(RenameDraft { tab, text: stem });
-                    return iced::Task::none();
-                }
-            },
+            }
 
-            Message::SaveTargetChosen(path) => {
+            Message::Annotation(AnnotationMessage::SaveTargetChosen(path)) => {
                 let Some(path) = path else {
                     return iced::Task::none();
                 };
@@ -3038,7 +3057,7 @@ impl AppModel {
                 return self.save_annotation_to(tab, document, path);
             }
 
-            Message::AnnotationSaved { tab, path, ok } => {
+            Message::Annotation(AnnotationMessage::AnnotationSaved { tab, path, ok }) => {
                 if ok {
                     if let Some(TabContent::Annotation {
                         name,
@@ -3063,7 +3082,7 @@ impl AppModel {
                 return self.update_title();
             }
 
-            Message::FolderListed { dir, result } => {
+            Message::Browser(BrowserMessage::FolderListed { dir, result }) => {
                 let tab = self.tabs.iter().find_map(|(tab, content)| {
                     matches!(content, TabContent::Folder { path, .. } if path == &dir)
                         .then_some(*tab)
@@ -3093,7 +3112,7 @@ impl AppModel {
                 }
             }
 
-            Message::PagesKnown { path, pages } => {
+            Message::Browser(BrowserMessage::PagesKnown { path, pages }) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -3121,7 +3140,7 @@ impl AppModel {
                 }
             }
 
-            Message::StripThumbsReady { tab, thumbs } => {
+            Message::Browser(BrowserMessage::StripThumbsReady { tab, thumbs }) => {
                 if let Some(state) = self.tab_ui.get_mut(&tab) {
                     for (index, rgba) in thumbs {
                         if let Some(entry) = state.entries.get_mut(index)
@@ -3135,7 +3154,7 @@ impl AppModel {
                 }
             }
 
-            Message::PreviewSizesKnown { path, sizes } => {
+            Message::Browser(BrowserMessage::PreviewSizesKnown { path, sizes }) => {
                 // Only for the target currently shown.
                 if self.displayed_target != Some(Target::File { path: path.clone() }) {
                     return iced::Task::none();
@@ -3158,7 +3177,7 @@ impl AppModel {
                 }
             }
 
-            Message::PreviewPagesRendered { path, zoom, pages } => {
+            Message::Browser(BrowserMessage::PreviewPagesRendered { path, zoom, pages }) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -3212,12 +3231,12 @@ impl AppModel {
                 }
             }
 
-            Message::PreviewScrolled {
+            Message::Browser(BrowserMessage::PreviewScrolled {
                 path,
                 offset_y,
                 viewport_height,
                 viewport_width,
-            } => {
+            }) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
@@ -3246,7 +3265,7 @@ impl AppModel {
                 return self.request_preview_window(&path, visible);
             }
 
-            Message::PreviewWheel { path, delta } => {
+            Message::Browser(BrowserMessage::PreviewWheel { path, delta }) => {
                 let steps = match delta {
                     mouse::ScrollDelta::Lines { y, .. } => y,
                     mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
@@ -3257,11 +3276,11 @@ impl AppModel {
                 return self.zoom_preview(&path, steps);
             }
 
-            Message::StripScrolled {
+            Message::Browser(BrowserMessage::StripScrolled {
                 tab,
                 offset_y,
                 viewport_height,
-            } => {
+            }) => {
                 let Some(state) = self.tab_ui.get(&tab) else {
                     return iced::Task::none();
                 };
@@ -3273,28 +3292,28 @@ impl AppModel {
                 return self.request_strip_thumbs(tab, first..last.min(state.entries.len()));
             }
 
-            Message::StripDoubleClicked(index) => {
+            Message::Browser(BrowserMessage::StripDoubleClicked(index)) => {
                 return self.toggle_expand(index);
             }
 
-            Message::FileRendered { path, rgba } => {
+            Message::Browser(BrowserMessage::FileRendered { path, rgba }) => {
                 if self.displayed_target == Some(Target::File { path }) {
                     self.apply_image(rgba);
                 }
             }
 
-            Message::PageRendered { path, page, rgba } => {
+            Message::Browser(BrowserMessage::PageRendered { path, page, rgba }) => {
                 if self.displayed_target == Some(Target::Page { path, page }) {
                     self.apply_image(rgba);
                 }
             }
 
-            Message::ViewerStateChanged {
+            Message::Browser(BrowserMessage::ViewerStateChanged {
                 target,
                 scale,
                 offset_x,
                 offset_y,
-            } => {
+            }) => {
                 // Only apply when the reported target is still displayed.
                 if self.displayed_target.as_ref() == Some(&target)
                     && let Some(view) = self.displayed_view_mut()
@@ -3306,73 +3325,73 @@ impl AppModel {
                 }
             }
 
-            Message::ZoomIn => return self.zoom_by(1.0),
+            Message::View(ViewMessage::ZoomIn) => return self.zoom_by(1.0),
 
-            Message::ZoomOut => return self.zoom_by(-1.0),
+            Message::View(ViewMessage::ZoomOut) => return self.zoom_by(-1.0),
 
-            Message::ZoomBy(steps) => {
+            Message::View(ViewMessage::ZoomBy(steps)) => {
                 if steps == 0.0 {
                     return iced::Task::none();
                 }
                 return self.zoom_by(steps);
             }
 
-            Message::Zoom100 => {
+            Message::View(ViewMessage::Zoom100) => {
                 return self.set_zoom(1.0);
             }
 
-            Message::ModifiersChanged(modifiers) => {
+            Message::App(AppMessage::ModifiersChanged(modifiers)) => {
                 self.keyboard_modifiers = modifiers;
             }
 
-            Message::ZoomToFit => {
+            Message::View(ViewMessage::ZoomToFit) => {
                 return self.set_fit();
             }
 
-            Message::RotateClockwise => {
+            Message::View(ViewMessage::RotateClockwise) => {
                 return self.transform_view(90, false, false);
             }
 
-            Message::RotateCounterClockwise => {
+            Message::View(ViewMessage::RotateCounterClockwise) => {
                 return self.transform_view(270, false, false);
             }
 
-            Message::FlipHorizontal => {
+            Message::View(ViewMessage::FlipHorizontal) => {
                 return self.transform_view(0, true, false);
             }
 
-            Message::FlipVertical => {
+            Message::View(ViewMessage::FlipVertical) => {
                 return self.transform_view(0, false, true);
             }
 
-            Message::ToggleFullscreen => {
+            Message::View(ViewMessage::ToggleFullscreen) => {
                 if let Some(window_id) = self.core.main_window_id() {
                     return cosmic::command::toggle_maximize(window_id);
                 }
             }
 
-            Message::ToggleNavPanel => {
+            Message::View(ViewMessage::ToggleNavPanel) => {
                 self.show_nav_panel = !self.show_nav_panel;
             }
 
-            Message::ToggleAbout => {
+            Message::View(ViewMessage::ToggleAbout) => {
                 self.core.window.show_context = !self.core.window.show_context;
             }
 
-            Message::LaunchUrl(url) => match open::that_detached(&url) {
+            Message::View(ViewMessage::LaunchUrl(url)) => match open::that_detached(&url) {
                 Ok(()) => {}
                 Err(err) => {
                     tracing::error!("failed to open {url:?}: {err}");
                 }
             },
 
-            Message::Noop => {}
+            Message::App(AppMessage::Noop) => {}
 
-            Message::Surface(action) => {
+            Message::App(AppMessage::Surface(action)) => {
                 return cosmic::task::message(cosmic::Action::Surface(action));
             }
 
-            Message::Quit => {
+            Message::App(AppMessage::Quit) => {
                 self.save_session();
                 return iced::exit();
             }

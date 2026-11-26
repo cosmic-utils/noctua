@@ -23,7 +23,9 @@ use noctua_core::storage;
 
 use crate::config::NoctuaConfig;
 use crate::fl;
-use crate::message::{MenuAction, Message};
+use crate::message::{
+    AnnotationMessage, AppMessage, BrowserMessage, MenuAction, Message, ViewMessage,
+};
 use crate::model::{AnnotationTool, AppModel, TabContent};
 
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
@@ -118,7 +120,7 @@ impl cosmic::Application for AppModel {
         // Standard nav-panel toggle, like COSMIC Files.
         let nav_toggle = cosmic::widget::nav_bar_toggle()
             .active(self.show_nav_panel)
-            .on_toggle(Message::ToggleNavPanel)
+            .on_toggle(Message::View(ViewMessage::ToggleNavPanel))
             .into();
 
         // Build the File menu items dynamically so the "Add to Annotation"
@@ -237,8 +239,8 @@ impl cosmic::Application for AppModel {
 
         Some(context_drawer::about(
             &self.about,
-            |url| Message::LaunchUrl(url.to_string()),
-            Message::ToggleAbout,
+            |url| Message::View(ViewMessage::LaunchUrl(url.to_string())),
+            Message::View(ViewMessage::ToggleAbout),
         ))
     }
 
@@ -278,7 +280,7 @@ impl cosmic::Application for AppModel {
             .with((key_binds, typing_text))
             .filter_map(|((key_binds, typing_text), event)| match event {
                 iced::keyboard::Event::ModifiersChanged(modifiers) => {
-                    Some(Message::ModifiersChanged(modifiers))
+                    Some(Message::App(AppMessage::ModifiersChanged(modifiers)))
                 }
                 iced::keyboard::Event::KeyPressed {
                     key,
@@ -305,7 +307,9 @@ impl cosmic::Application for AppModel {
                             )
                         );
                         if named {
-                            return Some(Message::AnnotationTextKey(key));
+                            return Some(Message::Annotation(
+                                AnnotationMessage::AnnotationTextKey(key),
+                            ));
                         }
 
                         // Ctrl shortcuts stay shortcuts; AltGr types characters.
@@ -315,7 +319,11 @@ impl cosmic::Application for AppModel {
 
                         // `text` already has Shift, AltGr and the keyboard
                         // layout applied; `key` is the unmodified key.
-                        return text.map(|text| Message::AnnotationTextTyped(text.to_string()));
+                        return text.map(|text| {
+                            Message::Annotation(AnnotationMessage::AnnotationTextTyped(
+                                text.to_string(),
+                            ))
+                        });
                     }
 
                     if let Some((_, action)) = key_binds
@@ -332,10 +340,18 @@ impl cosmic::Application for AppModel {
                     }
 
                     match key {
-                        iced::keyboard::Key::Named(Named::ArrowLeft) => Some(Message::PrevEntry),
-                        iced::keyboard::Key::Named(Named::ArrowRight) => Some(Message::NextEntry),
-                        iced::keyboard::Key::Named(Named::ArrowUp) => Some(Message::PrevPage),
-                        iced::keyboard::Key::Named(Named::ArrowDown) => Some(Message::NextPage),
+                        iced::keyboard::Key::Named(Named::ArrowLeft) => {
+                            Some(Message::Browser(BrowserMessage::PrevEntry))
+                        }
+                        iced::keyboard::Key::Named(Named::ArrowRight) => {
+                            Some(Message::Browser(BrowserMessage::NextEntry))
+                        }
+                        iced::keyboard::Key::Named(Named::ArrowUp) => {
+                            Some(Message::Browser(BrowserMessage::PrevPage))
+                        }
+                        iced::keyboard::Key::Named(Named::ArrowDown) => {
+                            Some(Message::Browser(BrowserMessage::NextPage))
+                        }
                         _ => None,
                     }
                 }
@@ -354,7 +370,7 @@ impl cosmic::Application for AppModel {
         iced::Subscription::batch(vec![
             keyboard,
             iced::time::every(std::time::Duration::from_millis(CARET_BLINK_MILLIS))
-                .map(|_| Message::CaretTicked),
+                .map(|_| Message::Annotation(AnnotationMessage::CaretTicked)),
         ])
     }
 

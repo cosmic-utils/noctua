@@ -12,7 +12,7 @@ use cosmic::prelude::*;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::widget::{self, menu};
 
-use crate::message::Message;
+use crate::message::{AppMessage, BrowserMessage, Message};
 use crate::model::{StripEntry, Target};
 use crate::widget::strip;
 
@@ -91,15 +91,17 @@ pub(crate) fn thumbnail_strip<'a>(
         // twice (`mouse_area::on_press` runs on every press, also the second
         // one of a double-click).
         let interactive: Element<'_, Message> = widget::mouse_area(entry_widget)
-            .on_release(Message::StripActivated(index))
-            .on_double_click(Message::StripDoubleClicked(index))
+            .on_release(Message::Browser(BrowserMessage::StripActivated(index)))
+            .on_double_click(Message::Browser(BrowserMessage::StripDoubleClicked(index)))
             .into();
 
         // File entries offer a right-click context menu.
         let interactive: Element<'_, Message> = if let Target::File { path } = &entry.target {
             cosmic::widget::context_menu(interactive, file_menu(path))
-                .on_open(Message::ContextOpened { path: path.clone() })
-                .on_surface_action(Message::Surface)
+                .on_open(Message::Browser(BrowserMessage::ContextOpened {
+                    path: path.clone(),
+                }))
+                .on_surface_action(|action| Message::App(AppMessage::Surface(action)))
                 .into()
         } else {
             interactive
@@ -119,10 +121,12 @@ pub(crate) fn thumbnail_strip<'a>(
         // Reserve the scrollbar width instead of overlaying the thumbnails,
         // so the gap to the scrollbar matches the gap to the panel edge.
         .spacing(0.0)
-        .on_scroll(move |viewport| Message::StripScrolled {
-            tab,
-            offset_y: viewport.absolute_offset().y,
-            viewport_height: viewport.bounds().height,
+        .on_scroll(move |viewport| {
+            Message::Browser(BrowserMessage::StripScrolled {
+                tab,
+                offset_y: viewport.absolute_offset().y,
+                viewport_height: viewport.bounds().height,
+            })
         });
 
     // The strip panel: fixed-width, scrollable thumbnail column.

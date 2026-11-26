@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // ui/cosmic/src/message.rs
 //
-// The language of the UI: messages emitted by the application and its widgets.
+// The language of the UI: messages emitted by widgets, grouped by the part of
+// the application they drive.
 
 use std::path::PathBuf;
 
@@ -22,118 +23,155 @@ use crate::model::{AnnotationTool, Rgba, Target};
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// A tab in the tab strip was activated.
+    App(AppMessage),
+    Browser(BrowserMessage),
+    Annotation(AnnotationMessage),
+    View(ViewMessage),
+}
+
+/// Whole-application messages that do not belong to one feature area.
+#[derive(Debug, Clone)]
+pub enum AppMessage {
+    ModifiersChanged(Modifiers),
+    Noop,
+    Surface(cosmic::surface::Action<Message>),
+    Quit,
+}
+
+/// Folder and browser messages: tabs, strip and the document preview.
+#[derive(Debug, Clone)]
+pub enum BrowserMessage {
     TabActivated(Entity),
-    /// The close button of a tab was pressed.
     TabCloseRequested(Entity),
-    /// Close the active tab.
     CloseTab,
-    /// An entry of the thumbnail strip was activated (0-based index).
     StripActivated(usize),
-    /// An entry of the thumbnail strip was double-clicked: toggle the in-strip
-    /// page expansion of a multi-page PDF.
     StripDoubleClicked(usize),
-    /// Move to the previous strip entry.
     PrevEntry,
-    /// Move to the next strip entry.
     NextEntry,
-    /// Scroll the active preview one page up.
     PrevPage,
-    /// Scroll the active preview one page down.
     NextPage,
-    /// The Open Folder menu entry was activated.
     OpenFolder,
-    /// The folder dialog returned a result.
     FolderChosen(Option<PathBuf>),
-    /// Create a new, empty annotation tab.
-    NewAnnotation,
-    /// Open the annotation-file chooser.
-    OpenAnnotationFile,
-    /// The annotation-file chooser returned a result.
-    AnnotationFileChosen(Option<PathBuf>),
-    /// Open the currently shown document for editing: create an annotation tab.
-    OpenForEditing,
-    /// The context menu opened on a source file; marks the right-clicked path.
+    FolderListed {
+        dir: PathBuf,
+        result: Result<Vec<BrowserEntry>, String>,
+    },
     ContextOpened {
         path: PathBuf,
     },
-    /// Insert the currently shown document into an existing annotation tab.
+    PagesKnown {
+        path: PathBuf,
+        pages: Option<u32>,
+    },
+    StripThumbsReady {
+        tab: Entity,
+        thumbs: Vec<(usize, Option<Rgba>)>,
+    },
+    PreviewSizesKnown {
+        path: PathBuf,
+        sizes: Option<Vec<(f32, f32)>>,
+    },
+    PreviewPagesRendered {
+        path: PathBuf,
+        zoom: f32,
+        pages: Vec<(u32, u32, u32, Vec<u8>)>,
+    },
+    PreviewScrolled {
+        path: PathBuf,
+        offset_y: f32,
+        viewport_height: f32,
+        viewport_width: f32,
+    },
+    PreviewWheel {
+        path: PathBuf,
+        delta: mouse::ScrollDelta,
+    },
+    StripScrolled {
+        tab: Entity,
+        offset_y: f32,
+        viewport_height: f32,
+    },
+    FileRendered {
+        path: PathBuf,
+        rgba: Option<(u32, u32, Vec<u8>)>,
+    },
+    PageRendered {
+        path: PathBuf,
+        page: u32,
+        rgba: Option<(u32, u32, Vec<u8>)>,
+    },
+    ViewerStateChanged {
+        target: Target,
+        scale: f32,
+        offset_x: f32,
+        offset_y: f32,
+    },
+}
+
+/// Annotation-tab messages: pages, editing, forms and saving.
+#[derive(Debug, Clone)]
+pub enum AnnotationMessage {
+    NewAnnotation,
+    OpenAnnotationFile,
+    AnnotationFileChosen(Option<PathBuf>),
+    OpenForEditing,
     AddToAnnotation {
         document: DocumentId,
     },
-    /// Adding a source to an annotation finished.
     AnnotationPagesAdded {
         document: DocumentId,
         ok: bool,
     },
-    /// A new annotation tab was opened in the worker. `document` is `None`
-    /// when opening failed; no tab is created in that case.
     AnnotationOpened {
         document: Option<DocumentId>,
         name: String,
         save_target: Option<PathBuf>,
         dirty: bool,
     },
-    /// Page sizes of an annotation document arrived.
     AnnotationSizesKnown {
         tab: Entity,
         sizes: Option<Vec<(f32, f32)>>,
     },
-    /// Thumbnails of an annotation document arrived.
     AnnotationThumbsReady {
         tab: Entity,
         thumbs: Vec<(u32, Option<Rgba>)>,
     },
-    /// A full-resolution page of an annotation document was rendered.
     AnnotationPageRendered {
         tab: Entity,
         page: u32,
         rgba: Option<Rgba>,
     },
-    /// The user selected a page of an annotation tab (1-based).
     AnnotationPageSelected {
         tab: Entity,
         page: u32,
     },
-    /// Rotate a page of an annotation tab 90° clockwise/counter-clockwise.
     AnnotationRotatePage {
         tab: Entity,
         page: u32,
         clockwise: bool,
     },
-    /// Delete a page of an annotation tab.
     AnnotationDeletePage {
         tab: Entity,
         page: u32,
     },
-    /// Move a page of an annotation tab one step toward the beginning or end.
     AnnotationMovePage {
         tab: Entity,
         page: u32,
         up: bool,
     },
-    /// A page mutation finished; refresh geometry on success.
     AnnotationPageMutated {
         tab: Entity,
         ok: bool,
     },
-    /// Toggle an annotation tool on/off.
     AnnotationToolToggled(AnnotationTool),
-    /// The free-text font size changed.
     AnnotationFontSizeChanged(f32),
-    /// The free-text colour changed.
     AnnotationColorChanged(AnnotationColor),
-    /// A click landed on the annotation page; native image coordinates
-    /// (pixels, origin top-left) plus the same click in the viewer's own
-    /// coordinates, used to anchor overlays such as the option list.
     AnnotationPointerClicked {
         tab: Entity,
         x: f32,
         y: f32,
         anchor: Point,
     },
-    /// The free-text annotations and form fields of the clicked page were
-    /// listed; carries the click context so the handler can hit-test both.
     AnnotationTargetsKnown {
         tab: Entity,
         annotations: Vec<FreeTextAnnotation>,
@@ -142,17 +180,9 @@ pub enum Message {
         y: f32,
         anchor: Point,
     },
-    /// A key press routed to the in-place free-text editor: named keys such as
-    /// Backspace, Delete, Enter, Escape or the arrow keys.
     AnnotationTextKey(Key),
-    /// Text produced by a key press, with Shift, AltGr and the layout already
-    /// applied. This is what gets inserted at the caret.
     AnnotationTextTyped(String),
-    /// The blink timer ticked; toggles the insertion marker while typing.
     CaretTicked,
-    /// A free-text annotation was created; carries its index in the page's
-    /// annotation list, the geometry the edit started with and the insertion
-    /// marker rectangle (page points).
     AnnotationTextCreated {
         tab: Entity,
         index: Option<usize>,
@@ -160,154 +190,62 @@ pub enum Message {
         max_width: f32,
         caret: (f32, f32, f32, f32),
     },
-    /// A free-text annotation was updated or removed; carries the updated
-    /// insertion marker rectangle.
     AnnotationTextMutated {
         tab: Entity,
         ok: bool,
         caret: Option<(f32, f32, f32, f32)>,
     },
-    /// The annotation viewer reported a zoom/pan state change.
     AnnotationViewerStateChanged {
         tab: Entity,
         scale: f32,
         offset_x: f32,
         offset_y: f32,
     },
-    /// Save the active annotation; choose a target first if it has none yet.
     SaveAnnotation,
-    /// Save the active annotation to a new target.
     SaveAnnotationAs,
-    /// The save-target chooser returned a result.
     SaveTargetChosen(Option<PathBuf>),
-    /// Saving an annotation finished; carries the tab, target and outcome.
     AnnotationSaved {
         tab: Entity,
         path: PathBuf,
         ok: bool,
     },
-    /// Rename the target file of the active annotation tab.
     RenameAnnotation,
-    /// The text of the rename dialog changed.
     RenameAnnotationChanged(String),
-    /// The rename dialog was confirmed.
     RenameAnnotationConfirmed,
-    /// The rename dialog was cancelled.
     RenameAnnotationCancelled,
-    /// Renaming an annotation's target file finished; `stem` is the attempted
-    /// name, kept so a failure can reopen the dialog with the input intact.
     AnnotationRenamed {
         tab: Entity,
         stem: String,
         result: Result<PathBuf, String>,
     },
-    /// A form field was toggled or focused; the page is re-rendered so the new
-    /// state is visible.
     AnnotationFormMutated {
         tab: Entity,
         ok: bool,
     },
-    /// An option of the focused choice field was picked; `field` is the
-    /// annotation index and `option` the 0-based position in its option list.
     AnnotationFormOptionPicked {
         tab: Entity,
         field: usize,
         option: usize,
     },
-    /// The option list was dismissed without a pick.
     AnnotationFormMenuClosed,
-    /// The folder content was listed.
-    FolderListed {
-        dir: PathBuf,
-        result: Result<Vec<BrowserEntry>, String>,
-    },
-    /// The worker counted the pages of a PDF selected for expansion.
-    PagesKnown {
-        path: PathBuf,
-        pages: Option<u32>,
-    },
-    /// Thumbnails for strip entries arrived. Guarded by the tab entity.
-    StripThumbsReady {
-        tab: Entity,
-        thumbs: Vec<(usize, Option<Rgba>)>,
-    },
-    /// Page sizes of a preview candidate arrived; one page means the PDF
-    /// is displayed as a single image, more pages build the preview.
-    PreviewSizesKnown {
-        path: PathBuf,
-        sizes: Option<Vec<(f32, f32)>>,
-    },
-    /// Rendered preview pages arrived as (page, width, height, rgba).
-    /// `zoom` separates full renders from thumbnail placeholders.
-    PreviewPagesRendered {
-        path: PathBuf,
-        zoom: f32,
-        pages: Vec<(u32, u32, u32, Vec<u8>)>,
-    },
-    /// The preview was scrolled; carries absolute content offset and the
-    /// viewport size to compute the visible page window.
-    PreviewScrolled {
-        path: PathBuf,
-        offset_y: f32,
-        viewport_height: f32,
-        viewport_width: f32,
-    },
-    /// The mouse wheel scrolled over a PDF preview; Ctrl turns it into a zoom.
-    PreviewWheel {
-        path: PathBuf,
-        delta: mouse::ScrollDelta,
-    },
-    /// The thumbnail strip was scrolled; carries the absolute offset and the
-    /// viewport height to compute the visible tile range.
-    StripScrolled {
-        tab: Entity,
-        offset_y: f32,
-        viewport_height: f32,
-    },
-    /// A raster or SVG file was rendered for the content area.
-    FileRendered {
-        path: PathBuf,
-        rgba: Option<(u32, u32, Vec<u8>)>,
-    },
-    /// A PDF page was rendered for the content area.
-    PageRendered {
-        path: PathBuf,
-        page: u32,
-        rgba: Option<(u32, u32, Vec<u8>)>,
-    },
-    /// The image viewer reported a zoom/pan state change.
-    ViewerStateChanged {
-        target: Target,
-        scale: f32,
-        offset_x: f32,
-        offset_y: f32,
-    },
+}
+
+/// View messages: zoom, rotation and the navigation chrome.
+#[derive(Debug, Clone)]
+pub enum ViewMessage {
     ZoomIn,
     ZoomOut,
     Zoom100,
     ZoomToFit,
-    /// Zoom by the given number of steps (positive in, negative out), produced
-    /// by a wheel scroll over the zoom label.
     ZoomBy(f32),
-    /// Rotate the current single image 90° clockwise.
     RotateClockwise,
-    /// Rotate the current single image 90° counter-clockwise.
     RotateCounterClockwise,
-    /// Mirror the current single image horizontally.
     FlipHorizontal,
-    /// Mirror the current single image vertically.
     FlipVertical,
-    /// The keyboard modifiers changed; tracked to keep widgets in sync.
-    ModifiersChanged(Modifiers),
     ToggleFullscreen,
     ToggleNavPanel,
     ToggleAbout,
     LaunchUrl(String),
-    /// Internal no-op: lets a fire-and-forget task return a message.
-    Noop,
-    /// A surface (popup/submenu) request, routed back to libcosmic.
-    Surface(cosmic::surface::Action<Message>),
-    Quit,
 }
 
 /// Actions offered by the menu bar.
@@ -345,52 +283,70 @@ impl menu::action::MenuAction for MenuAction {
 
     fn message(&self) -> Self::Message {
         match self {
-            MenuAction::OpenFolder => Message::OpenFolder,
-            MenuAction::NewAnnotation => Message::NewAnnotation,
-            MenuAction::OpenAnnotationFile => Message::OpenAnnotationFile,
-            MenuAction::OpenForEditing => Message::OpenForEditing,
-            MenuAction::AddToAnnotation(document) => Message::AddToAnnotation {
-                document: *document,
-            },
-            MenuAction::SavePdf => Message::SaveAnnotation,
-            MenuAction::SavePdfAs => Message::SaveAnnotationAs,
-            MenuAction::RenameAnnotation => Message::RenameAnnotation,
-            MenuAction::CloseTab => Message::CloseTab,
-            MenuAction::ZoomIn => Message::ZoomIn,
-            MenuAction::ZoomOut => Message::ZoomOut,
-            MenuAction::Zoom100 => Message::Zoom100,
-            MenuAction::ZoomToFit => Message::ZoomToFit,
-            MenuAction::RotateClockwise => Message::RotateClockwise,
-            MenuAction::RotateCounterClockwise => Message::RotateCounterClockwise,
-            MenuAction::RotatePageClockwise { tab, page } => Message::AnnotationRotatePage {
-                tab: *tab,
-                page: *page,
-                clockwise: true,
-            },
-            MenuAction::RotatePageCounterClockwise { tab, page } => Message::AnnotationRotatePage {
-                tab: *tab,
-                page: *page,
-                clockwise: false,
-            },
-            MenuAction::DeletePage { tab, page } => Message::AnnotationDeletePage {
-                tab: *tab,
-                page: *page,
-            },
-            MenuAction::MovePageUp { tab, page } => Message::AnnotationMovePage {
-                tab: *tab,
-                page: *page,
-                up: true,
-            },
-            MenuAction::MovePageDown { tab, page } => Message::AnnotationMovePage {
-                tab: *tab,
-                page: *page,
-                up: false,
-            },
-            MenuAction::FlipHorizontal => Message::FlipHorizontal,
-            MenuAction::FlipVertical => Message::FlipVertical,
-            MenuAction::Fullscreen => Message::ToggleFullscreen,
-            MenuAction::About => Message::ToggleAbout,
-            MenuAction::Quit => Message::Quit,
+            MenuAction::OpenFolder => Message::Browser(BrowserMessage::OpenFolder),
+            MenuAction::NewAnnotation => Message::Annotation(AnnotationMessage::NewAnnotation),
+            MenuAction::OpenAnnotationFile => {
+                Message::Annotation(AnnotationMessage::OpenAnnotationFile)
+            }
+            MenuAction::OpenForEditing => Message::Annotation(AnnotationMessage::OpenForEditing),
+            MenuAction::AddToAnnotation(document) => {
+                Message::Annotation(AnnotationMessage::AddToAnnotation {
+                    document: *document,
+                })
+            }
+            MenuAction::SavePdf => Message::Annotation(AnnotationMessage::SaveAnnotation),
+            MenuAction::SavePdfAs => Message::Annotation(AnnotationMessage::SaveAnnotationAs),
+            MenuAction::RenameAnnotation => {
+                Message::Annotation(AnnotationMessage::RenameAnnotation)
+            }
+            MenuAction::CloseTab => Message::Browser(BrowserMessage::CloseTab),
+            MenuAction::ZoomIn => Message::View(ViewMessage::ZoomIn),
+            MenuAction::ZoomOut => Message::View(ViewMessage::ZoomOut),
+            MenuAction::Zoom100 => Message::View(ViewMessage::Zoom100),
+            MenuAction::ZoomToFit => Message::View(ViewMessage::ZoomToFit),
+            MenuAction::RotateClockwise => Message::View(ViewMessage::RotateClockwise),
+            MenuAction::RotateCounterClockwise => {
+                Message::View(ViewMessage::RotateCounterClockwise)
+            }
+            MenuAction::RotatePageClockwise { tab, page } => {
+                Message::Annotation(AnnotationMessage::AnnotationRotatePage {
+                    tab: *tab,
+                    page: *page,
+                    clockwise: true,
+                })
+            }
+            MenuAction::RotatePageCounterClockwise { tab, page } => {
+                Message::Annotation(AnnotationMessage::AnnotationRotatePage {
+                    tab: *tab,
+                    page: *page,
+                    clockwise: false,
+                })
+            }
+            MenuAction::DeletePage { tab, page } => {
+                Message::Annotation(AnnotationMessage::AnnotationDeletePage {
+                    tab: *tab,
+                    page: *page,
+                })
+            }
+            MenuAction::MovePageUp { tab, page } => {
+                Message::Annotation(AnnotationMessage::AnnotationMovePage {
+                    tab: *tab,
+                    page: *page,
+                    up: true,
+                })
+            }
+            MenuAction::MovePageDown { tab, page } => {
+                Message::Annotation(AnnotationMessage::AnnotationMovePage {
+                    tab: *tab,
+                    page: *page,
+                    up: false,
+                })
+            }
+            MenuAction::FlipHorizontal => Message::View(ViewMessage::FlipHorizontal),
+            MenuAction::FlipVertical => Message::View(ViewMessage::FlipVertical),
+            MenuAction::Fullscreen => Message::View(ViewMessage::ToggleFullscreen),
+            MenuAction::About => Message::View(ViewMessage::ToggleAbout),
+            MenuAction::Quit => Message::App(AppMessage::Quit),
         }
     }
 }

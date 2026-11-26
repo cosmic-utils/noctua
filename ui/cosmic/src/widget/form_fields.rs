@@ -19,7 +19,7 @@ use cosmic::widget::segmented_button::Entity;
 
 use noctua_core::pdfium_ops::{FormField, FormFieldKind};
 
-use crate::message::Message;
+use crate::message::{AnnotationMessage, Message};
 
 /// Field flag `kChoiceEdit`: a combo box the user may also type into.
 const CHOICE_EDIT: i32 = 1 << 18;
@@ -114,13 +114,17 @@ pub(crate) fn form_option_list<'a>(tab: Entity, field: &FormField) -> Element<'a
         Cow::Owned(Vec::new()),
         Arc::new(Mutex::new(None)),
         field.selected,
-        move |option| Message::AnnotationFormOptionPicked {
-            tab,
-            field: annotation,
-            option,
+        move |option| {
+            Message::Annotation(AnnotationMessage::AnnotationFormOptionPicked {
+                tab,
+                field: annotation,
+                option,
+            })
         },
         None,
-        Some(Message::AnnotationFormMenuClosed),
+        Some(Message::Annotation(
+            AnnotationMessage::AnnotationFormMenuClosed,
+        )),
     )
     .width(OPTION_LIST_WIDTH)
     .padding(space.space_xxs)

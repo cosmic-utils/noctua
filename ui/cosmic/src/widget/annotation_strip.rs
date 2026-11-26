@@ -9,7 +9,7 @@ use cosmic::prelude::*;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::widget::{self, menu};
 
-use crate::message::Message;
+use crate::message::{AnnotationMessage, AppMessage, Message};
 use crate::model::AnnotationUiState;
 use crate::widget::strip;
 
@@ -42,11 +42,12 @@ pub(crate) fn annotation_strip<'a>(
         )
         .into();
 
-        let interactive =
-            widget::mouse_area(entry).on_release(Message::AnnotationPageSelected { tab, page });
+        let interactive = widget::mouse_area(entry).on_release(Message::Annotation(
+            AnnotationMessage::AnnotationPageSelected { tab, page },
+        ));
         let interactive: Element<'_, Message> =
             cosmic::widget::context_menu(interactive, Some(page_menu(page)))
-                .on_surface_action(Message::Surface)
+                .on_surface_action(|action| Message::App(AppMessage::Surface(action)))
                 .into();
         // Stable identity per page, so this tile keeps its own widget tree even
         // when the page list is reordered or the tab switches strips.
