@@ -5,7 +5,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cosmic::iced::keyboard::Modifiers;
@@ -83,6 +83,15 @@ pub enum Target {
     File { path: PathBuf },
     /// A page of a document (1-based).
     Page { path: PathBuf, page: u32 },
+}
+
+impl Target {
+    /// The file every target refers to.
+    pub(crate) fn path(&self) -> &Path {
+        match self {
+            Target::File { path } | Target::Page { path, .. } => path,
+        }
+    }
 }
 
 /// One entry of the thumbnail strip of a tab.

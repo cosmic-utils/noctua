@@ -476,8 +476,26 @@ impl Page<'_> {
         self.bindings.FPDFPage_GetAnnot(self.handle, index as c_int)
     }
 
-    /// Insert an already placed image object and regenerate the page content.
-    pub(crate) fn insert_image(&mut self, obj: FPDF_PAGEOBJECT) -> Result<(), PdfOpsError> {
+    /// Insert an image object into the page, scaled to `width` × `height`
+    /// points.
+    ///
+    /// Image objects draw in the unit square, so the transform spreads the
+    /// bitmap over the page.
+    pub(crate) fn insert_image(
+        &mut self,
+        obj: FPDF_PAGEOBJECT,
+        width: f32,
+        height: f32,
+    ) -> Result<(), PdfOpsError> {
+        self.bindings.FPDFPageObj_Transform(
+            obj,
+            f64::from(width),
+            0.0,
+            0.0,
+            f64::from(height),
+            0.0,
+            0.0,
+        );
         self.bindings.FPDFPage_InsertObject(self.handle, obj);
         if self.bindings.FPDFPage_GenerateContent(self.handle) == 0 {
             return Err(PdfOpsError::Pdfium(

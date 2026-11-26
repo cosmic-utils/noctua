@@ -1,20 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // ui/cosmic/src/widget/form_fields.rs
 //
-// Hit-testing and field order for interactive form fields. Pure geometry and
-// ordering only: the page is rendered at one pixel per point, so a pointer
-// position in image pixels maps onto a field rectangle in page points without
-// needing the viewer's zoom or pan state.
+// Hit-testing, field order and the option list of interactive form fields.
+// The geometry part is pure: the page is rendered at one pixel per point, so a
+// pointer position in image pixels maps onto a field rectangle in page points
+// without needing the viewer's zoom or pan state. No state is kept here.
 //
-// Reused by every view that shows a page with form fields; it holds no state.
+// Reused by every view that shows a page with form fields.
 
+use std::borrow::Cow;
+use std::sync::{Arc, Mutex};
+
+use cosmic::Element;
 use cosmic::iced::Point;
 use cosmic::iced::mouse;
+use cosmic::widget::dropdown::menu::{Menu, State};
+use cosmic::widget::segmented_button::Entity;
 
 use noctua_core::pdfium_ops::{FormField, FormFieldKind};
 
+use crate::message::Message;
+
 /// Field flag `kChoiceEdit`: a combo box the user may also type into.
 const CHOICE_EDIT: i32 = 1 << 18;
+
+/// Width of the option list, in logical pixels.
+const OPTION_LIST_WIDTH: f32 = 220.0;
 
 /// Index of the field under `point`.
 ///
@@ -86,6 +97,34 @@ pub(crate) fn accepts_text(field: &FormField) -> bool {
 /// Whether the field offers a list of options to pick from.
 pub(crate) fn has_options(field: &FormField) -> bool {
     matches!(field.kind, FormFieldKind::Combo | FormFieldKind::ListBox) && !field.options.is_empty()
+}
+
+/// The option list of a choice field, drawn with cosmic's own dropdown list.
+///
+/// `Menu` is the list, not a widget that places itself, so `popup` is only the
+/// way to turn it into an element; the caller decides where it appears. The
+/// list opens whether or not the click was on a dropdown arrow — the whole
+/// field is the click target.
+pub(crate) fn form_option_list<'a>(tab: Entity, field: &FormField) -> Element<'a, Message> {
+    let space = cosmic::theme::spacing();
+    let annotation = field.index;
+    Menu::new(
+        State::new(),
+        Cow::Owned(field.options.clone()),
+        Cow::Owned(Vec::new()),
+        Arc::new(Mutex::new(None)),
+        field.selected,
+        move |option| Message::AnnotationFormOptionPicked {
+            tab,
+            field: annotation,
+            option,
+        },
+        None,
+        Some(Message::AnnotationFormMenuClosed),
+    )
+    .width(OPTION_LIST_WIDTH)
+    .padding(space.space_xxs)
+    .popup(Point::ORIGIN, 0.0)
 }
 
 /// Caret position inside a text field, in page points: `(x, bottom, height)`.

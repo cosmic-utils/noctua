@@ -3,34 +3,32 @@
 //
 // Pure view: builds widgets from the application model. Never changes state.
 
-use cosmic::iced::alignment::{Horizontal, Vertical};
-use cosmic::iced::keyboard::Modifiers;
+use cosmic::iced::alignment::Alignment;
+use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::mouse;
-use cosmic::iced::{Alignment, ContentFit, Length, Point, Size};
+use cosmic::iced::{Length, Point, Size};
 use cosmic::prelude::*;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::widget::{self, menu, tab_bar};
 
-use std::borrow::Cow;
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 
-use noctua_core::pdfium_ops::FormField;
 use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::storage;
 
 use crate::fl;
 use crate::message::{MenuAction, Message};
-use crate::model::{AnnotationTool, AppModel, TabContent, Target, ViewState};
+use crate::model::{AnnotationTool, AppModel, TabContent, Target};
+use crate::widget::annotation_strip::annotation_strip;
 use crate::widget::document_preview::document_preview;
 use crate::widget::empty_placeholder::empty_placeholder;
-use crate::widget::image_viewer::{TextCaret, Viewer};
+use crate::widget::focus_scope::focus_scope;
+use crate::widget::image_viewer::TextCaret;
 use crate::widget::scroll_zoom::ScrollZoom;
 use crate::widget::thumbnail_strip::thumbnail_strip;
 use crate::widget::toolbar::ResponsiveToolbar;
+use crate::widget::viewer_frame::viewer_frame;
 
 /// Describes the interface based on the current state of the application model.
 ///
@@ -119,7 +117,10 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
         return widget::container(widget::text::body("")).into();
     };
     if matches!(app.tabs.get(&tab), Some(TabContent::Annotation { .. })) {
-        return annotation_strip(app);
+        let Some(state) = app.annotation_ui.get(&tab) else {
+            return widget::container(widget::text::body("")).into();
+        };
+        return annotation_strip(state, tab, &|page| page_context_menu(tab, page));
     }
     let Some(state) = app.tab_ui.get(&tab) else {
         return widget::container(widget::text::body("")).into();
@@ -132,132 +133,6 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
         tab,
         &|_| file_context_menu(app),
     )
-}
-
-/// Tile and panel size of the annotation page strip, matching the folder strip.
-const ANNOTATION_TILE_SIZE: f32 = 136.0;
-const ANNOTATION_PANEL_WIDTH: f32 = 168.0;
-
-/// The page list of an annotation tab: one tile per page, with its number.
-fn annotation_strip(app: &AppModel) -> Element<'_, Message> {
-    let space = cosmic::theme::spacing();
-    let Some(tab) = app.active_tab() else {
-        return widget::container(widget::text::body("")).into();
-    };
-    let Some(state) = app.annotation_ui.get(&tab) else {
-        return widget::container(widget::text::body("")).into();
-    };
-
-    let mut column = widget::column::with_capacity(state.page_sizes.len())
-        .spacing(space.space_xxs)
-        .padding(space.space_xxs)
-        .align_x(Horizontal::Center);
-
-    for (index, _) in state.page_sizes.iter().enumerate() {
-        let page = index as u32 + 1;
-        let is_selected = state.selected == page;
-
-        let tile: Element<'_, Message> = match state.thumbs.get(index).cloned().flatten() {
-            Some(handle) => widget::Image::new(handle)
-                .content_fit(ContentFit::ScaleDown)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            None => widget::text::caption(page.to_string())
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-        };
-
-        let tile = widget::container(tile)
-            .width(Length::Fixed(ANNOTATION_TILE_SIZE))
-            .height(Length::Fixed(ANNOTATION_TILE_SIZE))
-            .padding(space.space_xxs)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center)
-            .class(if is_selected {
-                cosmic::style::Container::Primary
-            } else {
-                cosmic::style::Container::Card
-            });
-
-        let entry: Element<'_, Message> = widget::container(
-            widget::column::with_capacity(2)
-                .spacing(space.space_xxs)
-                .push(tile)
-                .push(widget::text::caption(page.to_string())),
-        )
-        .into();
-
-        let interactive =
-            widget::mouse_area(entry).on_release(Message::AnnotationPageSelected { tab, page });
-        let interactive: Element<'_, Message> =
-            cosmic::widget::context_menu(interactive, Some(page_context_menu(tab, page)))
-                .on_surface_action(Message::Surface)
-                .into();
-        // Stable identity per page, so this tile keeps its own widget tree even
-        // when the page list is reordered or the tab switches strips.
-        column = column.push(widget::id_container(
-            interactive,
-            widget::Id::new(format!("annotation:{tab:?}:page:{page}")),
-        ));
-    }
-
-    widget::container(widget::scrollable(column))
-        .width(Length::Fixed(ANNOTATION_PANEL_WIDTH))
-        .height(Length::Fill)
-        .into()
-}
-
-/// Build the fitted/zoomable viewer for a rendered image, sharing the
-/// `Viewer` wiring between single images and annotation pages. `on_click` is
-/// the position of a click in native image pixels; `caret` is an optional
-/// insertion marker.
-//
-// The arguments mirror the widget's builder; bundling them into a struct would
-// only move the noise to the call sites.
-#[allow(clippy::too_many_arguments)]
-fn viewer_element(
-    handle: &widget::image::Handle,
-    view: ViewState,
-    modifiers: Modifiers,
-    reported_bounds: Rc<Cell<Size>>,
-    cursor: mouse::Interaction,
-    on_state_change: impl Fn(f32, f32, f32) -> Message + 'static,
-    on_click: Option<Box<dyn Fn(Point, Point) -> Message>>,
-    hover_cursor: Option<Box<dyn Fn(Point) -> Option<mouse::Interaction>>>,
-    caret: Option<TextCaret>,
-) -> Element<'static, Message> {
-    let space = cosmic::theme::spacing();
-    let content_fit = if view.fit {
-        ContentFit::ScaleDown
-    } else {
-        ContentFit::None
-    };
-    let (scale, offset_x, offset_y) = if view.fit {
-        (1.0, 0.0, 0.0)
-    } else {
-        (view.scale, view.offset_x, view.offset_y)
-    };
-
-    let mut viewer = Viewer::new(handle.clone())
-        .content_fit(content_fit)
-        .modifiers(modifiers)
-        .cursor(cursor)
-        .reported_bounds(reported_bounds)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .with_state(scale, offset_x, offset_y)
-        .on_state_change(on_state_change)
-        .text_caret(caret);
-    if let Some(hover) = hover_cursor {
-        viewer = viewer.hover_cursor(hover);
-    }
-    if let Some(on_click) = on_click {
-        viewer = viewer.on_click(on_click);
-    }
-
-    widget::container(viewer).padding(space.space_m).into()
 }
 
 /// Build the right-click context menu for a source file: open it for editing
@@ -293,6 +168,10 @@ fn file_context_menu(app: &AppModel) -> Option<Vec<menu::Tree<Message>>> {
 }
 
 /// Wrap `content` in a right-click context menu for `path`, if applicable.
+///
+/// Workaround: no `on_surface_action`, because this libcosmic revision places
+/// a Wayland popup surface away from the click. Without it the menu is drawn
+/// inside the window and cannot extend past its edge.
 fn with_file_context_menu<'a>(
     app: &AppModel,
     path: &Path,
@@ -400,7 +279,11 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
         })
     };
 
-    let element = viewer_element(
+    // While a field or free text is edited, Tab and Escape belong to the page.
+    // An open dialog keeps them for itself.
+    let editing =
+        (state.form_focus.is_some() || state.pending_text.is_some()) && app.rename.is_none();
+    let element: Element<'static, Message> = focus_scope(viewer_frame(
         &current.handle,
         state.view,
         app.keyboard_modifiers,
@@ -425,7 +308,11 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
             move |point: Point| crate::widget::form_fields::cursor_for(&fields, point, image_height)
         })),
         caret,
-    );
+    ))
+    .active(editing)
+    .capture(&[Named::Tab, Named::Escape])
+    .on_key(Message::AnnotationTextKey)
+    .into();
 
     // The option list of a choice field is drawn over the page where the field
     // was clicked. The viewer sits inside its frame's padding, so the click
@@ -446,40 +333,9 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
             anchor.x + padding,
             anchor.y + padding,
         )))
-        .popup(form_option_list(tab, field))
+        .popup(crate::widget::form_fields::form_option_list(tab, field))
         .on_close(Message::AnnotationFormMenuClosed)
         .into()
-}
-
-/// Width of the option list, in logical pixels.
-const FORM_MENU_WIDTH: f32 = 220.0;
-
-/// The option list of a choice field, drawn with cosmic's own dropdown list.
-///
-/// `Menu` is the list, not a widget that places itself, so `popup` is only the
-/// way to turn it into an element; the surrounding popover decides where it
-/// appears. The list opens whether or not the click was on a dropdown arrow —
-/// the whole field is the click target.
-fn form_option_list<'a>(tab: Entity, field: &FormField) -> Element<'a, Message> {
-    let space = cosmic::theme::spacing();
-    let annotation = field.index;
-    widget::dropdown::menu::Menu::new(
-        widget::dropdown::menu::State::new(),
-        Cow::Owned(field.options.clone()),
-        Cow::Owned(Vec::new()),
-        Arc::new(Mutex::new(None)),
-        field.selected,
-        move |option| Message::AnnotationFormOptionPicked {
-            tab,
-            field: annotation,
-            option,
-        },
-        None,
-        Some(Message::AnnotationFormMenuClosed),
-    )
-    .width(FORM_MENU_WIDTH)
-    .padding(space.space_xxs)
-    .popup(Point::ORIGIN, 0.0)
 }
 
 /// Free-text font size presets, in points.
@@ -738,14 +594,12 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
             let Some(target) = app.displayed_target.clone() else {
                 return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
             };
-            let path = match &target {
-                Target::File { path } | Target::Page { path, .. } => path.clone(),
-            };
+            let path = target.path().to_path_buf();
             let state = app
                 .displayed_entry()
                 .map(|entry| entry.view)
                 .unwrap_or_default();
-            let viewer = viewer_element(
+            let viewer = viewer_frame(
                 &image.handle,
                 state,
                 app.keyboard_modifiers,

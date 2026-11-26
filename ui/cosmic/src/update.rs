@@ -313,7 +313,50 @@ impl AppModel {
     /// The active tab's entity, if it is an annotation tab.
     fn active_annotation(&self) -> Option<Entity> {
         let tab = self.active_tab()?;
-        matches!(self.tabs.get(&tab), Some(TabContent::Annotation { .. })).then_some(tab)
+        self.is_annotation_tab(tab).then_some(tab)
+    }
+
+    /// Whether `tab` is an annotation tab.
+    fn is_annotation_tab(&self, tab: Entity) -> bool {
+        matches!(self.tabs.get(&tab), Some(TabContent::Annotation { .. }))
+    }
+
+    /// The annotation tab holding `document`.
+    fn tab_for_document(&self, document: DocumentId) -> Option<Entity> {
+        self.tabs.iter().find_map(|(tab, content)| {
+            matches!(content, TabContent::Annotation { document: d, .. } if *d == document)
+                .then_some(*tab)
+        })
+    }
+
+    /// The folder tab showing `dir`.
+    fn tab_for_folder(&self, dir: &Path) -> Option<Entity> {
+        self.tabs.iter().find_map(|(tab, content)| {
+            matches!(content, TabContent::Folder { path, .. } if path == dir).then_some(*tab)
+        })
+    }
+
+    /// The 1-based page selected in annotation tab `tab`.
+    fn selected_page(&self, tab: Entity) -> Option<u32> {
+        self.annotation_ui.get(&tab).map(|state| state.selected)
+    }
+
+    /// The file a context action applies to: the element that was right
+    /// clicked, otherwise the one being shown.
+    fn take_action_target(&mut self) -> Option<PathBuf> {
+        self.context_target.take().or_else(|| {
+            self.displayed_target
+                .as_ref()
+                .map(|target| target.path().to_path_buf())
+        })
+    }
+
+    /// Path of the shown single file, if the target is a file.
+    fn displayed_file(&self) -> Option<PathBuf> {
+        match &self.displayed_target {
+            Some(Target::File { path }) => Some(path.clone()),
+            _ => None,
+        }
     }
 
     /// The selected strip entry of the active folder tab. Annotation tabs have
@@ -1081,7 +1124,7 @@ impl AppModel {
             return iced::Task::none();
         }
         // Continuous PDF preview: re-render at the new zoom.
-        let Some(Target::File { path }) = self.displayed_target.clone() else {
+        let Some(path) = self.displayed_file() else {
             return iced::Task::none();
         };
         self.zoom_preview(&path, steps)
@@ -1097,7 +1140,7 @@ impl AppModel {
             return iced::Task::none();
         }
         // Continuous PDF preview: re-render at the requested zoom.
-        let Some(Target::File { path }) = self.displayed_target.clone() else {
+        let Some(path) = self.displayed_file() else {
             return iced::Task::none();
         };
         self.render_preview_at(&path, scale)
@@ -1114,7 +1157,7 @@ impl AppModel {
             state.offset_y = 0.0;
             return iced::Task::none();
         }
-        let Some(Target::File { path }) = self.displayed_target.clone() else {
+        let Some(path) = self.displayed_file() else {
             return iced::Task::none();
         };
         self.fit_preview(&path)
@@ -1178,15 +1221,17 @@ impl AppModel {
         );
         self.tab_ui.insert(tab, TabUiState::new(Vec::new()));
 
-        let list_dir = dir.clone();
-        let list = cosmic::task::future(async move {
-            let result = storage::browser::list_documents_async(list_dir)
+        (tab, Self::folder_listing(dir))
+    }
+
+    /// The task that lists `dir` and publishes `Message::FolderListed`.
+    fn folder_listing(dir: PathBuf) -> iced::Task<cosmic::Action<Message>> {
+        cosmic::task::future(async move {
+            let result = storage::browser::list_documents_async(dir.clone())
                 .await
                 .map_err(|e| e.to_string());
             Message::FolderListed { dir, result }
-        });
-
-        (tab, list)
+        })
     }
 
     /// Create an annotation tab for an already-open worker document and
@@ -1340,9 +1385,8 @@ impl AppModel {
         tab: Entity,
         page: u32,
     ) -> iced::Task<cosmic::Action<Message>> {
-        let document = match self.tabs.get(&tab) {
-            Some(TabContent::Annotation { document, .. }) => *document,
-            _ => return iced::Task::none(),
+        let Some(document) = self.annotation_document(tab) else {
+            return iced::Task::none();
         };
         if let Some(state) = self.annotation_ui.get_mut(&tab) {
             state.selected = page;
@@ -1650,7 +1694,7 @@ impl AppModel {
         let Some(document) = self.annotation_document(tab) else {
             return iced::Task::none();
         };
-        let Some(page) = self.annotation_ui.get(&tab).map(|state| state.selected) else {
+        let Some(page) = self.selected_page(tab) else {
             return iced::Task::none();
         };
         self.render_annotation_page(tab, document, page)
@@ -1845,6 +1889,13 @@ impl AppModel {
 
     /// Start listing a folder and open a tab for it.
     fn open_folder(&mut self, dir: PathBuf) -> iced::Task<cosmic::Action<Message>> {
+        // One tab per folder, because listings are matched to tabs by path.
+        if let Some(tab) = self.tab_for_folder(&dir) {
+            self.tab_model.activate(tab);
+            let activate = self.activate_tab();
+            return cosmic::task::batch(vec![activate, Self::folder_listing(dir)]);
+        }
+
         let (tab, list) = self.open_folder_tab(dir);
         self.tab_model.activate(tab);
         let activate = self.activate_tab();
@@ -2228,18 +2279,14 @@ impl AppModel {
             }
 
             Message::PrevPage => {
-                if let Some(tab) = self.active_tab()
-                    && matches!(self.tabs.get(&tab), Some(TabContent::Annotation { .. }))
-                {
+                if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, -1);
                 }
                 return self.scroll_preview_page(-1);
             }
 
             Message::NextPage => {
-                if let Some(tab) = self.active_tab()
-                    && matches!(self.tabs.get(&tab), Some(TabContent::Annotation { .. }))
-                {
+                if let Some(tab) = self.active_annotation() {
                     return self.annotation_step(tab, 1);
                 }
                 return self.scroll_preview_page(1);
@@ -2298,17 +2345,8 @@ impl AppModel {
             }
 
             Message::OpenForEditing => {
-                // Prefer the right-clicked file; fall back to the shown one.
-                let path = match self.context_target.take() {
-                    Some(path) => path,
-                    None => {
-                        let Some(target) = self.displayed_target.clone() else {
-                            return iced::Task::none();
-                        };
-                        match target {
-                            Target::File { path } | Target::Page { path, .. } => path,
-                        }
-                    }
+                let Some(path) = self.take_action_target() else {
+                    return iced::Task::none();
                 };
                 return self.open_annotation_task(path);
             }
@@ -2318,11 +2356,8 @@ impl AppModel {
             }
 
             Message::AddToAnnotation { document } => {
-                let Some(target) = self.displayed_target.clone() else {
+                let Some(source) = self.take_action_target() else {
                     return iced::Task::none();
-                };
-                let source = match target {
-                    Target::File { path } | Target::Page { path, .. } => path,
                 };
                 return self.add_to_annotation(document, source);
             }
@@ -2332,18 +2367,10 @@ impl AppModel {
                     tracing::error!("failed to add source to annotation {document:?}");
                     return iced::Task::none();
                 }
-                let Some(tab) = self.tabs.iter().find_map(|(tab, content)| {
-                    matches!(
-                        content,
-                        TabContent::Annotation { document: d, .. } if *d == document
-                    )
-                    .then_some(*tab)
-                }) else {
+                let Some(tab) = self.tab_for_document(document) else {
                     return iced::Task::none();
                 };
-                if let Some(TabContent::Annotation { dirty, .. }) = self.tabs.get_mut(&tab) {
-                    *dirty = true;
-                }
+                self.mark_annotation_dirty(tab);
                 return self.request_annotation_sizes(tab, document);
             }
 
@@ -2363,9 +2390,8 @@ impl AppModel {
                     tracing::error!("failed to read annotation page sizes");
                     return iced::Task::none();
                 };
-                let document = match self.tabs.get(&tab) {
-                    Some(TabContent::Annotation { document, .. }) => *document,
-                    _ => return iced::Task::none(),
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
                 };
                 let page_count = sizes.len();
                 let selected = if let Some(state) = self.annotation_ui.get_mut(&tab) {
@@ -2437,9 +2463,8 @@ impl AppModel {
                 page,
                 clockwise,
             } => {
-                let document = match self.tabs.get(&tab) {
-                    Some(TabContent::Annotation { document, .. }) => *document,
-                    _ => return iced::Task::none(),
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
                 };
                 return self.annotation_mutate(
                     tab,
@@ -2449,9 +2474,8 @@ impl AppModel {
             }
 
             Message::AnnotationDeletePage { tab, page } => {
-                let document = match self.tabs.get(&tab) {
-                    Some(TabContent::Annotation { document, .. }) => *document,
-                    _ => return iced::Task::none(),
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
                 };
                 // A running text edit refers to this page's annotation list, so
                 // close it before the page changes.
@@ -2465,9 +2489,8 @@ impl AppModel {
             }
 
             Message::AnnotationMovePage { tab, page, up } => {
-                let document = match self.tabs.get(&tab) {
-                    Some(TabContent::Annotation { document, .. }) => *document,
-                    _ => return iced::Task::none(),
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
                 };
                 let page_count = self
                     .annotation_ui
@@ -2523,9 +2546,8 @@ impl AppModel {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
-                let page = match self.annotation_ui.get(&tab) {
-                    Some(state) => state.selected,
-                    None => return iced::Task::none(),
+                let Some(page) = self.selected_page(tab) else {
+                    return iced::Task::none();
                 };
 
                 // Choice fields open their option list where the field was
@@ -2572,7 +2594,7 @@ impl AppModel {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
-                let Some(page) = self.annotation_ui.get(&tab).map(|state| state.selected) else {
+                let Some(page) = self.selected_page(tab) else {
                     return iced::Task::none();
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
@@ -2611,9 +2633,7 @@ impl AppModel {
                     tracing::error!("form field interaction failed");
                     return iced::Task::none();
                 }
-                if let Some(TabContent::Annotation { dirty, .. }) = self.tabs.get_mut(&tab) {
-                    *dirty = true;
-                }
+                self.mark_annotation_dirty(tab);
                 return self.render_current_annotation_page(tab);
             }
 
@@ -2622,13 +2642,10 @@ impl AppModel {
                     tracing::error!("annotation page mutation failed");
                     return iced::Task::none();
                 }
-                let document = match self.tabs.get(&tab) {
-                    Some(TabContent::Annotation { document, .. }) => *document,
-                    _ => return iced::Task::none(),
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
                 };
-                if let Some(TabContent::Annotation { dirty, .. }) = self.tabs.get_mut(&tab) {
-                    *dirty = true;
-                }
+                self.mark_annotation_dirty(tab);
                 let sizes = self.request_annotation_sizes(tab, document);
                 let title = self.update_title();
                 return cosmic::task::batch(vec![sizes, title]);
@@ -2662,9 +2679,8 @@ impl AppModel {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
-                let page = match self.annotation_ui.get(&tab) {
-                    Some(state) => state.selected,
-                    None => return iced::Task::none(),
+                let Some(page) = self.selected_page(tab) else {
+                    return iced::Task::none();
                 };
                 return self.update_pending_text(tab, document, page);
             }
@@ -2679,9 +2695,8 @@ impl AppModel {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
-                let page = match self.annotation_ui.get(&tab) {
-                    Some(state) => state.selected,
-                    None => return iced::Task::none(),
+                let Some(page) = self.selected_page(tab) else {
+                    return iced::Task::none();
                 };
                 return self.update_pending_text(tab, document, page);
             }
@@ -2719,8 +2734,7 @@ impl AppModel {
                     let Some(document) = self.annotation_document(tab) else {
                         return iced::Task::none();
                     };
-                    let Some(page) = self.annotation_ui.get(&tab).map(|state| state.selected)
-                    else {
+                    let Some(page) = self.selected_page(tab) else {
                         return iced::Task::none();
                     };
                     let worker = self.worker.clone();
@@ -2744,13 +2758,11 @@ impl AppModel {
                 // Finish the previous edit before starting a new one, so its
                 // insertion marker is removed.
                 let finish = self.finish_pending_text(tab);
-                let document = match self.tabs.get(&tab) {
-                    Some(TabContent::Annotation { document, .. }) => *document,
-                    _ => return finish,
+                let Some(document) = self.annotation_document(tab) else {
+                    return finish;
                 };
-                let page = match self.annotation_ui.get(&tab) {
-                    Some(state) => state.selected,
-                    None => return finish,
+                let Some(page) = self.selected_page(tab) else {
+                    return finish;
                 };
                 // Query the page's free-text annotations so the click can edit
                 // an existing one instead of always creating a new one.
@@ -2786,9 +2798,8 @@ impl AppModel {
                     let Some(state) = self.annotation_ui.get(&tab) else {
                         return iced::Task::none();
                     };
-                    let document = match self.tabs.get(&tab) {
-                        Some(TabContent::Annotation { document, .. }) => *document,
-                        _ => return iced::Task::none(),
+                    let Some(document) = self.annotation_document(tab) else {
+                        return iced::Task::none();
                     };
                     let page_width = state
                         .page_sizes
@@ -2859,9 +2870,8 @@ impl AppModel {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
-                let page = match self.annotation_ui.get(&tab) {
-                    Some(state) => state.selected,
-                    None => return iced::Task::none(),
+                let Some(page) = self.selected_page(tab) else {
+                    return iced::Task::none();
                 };
 
                 let finished = {
@@ -2941,9 +2951,8 @@ impl AppModel {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
-                let page = match self.annotation_ui.get(&tab) {
-                    Some(state) => state.selected,
-                    None => return iced::Task::none(),
+                let Some(page) = self.selected_page(tab) else {
+                    return iced::Task::none();
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
                     let Some(pending) = state.pending_text.as_mut() else {
@@ -3130,9 +3139,8 @@ impl AppModel {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
-                let document = match self.tabs.get(&tab) {
-                    Some(TabContent::Annotation { document, .. }) => *document,
-                    _ => return iced::Task::none(),
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
                 };
                 return self.save_annotation_to(tab, document, path);
             }

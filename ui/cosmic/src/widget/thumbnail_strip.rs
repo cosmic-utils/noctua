@@ -7,26 +7,20 @@
 
 use std::path::{Path, PathBuf};
 
-use cosmic::iced::alignment::{Horizontal, Vertical};
-use cosmic::iced::{ContentFit, Length};
+use cosmic::iced::Length;
 use cosmic::prelude::*;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::widget::{self, menu};
 
 use crate::message::Message;
 use crate::model::{StripEntry, Target};
-
-/// File tile size in logical pixels.
-const TILE_SIZE: f32 = 136.0;
+use crate::widget::strip;
 
 /// Page tile size in logical pixels (smaller than files).
 const PAGE_TILE_SIZE: f32 = 96.0;
 
 /// Left indentation of page entries in logical pixels.
 const INDENT: u16 = 20;
-
-/// Strip panel width in logical pixels.
-const PANEL_WIDTH: f32 = 168.0;
 
 /// Stable id of the strip scrollable.
 const SCROLL_ID: &str = "strip-scroll";
@@ -43,46 +37,33 @@ pub(crate) fn thumbnail_strip<'a>(
 ) -> Element<'a, Message> {
     let space = cosmic::theme::spacing();
 
-    let mut column = widget::column::with_capacity(entries.len())
-        .spacing(space.space_xxs)
-        .padding(space.space_xxs)
-        .align_x(Horizontal::Center);
+    let mut column = strip::column(entries.len());
 
     for (index, entry) in entries.iter().enumerate() {
         let is_selected = selected == Some(index);
         let is_page = matches!(entry.target, Target::Page { .. });
         let is_expanded = matches!(&entry.target, Target::File { path } if expanded == Some(path));
-        let tile_size = if is_page { PAGE_TILE_SIZE } else { TILE_SIZE };
-
-        let body: Element<'_, Message> = match &entry.thumb {
-            Some(handle) => widget::Image::new(handle.clone())
-                .content_fit(ContentFit::ScaleDown)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            // Unloaded file tiles show the name; unloaded page tiles stay
-            // blank because the page number is shown below the tile.
-            None if is_page => widget::space()
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            None => widget::text::caption(entry.name.clone())
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
+        let tile_size = if is_page {
+            PAGE_TILE_SIZE
+        } else {
+            strip::TILE_SIZE
         };
 
-        let tile = widget::container(body)
-            .width(Length::Fixed(tile_size))
-            .height(Length::Fixed(tile_size))
-            .padding(space.space_xxs)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center)
-            .class(if is_selected {
-                cosmic::style::Container::Primary
-            } else {
-                cosmic::style::Container::Card
-            });
+        // Unloaded file tiles show the name; unloaded page tiles stay blank
+        // because the page number is shown below the tile.
+        let placeholder: Element<'_, Message> = if is_page {
+            widget::space()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            widget::text::caption(entry.name.clone())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        };
+        let body = strip::preview(entry.thumb.as_ref(), placeholder);
+        let tile = strip::tile(body, tile_size, is_selected);
 
         // Page entries are indented and carry their page number; expandable
         // files show a chevron to hint at the double-click.
@@ -103,7 +84,7 @@ pub(crate) fn thumbnail_strip<'a>(
                 .push(widget::text::caption(chevron))
                 .into()
         } else {
-            tile.into()
+            tile
         };
 
         // Select on release so a double-click does not fire the activation
@@ -145,10 +126,7 @@ pub(crate) fn thumbnail_strip<'a>(
         });
 
     // The strip panel: fixed-width, scrollable thumbnail column.
-    widget::container(strip_scroll)
-        .width(Length::Fixed(PANEL_WIDTH))
-        .height(Length::Fill)
-        .into()
+    strip::panel(strip_scroll)
 }
 
 /// Stable widget id of one strip tile, unique within the strip of its tab.

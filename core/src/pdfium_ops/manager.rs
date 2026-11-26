@@ -1410,7 +1410,7 @@ fn embed_image(document: &mut Document, img: &image::DynamicImage) -> Result<(),
             "failed to attach an image to a page".to_string(),
         ));
     }
-    page.insert_image(obj)
+    page.insert_image(obj, px_w as f32, px_h as f32)
 }
 
 /// Rasterize an SVG via resvg and embed it as a full-page image.

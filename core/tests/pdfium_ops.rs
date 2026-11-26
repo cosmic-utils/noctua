@@ -869,6 +869,67 @@ fn selects_form_field_option() {
     common::remove_dir(&dir);
 }
 
+/// A raster source inserted into a new document becomes a real page: its pixels
+/// paint the whole page instead of collapsing into the unit square.
+#[test]
+fn inserts_raster_page() {
+    let Some(_pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+
+    let mut image = image::RgbaImage::new(4, 4);
+    for pixel in image.pixels_mut() {
+        *pixel = image::Rgba([200, 30, 30, 255]);
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .expect("encode png");
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(mgr.execute(Command::New), CommandResult::Ok));
+    let page_count = match mgr.execute(Command::PageCount) {
+        CommandResult::PageCount(count) => count,
+        other => panic!("expected PageCount, got {other:?}"),
+    };
+
+    assert!(matches!(
+        mgr.execute(Command::InsertPages {
+            source: BindSource {
+                name: "red.png".to_string(),
+                data: png.into_inner(),
+                format: noctua_core::storage::document::Format::Raster,
+                pages: None,
+            },
+            at: page_count + 1,
+        }),
+        CommandResult::Ok
+    ));
+
+    let CommandResult::Rendered {
+        width,
+        height,
+        rgba_data,
+    } = mgr.execute(Command::RenderPage {
+        page: page_count + 1,
+        zoom: 1.0,
+    })
+    else {
+        panic!("render failed");
+    };
+    assert_eq!((width, height), (4, 4));
+
+    let red = rgba_data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] > 100 && pixel[1] < 100)
+        .count();
+    assert!(red > 8, "image not drawn on the page (red pixels {red})");
+}
+
 /// The document's form fields are listed with name, kind, value and box.
 #[test]
 fn lists_form_fields() {
