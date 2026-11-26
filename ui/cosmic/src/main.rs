@@ -6,6 +6,7 @@
 mod app;
 mod config;
 mod i18n;
+mod key_binds;
 mod message;
 mod model;
 mod update;

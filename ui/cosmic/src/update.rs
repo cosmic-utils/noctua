@@ -15,8 +15,6 @@ use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::mouse;
 use cosmic::iced::widget::scrollable::{AbsoluteOffset, scroll_to};
-use cosmic::widget::menu;
-use cosmic::widget::menu::key_bind::Modifier;
 use cosmic::widget::segmented_button::Entity;
 use cosmic::{iced, prelude::*};
 
@@ -28,7 +26,7 @@ use noctua_core::storage;
 use noctua_core::storage::thumbcache::ThumbSize;
 
 use crate::fl;
-use crate::message::{MenuAction, Message};
+use crate::message::Message;
 use crate::model::{
     AnnotationTool, AnnotationUiState, AppModel, CurrentImage, DocumentPreview, MAX_SCALE,
     MIN_SCALE, PREVIEW_FULL_CACHE, PREVIEW_MIN_SCALE, PREVIEW_SCROLL_ID, PageSlot, PendingText,
@@ -204,106 +202,6 @@ fn transform_image(
 }
 
 impl AppModel {
-    /// Register the menu key bindings.
-    pub(crate) fn key_binds() -> HashMap<menu::KeyBind, MenuAction> {
-        let bind = |modifiers: &[Modifier], key: Key, action: MenuAction| {
-            (
-                menu::KeyBind {
-                    modifiers: modifiers.to_vec(),
-                    key,
-                },
-                action,
-            )
-        };
-
-        HashMap::from([
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("o".into()),
-                MenuAction::OpenFolder,
-            ),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("s".into()),
-                MenuAction::SavePdf,
-            ),
-            bind(
-                &[Modifier::Ctrl, Modifier::Shift],
-                Key::Character("s".into()),
-                MenuAction::SavePdfAs,
-            ),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("w".into()),
-                MenuAction::CloseTab,
-            ),
-            // Zoom in: register every `=`/`+` combination because the two keys
-            // differ per layout (e.g. on German QWERTZ `+` is its own key and
-            // `=` is Shift+`0`).
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("=".into()),
-                MenuAction::ZoomIn,
-            ),
-            bind(
-                &[Modifier::Ctrl, Modifier::Shift],
-                Key::Character("=".into()),
-                MenuAction::ZoomIn,
-            ),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("+".into()),
-                MenuAction::ZoomIn,
-            ),
-            bind(
-                &[Modifier::Ctrl, Modifier::Shift],
-                Key::Character("+".into()),
-                MenuAction::ZoomIn,
-            ),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("-".into()),
-                MenuAction::ZoomOut,
-            ),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("1".into()),
-                MenuAction::Zoom100,
-            ),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("0".into()),
-                MenuAction::ZoomToFit,
-            ),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("r".into()),
-                MenuAction::RotateClockwise,
-            ),
-            bind(
-                &[Modifier::Ctrl, Modifier::Shift],
-                Key::Character("r".into()),
-                MenuAction::RotateCounterClockwise,
-            ),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("h".into()),
-                MenuAction::FlipHorizontal,
-            ),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("v".into()),
-                MenuAction::FlipVertical,
-            ),
-            bind(&[], Key::Named(Named::F11), MenuAction::Fullscreen),
-            bind(
-                &[Modifier::Ctrl],
-                Key::Character("q".into()),
-                MenuAction::Quit,
-            ),
-        ])
-    }
-
     /// The currently active tab entity, if any tab is open.
     pub(crate) fn active_tab(&self) -> Option<Entity> {
         let entity = self.tab_model.active();

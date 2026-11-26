@@ -79,7 +79,7 @@ impl cosmic::Application for AppModel {
             core,
             config,
             about,
-            key_binds: AppModel::key_binds(),
+            key_binds: crate::key_binds::key_binds(),
             tab_model: SingleSelectModel::default(),
             tabs: HashMap::new(),
             tab_ui: HashMap::new(),
