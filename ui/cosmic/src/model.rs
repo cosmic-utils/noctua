@@ -8,20 +8,24 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use cosmic::iced::Size;
 use cosmic::iced::keyboard::Modifiers;
-use cosmic::iced::{Point, Size};
 use cosmic::widget;
 use cosmic::widget::about::About;
 use cosmic::widget::menu;
 use cosmic::widget::segmented_button::{Entity, SingleSelectModel};
 
-use noctua_core::pdfium_ops::FormField;
-use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::render::worker::{DocumentId, SharedWorker};
 use noctua_core::storage::browser::BrowserEntry;
 
 use crate::config::NoctuaConfig;
 use crate::message::MenuAction;
+
+mod annotation;
+mod browser;
+
+pub(crate) use annotation::{AnnotationTool, AnnotationUiState, PendingText};
+pub(crate) use browser::{DocumentPreview, PageSlot, StripEntry, TabUiState};
 
 /// Session file used for automatic save and restore.
 pub(crate) const SESSION_NAME: &str = "default";
@@ -94,18 +98,6 @@ impl Target {
     }
 }
 
-/// One entry of the thumbnail strip of a tab.
-pub(crate) struct StripEntry {
-    pub(crate) target: Target,
-    pub(crate) name: String,
-    pub(crate) thumb: Option<widget::image::Handle>,
-    /// Whether the entry is a PDF that can be expanded in place.
-    pub(crate) expandable: bool,
-    /// Per-entry view state (zoom/pan/rotate/flip). Owned by the entry, not
-    /// copied into the tab or a side map.
-    pub(crate) view: ViewState,
-}
-
 /// Per-image view state (zoom, pan, rotate, flip) remembered across selections.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ViewState {
@@ -143,179 +135,6 @@ impl Default for ViewState {
 pub(crate) struct CurrentImage {
     pub(crate) handle: widget::image::Handle,
     pub(crate) rgba: Rgba,
-}
-
-/// One page of the continuous PDF preview.
-pub(crate) enum PageSlot {
-    /// Sizing placeholder; no pixels yet.
-    Empty,
-    /// Low-resolution placeholder from the thumbnail pass.
-    Thumb { handle: widget::image::Handle },
-    /// Full-resolution render.
-    Full { handle: widget::image::Handle },
-}
-
-/// Continuous preview of a multi-page PDF inside a folder tab.
-pub(crate) struct DocumentPreview {
-    pub(crate) path: PathBuf,
-    /// Native page sizes in pixels at zoom 1.0 (points ≈ px at 72 dpi).
-    pub(crate) page_sizes: Vec<(f32, f32)>,
-    pub(crate) pages: Vec<PageSlot>,
-    /// Zoom the full pages were rendered at.
-    pub(crate) zoom: f32,
-    /// Cumulative view rotation in degrees (0/90/180/270).
-    pub(crate) rotation: u16,
-    /// Cumulative horizontal flip. Vertical flip is `rotation == 180` with
-    /// `flip_h` set, so this pair represents all eight dihedral symmetries.
-    pub(crate) flip_h: bool,
-    /// Content scroll offset in logical pixels, restored on tab switch.
-    pub(crate) scroll: f32,
-    /// Height of the visible viewport, for the visible-window calculation.
-    pub(crate) viewport_height: f32,
-    /// Width of the visible viewport, for fit-to-width.
-    pub(crate) viewport_width: f32,
-    /// Insertion order of full pages, oldest first, for the LRU cap.
-    pub(crate) full_order: Vec<u32>,
-    /// Last requested full-render window; scroll events re-request only
-    /// when the visible window actually changes.
-    pub(crate) requested: Option<(u32, u32)>,
-}
-
-impl DocumentPreview {
-    /// Displayed page size in pixels, accounting for the cumulative view
-    /// rotation: 90°/270° swap width and height.
-    pub(crate) fn effective_page_size(&self, index: usize) -> (f32, f32) {
-        let (w, h) = self
-            .page_sizes
-            .get(index)
-            .copied()
-            .unwrap_or((600.0, 800.0));
-        if self.rotation.is_multiple_of(180) {
-            (w, h)
-        } else {
-            (h, w)
-        }
-    }
-}
-
-/// Volatile per-tab UI state: strip entries, selection and the preview.
-/// Survives tab switches but is not persisted in the session.
-pub(crate) struct TabUiState {
-    pub(crate) entries: Vec<StripEntry>,
-    pub(crate) selected: Option<usize>,
-    pub(crate) preview: Option<DocumentPreview>,
-    /// Path of the PDF currently expanded in the strip, if any.
-    pub(crate) expanded: Option<PathBuf>,
-}
-
-impl TabUiState {
-    pub(crate) fn new(entries: Vec<StripEntry>) -> Self {
-        let selected = (!entries.is_empty()).then_some(0);
-        Self {
-            entries,
-            selected,
-            preview: None,
-            expanded: None,
-        }
-    }
-}
-
-/// Annotation tools offered by the annotation mode. Text is implemented
-/// first; the remaining tools follow in later steps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnnotationTool {
-    Text,
-}
-
-/// Volatile view state of an annotation tab: page list, thumbnails and the
-/// currently shown page. The document itself lives in the worker, keyed by
-/// the tab's `DocumentId`.
-pub(crate) struct AnnotationUiState {
-    /// Native page sizes in points (≈ px at 72 dpi).
-    pub(crate) page_sizes: Vec<(f32, f32)>,
-    /// 1-based index of the selected page.
-    pub(crate) selected: u32,
-    /// Per-page thumbnail handles; `None` until rendered.
-    pub(crate) thumbs: Vec<Option<widget::image::Handle>>,
-    /// Full-resolution pixels of the selected page, for the content view.
-    pub(crate) current: Option<CurrentImage>,
-    /// View transform (zoom/pan/rotate/flip), like single images.
-    pub(crate) view: ViewState,
-    /// Currently active annotation tool; `None` means browse/pan.
-    pub(crate) active_tool: Option<AnnotationTool>,
-    /// Selected free-text colour.
-    pub(crate) annotation_color: AnnotationColor,
-    /// Selected free-text font size in points.
-    pub(crate) font_size_pt: f32,
-    /// An in-progress free-text placement; `None` when no text is being entered.
-    pub(crate) pending_text: Option<PendingText>,
-    /// Whether the insertion marker is currently shown; toggled by the blink
-    /// timer while a text edit is active.
-    pub(crate) caret_visible: bool,
-    /// Interactive form fields on the selected page.
-    pub(crate) form_fields: Vec<FormField>,
-    /// Focused form field: an index into `form_fields`.
-    pub(crate) form_focus: Option<usize>,
-    /// Text being edited in the focused text or choice field.
-    pub(crate) form_draft: String,
-    /// Caret position in `form_draft`, in characters.
-    pub(crate) form_caret: usize,
-    /// Value the focused field had when focus started, restored on Escape.
-    pub(crate) form_original: String,
-    /// Anchor of the open option list of a choice field, in viewer coordinates
-    /// (origin top left). `None` while the list is closed.
-    pub(crate) form_menu: Option<Point>,
-}
-
-/// An in-progress free-text edit. The annotation itself lives in the document
-/// and is rewritten on every keystroke, so the page render is the preview.
-#[derive(Debug, Clone)]
-pub(crate) struct PendingText {
-    /// Index of the annotation in the page's annotation list.
-    pub(crate) index: usize,
-    /// Text when the edit started; restored when the edit is cancelled.
-    pub(crate) original_text: String,
-    /// Whether this edit created the annotation, so cancelling removes it.
-    pub(crate) is_new: bool,
-    /// Current text.
-    pub(crate) text: String,
-    /// Caret position as a character offset into `text`.
-    pub(crate) cursor: usize,
-    /// Top-left corner of the box in page points (origin bottom-left).
-    pub(crate) origin: (f32, f32),
-    /// Width the text is wrapped at, in points.
-    pub(crate) max_width: f32,
-    /// Insertion marker rectangle in page points (origin bottom-left), as
-    /// reported by the core after the last write.
-    pub(crate) caret: (f32, f32, f32, f32),
-}
-
-impl Default for AnnotationUiState {
-    fn default() -> Self {
-        Self {
-            page_sizes: Vec::new(),
-            selected: 1,
-            thumbs: Vec::new(),
-            current: None,
-            view: ViewState::default(),
-            active_tool: None,
-            annotation_color: AnnotationColor {
-                red: 0,
-                green: 0,
-                blue: 0,
-                alpha: 255,
-            },
-            font_size_pt: 24.0,
-            pending_text: None,
-            caret_visible: true,
-            form_fields: Vec::new(),
-            form_focus: None,
-            form_draft: String::new(),
-            form_caret: 0,
-            form_original: String::new(),
-            form_menu: None,
-        }
-    }
 }
 
 /// The application model stores app-specific state used to describe its interface and
