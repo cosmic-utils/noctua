@@ -127,9 +127,9 @@ fn strip_view(app: &AppModel) -> Element<'_, Message> {
     };
 
     thumbnail_strip(
-        &state.entries,
-        state.selected,
-        state.expanded.as_ref(),
+        state.entries(),
+        state.selected(),
+        state.expanded(),
         tab,
         &|_| crate::menu::file_context_menu(app),
     )
@@ -165,11 +165,11 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     let Some(state) = app.annotation_ui.get(&tab) else {
         return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
     };
-    let Some(current) = state.current.as_ref() else {
+    let Some(current) = state.current() else {
         return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
     };
 
-    let cursor = if state.active_tool == Some(AnnotationTool::Text) {
+    let cursor = if state.active_tool() == Some(AnnotationTool::Text) {
         mouse::Interaction::Text
     } else {
         mouse::Interaction::Grab
@@ -179,29 +179,30 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     // bottom-left; the viewer draws in image pixels from the top-left. The page
     // is rendered at one pixel per point.
     let image_height = current.rgba.1 as f32;
-    let caret = if let Some(pending) = state.pending_text.as_ref().filter(|_| state.caret_visible) {
+    let caret = if let Some(pending) = state.pending_text().filter(|_| state.caret_visible()) {
         let (x, y, width, height) = pending.caret;
+        let color = state.annotation_color();
         Some(TextCaret {
             position: Point::new(x, image_height - (y + height)),
             size: Size::new(width, height),
             color: cosmic::iced::Color::from_rgba8(
-                state.annotation_color.red,
-                state.annotation_color.green,
-                state.annotation_color.blue,
-                f32::from(state.annotation_color.alpha) / 255.0,
+                color.red,
+                color.green,
+                color.blue,
+                f32::from(color.alpha) / 255.0,
             ),
         })
     } else {
         // While a form field is edited, the caret lives inside the field.
-        state.form_focus.and_then(|index| {
-            let field = state.form_fields.get(index)?;
+        state.form_focus().and_then(|index| {
+            let field = state.form_fields().get(index)?;
             if !crate::widget::form_fields::accepts_text(field) {
                 return None;
             }
             let (x, bottom, height) = crate::widget::form_fields::caret_in_field(
                 field,
-                &state.form_draft,
-                state.form_caret,
+                state.form_draft(),
+                state.form_caret(),
             );
             Some(TextCaret {
                 position: Point::new(x, image_height - (bottom + height)),
@@ -214,10 +215,10 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     // While a field or free text is edited, Tab and Escape belong to the page.
     // An open dialog keeps them for itself.
     let editing =
-        (state.form_focus.is_some() || state.pending_text.is_some()) && app.rename.is_none();
+        (state.form_focus().is_some() || state.pending_text().is_some()) && app.rename.is_none();
     let element: Element<'static, Message> = focus_scope(viewer_frame(
         &current.handle,
-        state.view,
+        state.view(),
         app.keyboard_modifiers,
         app.viewer_bounds.clone(),
         cursor,
@@ -238,7 +239,7 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
             })
         })),
         Some(Box::new({
-            let fields = state.form_fields.clone();
+            let fields = state.form_fields().to_vec();
             move |point: Point| crate::widget::form_fields::cursor_for(&fields, point, image_height)
         })),
         caret,
@@ -251,12 +252,12 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     // The option list of a choice field is drawn over the page where the field
     // was clicked. The viewer sits inside its frame's padding, so the click
     // position moves into that frame before it anchors the popup.
-    let Some(anchor) = state.form_menu else {
+    let Some(anchor) = state.form_menu() else {
         return element;
     };
     let Some(field) = state
-        .form_focus
-        .and_then(|index| state.form_fields.get(index))
+        .form_focus()
+        .and_then(|index| state.form_fields().get(index))
         .filter(|field| crate::widget::form_fields::has_options(field))
     else {
         return element;
@@ -330,7 +331,7 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
         Some(TabContent::Annotation { .. }) => app
             .annotation_ui
             .get(&tab)
-            .map(|state| (tab, state.selected)),
+            .map(|state| (tab, state.selected())),
         _ => None,
     });
     let (rotate_left, rotate_right) = match annotation_page {
@@ -359,7 +360,7 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
         Some(TabContent::Annotation { .. }) => app.annotation_ui.get(&tab),
         _ => None,
     }) {
-        let text_active = state.active_tool == Some(AnnotationTool::Text);
+        let text_active = state.active_tool() == Some(AnnotationTool::Text);
         toolbar = toolbar.start(
             widget::button::icon(widget::icon::from_name("insert-text-symbolic"))
                 .tooltip(fl!("text-tool"))
@@ -375,7 +376,7 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
                 .collect();
             let selected = FONT_SIZE_PRESETS
                 .iter()
-                .position(|size| (*size - state.font_size_pt).abs() < f32::EPSILON);
+                .position(|size| (*size - state.font_size_pt()).abs() < f32::EPSILON);
             toolbar = toolbar.start(cosmic::widget::dropdown(labels, selected, |index| {
                 Message::Annotation(AnnotationMessage::AnnotationFontSizeChanged(
                     FONT_SIZE_PRESETS[index],
@@ -386,7 +387,7 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
             let color_labels: Vec<String> = colors.iter().map(|(name, _)| name.clone()).collect();
             let color_selected = colors
                 .iter()
-                .position(|(_, color)| *color == state.annotation_color);
+                .position(|(_, color)| *color == state.annotation_color());
             toolbar = toolbar.start(cosmic::widget::dropdown(
                 color_labels,
                 color_selected,
@@ -424,7 +425,7 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
         let page_count = app
             .annotation_ui
             .get(&tab)
-            .map(|state| state.page_sizes.len() as u32)
+            .map(|state| state.page_sizes().len() as u32)
             .unwrap_or(0);
         toolbar = toolbar
             .start(page_button(
@@ -620,8 +621,8 @@ fn position_label(app: &AppModel) -> String {
     let Some(state) = app.tab_ui.get(&tab) else {
         return String::new();
     };
-    let total = state.entries.len();
-    let Some(position) = state.selected else {
+    let total = state.entries().len();
+    let Some(position) = state.selected() else {
         return String::new();
     };
 

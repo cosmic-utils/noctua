@@ -21,18 +21,18 @@ pub(crate) fn annotation_strip<'a>(
     page_menu: &dyn Fn(u32) -> Vec<menu::Tree<Message>>,
 ) -> Element<'a, Message> {
     let space = cosmic::theme::spacing();
-    let mut column = strip::column(state.page_sizes.len());
+    let mut column = strip::column(state.page_sizes().len());
 
-    for index in 0..state.page_sizes.len() {
+    for index in 0..state.page_sizes().len() {
         let page = index as u32 + 1;
-        let thumb = state.thumbs.get(index).and_then(|thumb| thumb.as_ref());
+        let thumb = state.thumbs().get(index).and_then(|thumb| thumb.as_ref());
         let body = strip::preview(
             thumb,
             widget::text::caption(page.to_string())
                 .width(Length::Fill)
                 .height(Length::Fill),
         );
-        let tile = strip::tile(body, strip::TILE_SIZE, state.selected == page);
+        let tile = strip::tile(body, strip::TILE_SIZE, state.selected() == page);
 
         let entry: Element<'_, Message> = widget::container(
             widget::column::with_capacity(2)

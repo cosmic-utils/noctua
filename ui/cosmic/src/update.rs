@@ -236,7 +236,7 @@ impl AppModel {
 
     /// The 1-based page selected in annotation tab `tab`.
     fn selected_page(&self, tab: Entity) -> Option<u32> {
-        self.annotation_ui.get(&tab).map(|state| state.selected)
+        self.annotation_ui.get(&tab).map(|state| state.selected())
     }
 
     /// The file a context action applies to: the element that was right
@@ -262,8 +262,8 @@ impl AppModel {
     pub(crate) fn displayed_entry(&self) -> Option<&StripEntry> {
         let tab = self.active_tab()?;
         let state = self.tab_ui.get(&tab)?;
-        let index = state.selected?;
-        state.entries.get(index)
+        let index = state.selected()?;
+        state.entries().get(index)
     }
 
     /// The view state of the displayed image/page. Annotation pages and folder
@@ -274,15 +274,18 @@ impl AppModel {
             return self
                 .annotation_ui
                 .get_mut(&tab)
-                .map(|state| &mut state.view);
+                .map(|state| state.view_mut());
         }
         if self.active_preview().is_some() {
             return None;
         }
         let tab = self.active_tab()?;
         let state = self.tab_ui.get_mut(&tab)?;
-        let index = state.selected?;
-        state.entries.get_mut(index).map(|entry| &mut entry.view)
+        let index = state.selected()?;
+        state
+            .entries_mut()
+            .get_mut(index)
+            .map(|entry| &mut entry.view)
     }
 
     /// The displayed image plus its view state. As with
@@ -290,8 +293,8 @@ impl AppModel {
     fn displayed_image_view_mut(&mut self) -> Option<(&mut CurrentImage, &mut ViewState)> {
         if let Some(tab) = self.active_annotation() {
             let state = self.annotation_ui.get_mut(&tab)?;
-            let AnnotationUiState { current, view, .. } = state;
-            let image = current.as_mut()?;
+            let (image, view) = state.image_view_mut();
+            let image = image?;
             return Some((image, view));
         }
         if self.active_preview().is_some() {
@@ -300,8 +303,8 @@ impl AppModel {
         let tab = self.active_tab()?;
         let image = self.displayed_image.as_mut()?;
         let state = self.tab_ui.get_mut(&tab)?;
-        let index = state.selected?;
-        let view = &mut state.entries.get_mut(index)?.view;
+        let index = state.selected()?;
+        let view = &mut state.entries_mut().get_mut(index)?.view;
         Some((image, view))
     }
 
@@ -314,7 +317,7 @@ impl AppModel {
             && let Some(preview) = self
                 .active_tab()
                 .and_then(|tab| self.tab_ui.get(&tab))
-                .and_then(|state| state.preview.as_ref())
+                .and_then(|state| state.preview())
                 .filter(|preview| &preview.path == path)
         {
             return preview.zoom;
@@ -324,10 +327,10 @@ impl AppModel {
             let Some(state) = self.annotation_ui.get(&tab) else {
                 return 1.0;
             };
-            let Some(image) = state.current.as_ref() else {
+            let Some(image) = state.current() else {
                 return 1.0;
             };
-            (image, state.view)
+            (image, state.view())
         } else {
             let Some(image) = self.displayed_image.as_ref() else {
                 return 1.0;
@@ -385,7 +388,7 @@ impl AppModel {
             .as_ref()
             .map(|state| {
                 state
-                    .entries
+                    .entries()
                     .iter()
                     .map(|entry| (entry.target.clone(), entry.view))
                     .collect()
@@ -393,15 +396,17 @@ impl AppModel {
             .unwrap_or_default();
         let selected = previous
             .as_ref()
-            .and_then(|state| state.selected)
+            .and_then(|state| state.selected())
             .filter(|index| *index < entries.len())
             .or((!entries.is_empty()).then_some(0));
-        let preview = previous.and_then(|state| state.preview).filter(|preview| {
-            matches!(
-                selected.and_then(|index| entries.get(index)),
-                Some((Target::File { path }, _, _)) if path == &preview.path
-            )
-        });
+        let preview = previous
+            .and_then(TabUiState::into_preview)
+            .filter(|preview| {
+                matches!(
+                    selected.and_then(|index| entries.get(index)),
+                    Some((Target::File { path }, _, _)) if path == &preview.path
+                )
+            });
 
         let nav_items = entries
             .into_iter()
@@ -415,12 +420,7 @@ impl AppModel {
             .collect();
         self.tab_ui.insert(
             tab,
-            TabUiState {
-                entries: nav_items,
-                selected,
-                preview,
-                expanded: None,
-            },
+            TabUiState::from_parts(nav_items, selected, preview, None),
         );
     }
 
@@ -446,21 +446,21 @@ impl AppModel {
             && self
                 .tab_ui
                 .get(&tab)
-                .is_none_or(|state| state.entries.is_empty())
+                .is_none_or(|state| state.entries().is_empty())
         {
             self.rebuild_strip(tab);
         }
 
         let target = self.tab_ui.get(&tab).and_then(|state| {
             state
-                .selected
-                .and_then(|index| state.entries.get(index))
+                .selected()
+                .and_then(|index| state.entries().get(index))
                 .map(|entry| (entry.target.clone(), entry.expandable))
         });
         let scroll = self
             .tab_ui
             .get(&tab)
-            .and_then(|state| state.preview.as_ref())
+            .and_then(|state| state.preview())
             .map(|preview| preview.scroll);
 
         let mut tasks: Vec<iced::Task<cosmic::Action<Message>>> = Vec::new();
@@ -536,7 +536,7 @@ impl AppModel {
     /// "is a multi-page PDF" check without re-reading file bytes.
     pub(crate) fn active_preview(&self) -> Option<&DocumentPreview> {
         let tab = self.active_tab()?;
-        let preview = self.tab_ui.get(&tab)?.preview.as_ref()?;
+        let preview = self.tab_ui.get(&tab)?.preview()?;
         matches!(&self.displayed_target, Some(Target::File { path }) if path == &preview.path)
             .then_some(preview)
     }
@@ -558,7 +558,7 @@ impl AppModel {
             let Some(state) = self.tab_ui.get_mut(&tab) else {
                 return iced::Task::none();
             };
-            if let Some(existing) = state.preview.as_mut()
+            if let Some(existing) = state.preview_mut()
                 && existing.path == path
                 && existing.page_sizes.len() == sizes.len()
             {
@@ -566,7 +566,7 @@ impl AppModel {
                 Some(Self::preview_visible_range(existing))
             } else {
                 let pages = (0..sizes.len()).map(|_| PageSlot::Empty).collect();
-                state.preview = Some(DocumentPreview {
+                state.set_preview(Some(DocumentPreview {
                     path: path.clone(),
                     page_sizes: sizes,
                     pages,
@@ -578,7 +578,7 @@ impl AppModel {
                     viewport_width: 800.0,
                     full_order: Vec::new(),
                     requested: None,
-                });
+                }));
                 None
             }
         };
@@ -613,7 +613,7 @@ impl AppModel {
         let mut wanted: Vec<u32> = Vec::new();
         if let Some(tab) = self.active_tab()
             && let Some(state) = self.tab_ui.get(&tab)
-            && let Some(preview) = state.preview.as_ref()
+            && let Some(preview) = state.preview()
             && preview.path == *path
         {
             for page in range {
@@ -705,14 +705,14 @@ impl AppModel {
     fn preview_pages(&self, path: &PathBuf) -> Option<u32> {
         let tab = self.active_tab()?;
         let state = self.tab_ui.get(&tab)?;
-        let preview = state.preview.as_ref()?;
+        let preview = state.preview()?;
         (preview.path == *path).then_some(preview.pages.len() as u32)
     }
 
     fn preview_zoom(&self, path: &PathBuf) -> Option<f32> {
         let tab = self.active_tab()?;
         let state = self.tab_ui.get(&tab)?;
-        let preview = state.preview.as_ref()?;
+        let preview = state.preview()?;
         (preview.path == *path).then_some(preview.zoom)
     }
 
@@ -727,7 +727,7 @@ impl AppModel {
         let mut wanted: Vec<(usize, Target)> = Vec::new();
         if let Some(state) = self.tab_ui.get(&tab) {
             for index in range {
-                if let Some(entry) = state.entries.get(index)
+                if let Some(entry) = state.entries().get(index)
                     && entry.thumb.is_none()
                 {
                     wanted.push((index, entry.target.clone()));
@@ -797,22 +797,24 @@ impl AppModel {
         let Some(tab) = self.active_tab() else {
             return iced::Task::none();
         };
-        let (path, is_pdf, already_expanded) =
-            {
-                let Some(state) = self.tab_ui.get(&tab) else {
-                    return iced::Task::none();
-                };
-                let Some((path, is_pdf)) = state.entries.get(index).and_then(|entry| match &entry
-                    .target
-                {
-                    Target::File { path } => Some((path.clone(), entry.expandable)),
-                    Target::Page { .. } => None,
-                }) else {
-                    return iced::Task::none();
-                };
-                let already_expanded = state.expanded.as_ref() == Some(&path);
-                (path, is_pdf, already_expanded)
+        let (path, is_pdf, already_expanded) = {
+            let Some(state) = self.tab_ui.get(&tab) else {
+                return iced::Task::none();
             };
+            let Some((path, is_pdf)) =
+                state
+                    .entries()
+                    .get(index)
+                    .and_then(|entry| match &entry.target {
+                        Target::File { path } => Some((path.clone(), entry.expandable)),
+                        Target::Page { .. } => None,
+                    })
+            else {
+                return iced::Task::none();
+            };
+            let already_expanded = state.expanded() == Some(&path);
+            (path, is_pdf, already_expanded)
+        };
 
         if !is_pdf {
             return iced::Task::none();
@@ -826,12 +828,12 @@ impl AppModel {
         if let Some(previous) = self
             .tab_ui
             .get(&tab)
-            .and_then(|state| state.expanded.clone())
+            .and_then(|state| state.expanded().cloned())
         {
             self.collapse_pdf(tab, &previous);
         }
         if let Some(state) = self.tab_ui.get_mut(&tab) {
-            state.expanded = Some(path.clone());
+            state.set_expanded(Some(path.clone()));
         }
 
         let worker = self.worker.clone();
@@ -856,22 +858,23 @@ impl AppModel {
         let Some(state) = self.tab_ui.get_mut(&tab) else {
             return;
         };
-        if state.expanded.as_ref() == Some(path) {
-            state.expanded = None;
+        if state.expanded() == Some(path) {
+            state.set_expanded(None);
         }
         let Some(start) = state
-            .entries
+            .entries()
             .iter()
             .position(|entry| matches!(&entry.target, Target::File { path: p } if p == path))
         else {
             return;
         };
         let mut end = start + 1;
-        while end < state.entries.len() && matches!(state.entries[end].target, Target::Page { .. })
+        while end < state.entries().len()
+            && matches!(state.entries()[end].target, Target::Page { .. })
         {
             end += 1;
         }
-        state.entries.drain(start + 1..end);
+        state.entries_mut().drain(start + 1..end);
     }
 
     /// Insert the page entries of an expanded PDF after its file entry.
@@ -880,7 +883,7 @@ impl AppModel {
             return;
         };
         let Some(start) = state
-            .entries
+            .entries()
             .iter()
             .position(|entry| matches!(&entry.target, Target::File { path: p } if p == path))
         else {
@@ -896,7 +899,9 @@ impl AppModel {
             expandable: false,
             view: ViewState::default(),
         });
-        state.entries.splice(start + 1..start + 1, page_entries);
+        state
+            .entries_mut()
+            .splice(start + 1..start + 1, page_entries);
     }
 
     /// Render a single-image target (raster/SVG) for display. The configured
@@ -933,7 +938,7 @@ impl AppModel {
             let Some(state) = self.tab_ui.get_mut(&tab) else {
                 return iced::Task::none();
             };
-            let Some(preview) = state.preview.as_mut() else {
+            let Some(preview) = state.preview_mut() else {
                 return iced::Task::none();
             };
             if preview.path != *path {
@@ -968,7 +973,7 @@ impl AppModel {
         let Some(state) = self.tab_ui.get(&tab) else {
             return iced::Task::none();
         };
-        let Some(preview) = state.preview.as_ref() else {
+        let Some(preview) = state.preview() else {
             return iced::Task::none();
         };
         if preview.page_sizes.is_empty() {
@@ -1069,7 +1074,7 @@ impl AppModel {
         let Some(state) = self.tab_ui.get(&tab) else {
             return iced::Task::none();
         };
-        let Some(preview) = state.preview.as_ref() else {
+        let Some(preview) = state.preview() else {
             return iced::Task::none();
         };
         if preview.path != *path {
@@ -1254,7 +1259,7 @@ impl AppModel {
         let page_count = self
             .annotation_ui
             .get(&tab)
-            .map(|state| state.page_sizes.len() as u32)
+            .map(|state| state.page_sizes().len() as u32)
             .unwrap_or(0);
         cosmic::task::future(async move {
             let mut thumbs = Vec::new();
@@ -1289,13 +1294,7 @@ impl AppModel {
             return iced::Task::none();
         };
         if let Some(state) = self.annotation_ui.get_mut(&tab) {
-            state.selected = page;
-            state.current = None;
-            // The listed fields and any open option list belong to the page
-            // that was shown before.
-            state.form_fields.clear();
-            state.form_focus = None;
-            state.form_menu = None;
+            state.select_page(page);
         }
         self.render_annotation_page(tab, document, page)
     }
@@ -1305,11 +1304,11 @@ impl AppModel {
         let Some(state) = self.annotation_ui.get(&tab) else {
             return iced::Task::none();
         };
-        let count = state.page_sizes.len() as i32;
+        let count = state.page_sizes().len() as i32;
         if count == 0 {
             return iced::Task::none();
         }
-        let selected = state.selected as i32;
+        let selected = state.selected() as i32;
         let target = (selected + delta).clamp(1, count) as u32;
         self.annotation_select_page(tab, target)
     }
@@ -1434,18 +1433,18 @@ impl AppModel {
         let Some(state) = self.annotation_ui.get(&tab) else {
             return iced::Task::none();
         };
-        let Some(index) = state.form_focus else {
+        let Some(index) = state.form_focus() else {
             return iced::Task::none();
         };
-        let Some(field) = state.form_fields.get(index) else {
+        let Some(field) = state.form_fields().get(index) else {
             return iced::Task::none();
         };
         if !crate::widget::form_fields::accepts_text(field) {
             return iced::Task::none();
         }
-        let page = state.selected;
+        let page = state.selected();
         let index = field.index;
-        let value = state.form_draft.clone();
+        let value = state.form_draft().to_string();
         let worker = self.worker.clone();
         cosmic::task::future(async move {
             let (_, result) = worker
@@ -1470,8 +1469,8 @@ impl AppModel {
         let Some(state) = self.annotation_ui.get(&tab) else {
             return iced::Task::none();
         };
-        let page = state.selected;
-        let Some(annotation) = state.form_fields.get(index).map(|field| field.index) else {
+        let page = state.selected();
+        let Some(annotation) = state.form_fields().get(index).map(|field| field.index) else {
             return iced::Task::none();
         };
         let worker = self.worker.clone();
@@ -1495,19 +1494,17 @@ impl AppModel {
             Key::Named(Named::Enter) => {
                 let commit = self.commit_form_draft(tab);
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_focus = None;
-                    state.form_menu = None;
+                    state.clear_form_focus();
                 }
                 commit
             }
             Key::Named(Named::Escape) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_draft = state.form_original.clone();
-                    state.form_menu = None;
+                    state.restore_form_draft();
                 }
                 let commit = self.commit_form_draft(tab);
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_focus = None;
+                    state.clear_form_focus();
                 }
                 commit
             }
@@ -1517,21 +1514,21 @@ impl AppModel {
                     return iced::Task::none();
                 };
                 let next = crate::widget::form_fields::next_field(
-                    &state.form_fields,
-                    state.form_focus,
+                    state.form_fields(),
+                    state.form_focus(),
                     forward,
                 );
                 let commit = self.commit_form_draft(tab);
                 let Some(index) = next else {
                     if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                        state.form_focus = None;
+                        state.clear_form_focus();
                     }
                     return commit;
                 };
                 let (value, accepts_text) = match self
                     .annotation_ui
                     .get(&tab)
-                    .and_then(|state| state.form_fields.get(index))
+                    .and_then(|state| state.form_fields().get(index))
                 {
                     Some(field) => (
                         field.value.clone(),
@@ -1540,11 +1537,7 @@ impl AppModel {
                     None => return commit,
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_focus = Some(index);
-                    state.form_draft = value.clone();
-                    state.form_original = value.clone();
-                    state.form_caret = text_char_count(&value);
-                    state.form_menu = None;
+                    state.begin_form_edit(index, value, None);
                 }
                 let focus = if accepts_text {
                     self.focus_form_field(tab, index)
@@ -1555,38 +1548,39 @@ impl AppModel {
             }
             Key::Named(Named::Backspace) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    delete_before(&mut state.form_draft, &mut state.form_caret);
+                    let (draft, caret) = state.form_draft_mut();
+                    delete_before(draft, caret);
                 }
                 self.commit_form_draft(tab)
             }
             Key::Named(Named::Delete) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    delete_at(&mut state.form_draft, state.form_caret);
+                    let (draft, caret) = state.form_draft_mut();
+                    delete_at(draft, *caret);
                 }
                 self.commit_form_draft(tab)
             }
             Key::Named(Named::ArrowLeft) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_caret = state.form_caret.saturating_sub(1);
+                    state.move_form_caret(-1);
                 }
                 iced::Task::none()
             }
             Key::Named(Named::ArrowRight) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_caret =
-                        (state.form_caret + 1).min(text_char_count(&state.form_draft));
+                    state.move_form_caret(1);
                 }
                 iced::Task::none()
             }
             Key::Named(Named::Home) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_caret = 0;
+                    state.set_form_caret(0);
                 }
                 iced::Task::none()
             }
             Key::Named(Named::End) => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_caret = text_char_count(&state.form_draft);
+                    state.set_form_caret_to_end();
                 }
                 iced::Task::none()
             }
@@ -1613,14 +1607,14 @@ impl AppModel {
                 return iced::Task::none();
             };
             let page_width = state
-                .page_sizes
-                .get(state.selected as usize - 1)
+                .page_sizes()
+                .get(state.selected() as usize - 1)
                 .map(|(width, _)| *width)
                 .unwrap_or(0.0);
             (
                 document,
-                state.selected,
-                state.font_size_pt,
+                state.selected(),
+                state.font_size_pt(),
                 (page_width - position.0).max(0.0),
             )
         };
@@ -1649,11 +1643,10 @@ impl AppModel {
             };
             let (color, font_size) = (annotation.color, annotation.font_size);
             if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                state.pending_text = Some(pending);
+                state.begin_text_edit(pending);
                 // Start the toolbar from the annotation's real style.
-                state.annotation_color = color;
-                state.font_size_pt = font_size;
-                state.caret_visible = true;
+                state.set_color(color);
+                state.set_font_size(font_size);
             }
             return self.update_pending_text(tab, document, page);
         }
@@ -1673,15 +1666,13 @@ impl AppModel {
         let Some(image_height) = self
             .annotation_ui
             .get(&tab)
-            .and_then(|state| state.current.as_ref())
+            .and_then(|state| state.current())
             .map(|current| current.rgba.1 as f32)
         else {
             return iced::Task::none();
         };
         if let Some(state) = self.annotation_ui.get_mut(&tab) {
-            state.form_fields = fields.clone();
-            state.form_focus = None;
-            state.form_menu = None;
+            state.set_form_fields(fields.clone());
         }
         let Some(index) =
             crate::widget::form_fields::field_at(&fields, Point::new(x, y), image_height)
@@ -1707,7 +1698,7 @@ impl AppModel {
         if !has_options && !crate::widget::form_fields::accepts_text(field) {
             let annotation = field.index;
             if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                state.form_focus = None;
+                state.clear_form_focus();
             }
             let worker = self.worker.clone();
             return cosmic::task::future(async move {
@@ -1729,12 +1720,7 @@ impl AppModel {
 
         let value = field.value.clone();
         if let Some(state) = self.annotation_ui.get_mut(&tab) {
-            state.form_focus = Some(index);
-            state.form_draft = value.clone();
-            state.form_original = value;
-            state.form_caret = text_char_count(&state.form_draft);
-            state.caret_visible = true;
-            state.form_menu = has_options.then_some(anchor);
+            state.begin_form_edit(index, value, has_options.then_some(anchor));
         }
         self.focus_form_field(tab, index)
     }
@@ -1762,7 +1748,7 @@ impl AppModel {
         let Some(state) = self.annotation_ui.get(&tab) else {
             return iced::Task::none();
         };
-        let color = state.annotation_color;
+        let color = state.annotation_color();
         let worker = self.worker.clone();
         cosmic::task::future(async move {
             let (_, result) = worker
@@ -1808,7 +1794,7 @@ impl AppModel {
         let Some(state) = self.annotation_ui.get(&tab) else {
             return iced::Task::none();
         };
-        let Some(pending) = state.pending_text.as_ref() else {
+        let Some(pending) = state.pending_text() else {
             return iced::Task::none();
         };
         self.annotation_free_text_mutate(
@@ -1818,8 +1804,8 @@ impl AppModel {
                 page,
                 index: pending.index,
                 text: pending.text.clone(),
-                font_size: state.font_size_pt,
-                color: state.annotation_color,
+                font_size: state.font_size_pt(),
+                color: state.annotation_color(),
                 position: pending.origin,
                 max_width: pending.max_width,
                 cursor: pending.cursor,
@@ -1837,13 +1823,13 @@ impl AppModel {
             let Some(state) = self.annotation_ui.get_mut(&tab) else {
                 return iced::Task::none();
             };
-            let Some(pending) = state.pending_text.take() else {
+            let Some(pending) = state.take_pending_text() else {
                 return iced::Task::none();
             };
             (
-                state.selected,
-                state.font_size_pt,
-                state.annotation_color,
+                state.selected(),
+                state.font_size_pt(),
+                state.annotation_color(),
                 pending,
             )
         };
@@ -1882,10 +1868,10 @@ impl AppModel {
         let Some(state) = self.annotation_ui.get_mut(&tab) else {
             return iced::Task::none();
         };
-        let page = state.selected;
-        let font_size = state.font_size_pt;
-        let color = state.annotation_color;
-        let Some(pending) = state.pending_text.take() else {
+        let page = state.selected();
+        let font_size = state.font_size_pt();
+        let color = state.annotation_color();
+        let Some(pending) = state.take_pending_text() else {
             return iced::Task::none();
         };
 
@@ -1920,12 +1906,12 @@ impl AppModel {
     /// page has not been rotated/flipped in the view.
     fn annotation_page_coords(&self, tab: Entity, x: f32, y: f32) -> Option<(f32, f32)> {
         let state = self.annotation_ui.get(&tab)?;
-        let current = state.current.as_ref()?;
+        let current = state.current()?;
         let (image_w, image_h) = (current.rgba.0 as f32, current.rgba.1 as f32);
         if image_w == 0.0 || image_h == 0.0 {
             return None;
         }
-        let (page_w, page_h) = *state.page_sizes.get(state.selected as usize - 1)?;
+        let (page_w, page_h) = *state.page_sizes().get(state.selected() as usize - 1)?;
         if page_w == 0.0 || page_h == 0.0 {
             return None;
         }
@@ -2162,10 +2148,11 @@ impl AppModel {
             let Some(state) = self.annotation_ui.get_mut(&tab) else {
                 return iced::Task::none();
             };
-            let Some(image) = state.current.as_mut() else {
+            let (image, view) = state.image_view_mut();
+            let Some(image) = image else {
                 return iced::Task::none();
             };
-            transform_image(image, &mut state.view, rotation, flip_h, flip_v);
+            transform_image(image, view, rotation, flip_h, flip_v);
             return iced::Task::none();
         }
 
@@ -2197,7 +2184,7 @@ impl AppModel {
             let Some(state) = self.tab_ui.get_mut(&tab) else {
                 return iced::Task::none();
             };
-            let Some(preview) = state.preview.as_mut() else {
+            let Some(preview) = state.preview_mut() else {
                 return iced::Task::none();
             };
             if preview.path != path {
@@ -2290,13 +2277,13 @@ impl AppModel {
                 let Some((target, is_pdf)) = self
                     .tab_ui
                     .get(&tab)
-                    .and_then(|state| state.entries.get(index))
+                    .and_then(|state| state.entries().get(index))
                     .map(|entry| (entry.target.clone(), entry.expandable))
                 else {
                     return iced::Task::none();
                 };
                 if let Some(state) = self.tab_ui.get_mut(&tab) {
-                    state.selected = Some(index);
+                    state.set_selected(Some(index));
                 }
                 return self.activate_target(target, is_pdf);
             }
@@ -2313,17 +2300,22 @@ impl AppModel {
                     let Some(state) = self.tab_ui.get_mut(&tab) else {
                         return iced::Task::none();
                     };
-                    let Some(previous) =
-                        state.selected.and_then(|selected| selected.checked_sub(1))
+                    let Some(previous) = state
+                        .selected()
+                        .and_then(|selected| selected.checked_sub(1))
                     else {
                         return iced::Task::none();
                     };
-                    let Some(entry) = state.entries.get(previous) else {
+                    let Some((target, is_pdf)) = state
+                        .entries()
+                        .get(previous)
+                        .map(|entry| (entry.target.clone(), entry.expandable))
+                    else {
                         return iced::Task::none();
                     };
 
-                    state.selected = Some(previous);
-                    (entry.target.clone(), entry.expandable)
+                    state.set_selected(Some(previous));
+                    (target, is_pdf)
                 };
 
                 return self.activate_target(target, is_pdf);
@@ -2341,16 +2333,22 @@ impl AppModel {
                     let Some(state) = self.tab_ui.get_mut(&tab) else {
                         return iced::Task::none();
                     };
-                    let Some(next) = state.selected.and_then(|selected| selected.checked_add(1))
+                    let Some(next) = state
+                        .selected()
+                        .and_then(|selected| selected.checked_add(1))
                     else {
                         return iced::Task::none();
                     };
-                    let Some(entry) = state.entries.get(next) else {
+                    let Some((target, is_pdf)) = state
+                        .entries()
+                        .get(next)
+                        .map(|entry| (entry.target.clone(), entry.expandable))
+                    else {
                         return iced::Task::none();
                     };
 
-                    state.selected = Some(next);
-                    (entry.target.clone(), entry.expandable)
+                    state.set_selected(Some(next));
+                    (target, is_pdf)
                 };
 
                 return self.activate_target(target, is_pdf);
@@ -2400,9 +2398,9 @@ impl AppModel {
                             if let Some(path) = self.pending_select.take()
                                 && let Some(state) = self.tab_ui.get_mut(&tab)
                             {
-                                state.selected = state.entries.iter().position(|entry| {
+                                state.set_selected(state.entries().iter().position(|entry| {
                                     matches!(&entry.target, Target::File { path: p } if p == &path)
-                                });
+                                }));
                             }
                             return self.activate_tab();
                         }
@@ -2425,12 +2423,12 @@ impl AppModel {
                             let Some(state) = self.tab_ui.get(&tab) else {
                                 return iced::Task::none();
                             };
-                            let Some(start) = state.entries.iter().position(|entry| {
+                            let Some(start) = state.entries().iter().position(|entry| {
                                 matches!(&entry.target, Target::File { path: p } if p == &path)
                             }) else {
                                 return iced::Task::none();
                             };
-                            let end = (start + 1 + STRIP_INITIAL_THUMBS).min(state.entries.len());
+                            let end = (start + 1 + STRIP_INITIAL_THUMBS).min(state.entries().len());
                             start + 1..end
                         };
                         return self.request_strip_thumbs(tab, range);
@@ -2445,7 +2443,7 @@ impl AppModel {
             BrowserMessage::StripThumbsReady { tab, thumbs } => {
                 if let Some(state) = self.tab_ui.get_mut(&tab) {
                     for (index, rgba) in thumbs {
-                        if let Some(entry) = state.entries.get_mut(index)
+                        if let Some(entry) = state.entries_mut().get_mut(index)
                             && let Some((width, height, rgba)) = rgba
                         {
                             entry.thumb = Some(cosmic::widget::image::Handle::from_rgba(
@@ -2486,7 +2484,7 @@ impl AppModel {
                 let Some(state) = self.tab_ui.get_mut(&tab) else {
                     return iced::Task::none();
                 };
-                let Some(preview) = state.preview.as_mut() else {
+                let Some(preview) = state.preview_mut() else {
                     return iced::Task::none();
                 };
                 if preview.path != path {
@@ -2546,7 +2544,7 @@ impl AppModel {
                     let Some(state) = self.tab_ui.get_mut(&tab) else {
                         return iced::Task::none();
                     };
-                    let Some(preview) = state.preview.as_mut() else {
+                    let Some(preview) = state.preview_mut() else {
                         return iced::Task::none();
                     };
                     if preview.path != path {
@@ -2586,12 +2584,12 @@ impl AppModel {
                 let Some(state) = self.tab_ui.get(&tab) else {
                     return iced::Task::none();
                 };
-                if state.entries.is_empty() {
+                if state.entries().is_empty() {
                     return iced::Task::none();
                 }
                 let first = (offset_y / STRIP_TILE).floor() as usize;
                 let last = ((offset_y + viewport_height) / STRIP_TILE).ceil() as usize + 2;
-                return self.request_strip_thumbs(tab, first..last.min(state.entries.len()));
+                return self.request_strip_thumbs(tab, first..last.min(state.entries().len()));
             }
 
             BrowserMessage::StripDoubleClicked(index) => {
@@ -2724,16 +2722,9 @@ impl AppModel {
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };
-                let page_count = sizes.len();
                 let selected = if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.page_sizes = sizes;
-                    state.thumbs = vec![None; page_count];
-                    // Keep the selection when the page count still covers it
-                    // (a rotation re-render); clamp instead of jumping to the
-                    // first page.
-                    state.selected = state.selected.clamp(1, page_count.max(1) as u32);
-                    state.current = None;
-                    state.selected
+                    state.set_page_sizes(sizes);
+                    state.selected()
                 } else {
                     1
                 };
@@ -2748,9 +2739,7 @@ impl AppModel {
                         if let Some((width, height, rgba)) = rgba {
                             let handle =
                                 cosmic::widget::image::Handle::from_rgba(width, height, rgba);
-                            if let Some(slot) = state.thumbs.get_mut(page as usize - 1) {
-                                *slot = Some(handle);
-                            }
+                            state.set_thumb(page, Some(handle));
                         }
                     }
                 }
@@ -2758,28 +2747,29 @@ impl AppModel {
 
             AnnotationMessage::AnnotationPageRendered { tab, page, rgba } => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    if state.selected != page {
-                        // A stale render raced a page change; drop it.
-                        return iced::Task::none();
-                    }
-                    let (rotation, flip_h) = (state.view.rotation, state.view.flip_h);
-                    match rgba {
+                    let view = state.view();
+                    let image = match rgba {
                         Some((width, height, data)) => {
-                            let (width, height, data) =
-                                transform_rgba(width, height, data, rotation, flip_h, false);
-                            state.current = Some(CurrentImage {
+                            let (width, height, data) = transform_rgba(
+                                width,
+                                height,
+                                data,
+                                view.rotation,
+                                view.flip_h,
+                                false,
+                            );
+                            Some(CurrentImage {
                                 handle: cosmic::widget::image::Handle::from_rgba(
                                     width,
                                     height,
                                     data.clone(),
                                 ),
                                 rgba: (width, height, data),
-                            });
+                            })
                         }
-                        None => {
-                            state.current = None;
-                        }
-                    }
+                        None => None,
+                    };
+                    state.apply_page_render(page, image);
                 }
             }
 
@@ -2826,7 +2816,7 @@ impl AppModel {
                 let page_count = self
                     .annotation_ui
                     .get(&tab)
-                    .map(|state| state.page_sizes.len() as u32)
+                    .map(|state| state.page_sizes().len() as u32)
                     .unwrap_or(0);
                 if page_count == 0 {
                     return iced::Task::none();
@@ -2853,7 +2843,7 @@ impl AppModel {
                     return iced::Task::none();
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_menu = None;
+                    state.close_form_menu();
                 }
                 let worker = self.worker.clone();
                 return cosmic::task::future(async move {
@@ -2878,7 +2868,7 @@ impl AppModel {
                 if let Some(tab) = self.active_tab()
                     && let Some(state) = self.annotation_ui.get_mut(&tab)
                 {
-                    state.form_menu = None;
+                    state.close_form_menu();
                 }
                 return iced::Task::none();
             }
@@ -2915,11 +2905,7 @@ impl AppModel {
                 let Some(state) = self.annotation_ui.get_mut(&tab) else {
                     return finish;
                 };
-                state.active_tool = if state.active_tool == Some(tool) {
-                    None
-                } else {
-                    Some(tool)
-                };
+                state.toggle_tool(tool);
                 return finish;
             }
 
@@ -2928,7 +2914,7 @@ impl AppModel {
                     return iced::Task::none();
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.font_size_pt = size;
+                    state.set_font_size(size);
                 }
                 // Restyle the text that is being typed right away.
                 let Some(document) = self.annotation_document(tab) else {
@@ -2945,7 +2931,7 @@ impl AppModel {
                     return iced::Task::none();
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.annotation_color = color;
+                    state.set_color(color);
                 }
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
@@ -2960,7 +2946,7 @@ impl AppModel {
                 // Any click dismisses an open option list first; a click on a
                 // choice field opens it again at the new position.
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.form_menu = None;
+                    state.close_form_menu();
                 }
                 // The viewer reports clicks for its whole frame, including the
                 // margin around a fitted page. Only clicks on the page itself
@@ -2968,7 +2954,7 @@ impl AppModel {
                 let Some((width, height)) = self
                     .annotation_ui
                     .get(&tab)
-                    .and_then(|state| state.current.as_ref())
+                    .and_then(|state| state.current())
                     .map(|current| (current.rgba.0 as f32, current.rgba.1 as f32))
                 else {
                     return iced::Task::none();
@@ -3024,7 +3010,7 @@ impl AppModel {
                 let is_text = self
                     .annotation_ui
                     .get(&tab)
-                    .is_some_and(|state| state.active_tool == Some(AnnotationTool::Text));
+                    .is_some_and(|state| state.active_tool() == Some(AnnotationTool::Text));
                 if is_text {
                     return self.hit_free_text(tab, annotations, x, y);
                 }
@@ -3039,7 +3025,7 @@ impl AppModel {
                 if self
                     .annotation_ui
                     .get(&tab)
-                    .is_some_and(|state| state.form_focus.is_some())
+                    .is_some_and(|state| state.form_focus().is_some())
                 {
                     return self.handle_form_key(tab, key);
                 }
@@ -3059,7 +3045,7 @@ impl AppModel {
                     let Some(state) = self.annotation_ui.get_mut(&tab) else {
                         return iced::Task::none();
                     };
-                    let Some(pending) = state.pending_text.as_mut() else {
+                    let Some(pending) = state.pending_text_mut() else {
                         return iced::Task::none();
                     };
 
@@ -3100,7 +3086,7 @@ impl AppModel {
                 // Typing restarts the blink, so the marker is visible while the
                 // key is processed.
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.caret_visible = true;
+                    state.set_caret_visible(true);
                 }
                 return self.update_pending_text(tab, document, page);
             }
@@ -3115,7 +3101,7 @@ impl AppModel {
                     .annotation_ui
                     .get(&tab)
                     .and_then(|state| {
-                        let field = state.form_fields.get(state.form_focus?)?;
+                        let field = state.form_fields().get(state.form_focus()?)?;
                         crate::widget::form_fields::accepts_text(field).then_some(())
                     })
                     .is_some();
@@ -3123,9 +3109,10 @@ impl AppModel {
                     if let Some(state) = self.annotation_ui.get_mut(&tab) {
                         // Typing in an editable combo box dismisses its option
                         // list, like clicking into the text does elsewhere.
-                        state.form_menu = None;
-                        insert_at(&mut state.form_draft, &mut state.form_caret, &text);
-                        state.caret_visible = true;
+                        state.close_form_menu();
+                        let (draft, caret) = state.form_draft_mut();
+                        insert_at(draft, caret, &text);
+                        state.set_caret_visible(true);
                     }
                     return self.commit_form_draft(tab);
                 }
@@ -3136,11 +3123,11 @@ impl AppModel {
                     return iced::Task::none();
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    let Some(pending) = state.pending_text.as_mut() else {
+                    let Some(pending) = state.pending_text_mut() else {
                         return iced::Task::none();
                     };
                     insert_at(&mut pending.text, &mut pending.cursor, &text);
-                    state.caret_visible = true;
+                    state.set_caret_visible(true);
                 }
                 return self.update_pending_text(tab, document, page);
             }
@@ -3149,10 +3136,8 @@ impl AppModel {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
-                if let Some(state) = self.annotation_ui.get_mut(&tab)
-                    && state.pending_text.is_some()
-                {
-                    state.caret_visible = !state.caret_visible;
+                if let Some(state) = self.annotation_ui.get_mut(&tab) {
+                    state.toggle_caret();
                 }
                 return iced::Task::none();
             }
@@ -3169,7 +3154,7 @@ impl AppModel {
                     return iced::Task::none();
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.pending_text = Some(PendingText {
+                    state.begin_text_edit(PendingText {
                         index,
                         original_text: String::new(),
                         is_new: true,
@@ -3179,7 +3164,6 @@ impl AppModel {
                         max_width,
                         caret,
                     });
-                    state.caret_visible = true;
                 }
                 self.mark_annotation_dirty(tab);
                 let title = self.update_title();
@@ -3193,7 +3177,7 @@ impl AppModel {
                     return iced::Task::none();
                 }
                 if let (Some(state), Some(caret)) = (self.annotation_ui.get_mut(&tab), caret)
-                    && let Some(pending) = state.pending_text.as_mut()
+                    && let Some(pending) = state.pending_text_mut()
                 {
                     pending.caret = caret;
                 }
@@ -3210,13 +3194,7 @@ impl AppModel {
                 offset_y,
             } => {
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.view.fit = false;
-                    state.view.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
-                    state.view.offset_x = offset_x;
-                    state.view.offset_y = offset_y;
-                    // The list was anchored to a position that zooming or
-                    // panning just moved.
-                    state.form_menu = None;
+                    state.set_view_state(scale, offset_x, offset_y);
                 }
             }
 

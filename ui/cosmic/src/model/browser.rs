@@ -76,16 +76,18 @@ impl DocumentPreview {
 }
 
 /// Volatile per-tab UI state: strip entries, selection and the preview.
-/// Survives tab switches but is not persisted in the session.
+/// Survives tab switches but is not persisted in the session. Mutations go
+/// through named methods so selection, preview and expand state stay explicit.
 pub(crate) struct TabUiState {
-    pub(crate) entries: Vec<StripEntry>,
-    pub(crate) selected: Option<usize>,
-    pub(crate) preview: Option<DocumentPreview>,
+    entries: Vec<StripEntry>,
+    selected: Option<usize>,
+    preview: Option<DocumentPreview>,
     /// Path of the PDF currently expanded in the strip, if any.
-    pub(crate) expanded: Option<PathBuf>,
+    expanded: Option<PathBuf>,
 }
 
 impl TabUiState {
+    /// A fresh tab state selecting the first entry, if any.
     pub(crate) fn new(entries: Vec<StripEntry>) -> Self {
         let selected = (!entries.is_empty()).then_some(0);
         Self {
@@ -94,5 +96,70 @@ impl TabUiState {
             preview: None,
             expanded: None,
         }
+    }
+
+    /// Rebuild the state from its parts (a folder rescan keeps the view state).
+    pub(crate) fn from_parts(
+        entries: Vec<StripEntry>,
+        selected: Option<usize>,
+        preview: Option<DocumentPreview>,
+        expanded: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            entries,
+            selected,
+            preview,
+            expanded,
+        }
+    }
+
+    /// The strip entries, in order.
+    pub(crate) fn entries(&self) -> &[StripEntry] {
+        &self.entries
+    }
+
+    /// Mutable access to the strip entries (push, splice, drain).
+    pub(crate) fn entries_mut(&mut self) -> &mut Vec<StripEntry> {
+        &mut self.entries
+    }
+
+    /// The selected strip index.
+    pub(crate) fn selected(&self) -> Option<usize> {
+        self.selected
+    }
+
+    /// Set the selected strip index.
+    pub(crate) fn set_selected(&mut self, selected: Option<usize>) {
+        self.selected = selected;
+    }
+
+    /// The continuous PDF preview, if one is shown.
+    pub(crate) fn preview(&self) -> Option<&DocumentPreview> {
+        self.preview.as_ref()
+    }
+
+    /// Mutable access to the continuous PDF preview.
+    pub(crate) fn preview_mut(&mut self) -> Option<&mut DocumentPreview> {
+        self.preview.as_mut()
+    }
+
+    /// Replace the continuous PDF preview.
+    pub(crate) fn set_preview(&mut self, preview: Option<DocumentPreview>) {
+        self.preview = preview;
+    }
+
+    /// Take the preview out of the state, consuming it.
+    pub(crate) fn into_preview(self) -> Option<DocumentPreview> {
+        self.preview
+    }
+
+    /// The path of the PDF expanded in the strip, if any.
+    pub(crate) fn expanded(&self) -> Option<&PathBuf> {
+        self.expanded.as_ref()
+    }
+
+    /// Set the path of the PDF expanded in the strip.
+    pub(crate) fn set_expanded(&mut self, expanded: Option<PathBuf>) {
+        self.expanded = expanded;
     }
 }
