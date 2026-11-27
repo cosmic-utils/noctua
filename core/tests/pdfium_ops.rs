@@ -6,9 +6,10 @@
 
 use noctua_core_test_common as common;
 
-use noctua_core::pdfium_ops::model::AnnotationColor;
-use noctua_core::pdfium_ops::model::MarkupKind;
 use noctua_core::pdfium_ops::model::palette;
+use noctua_core::pdfium_ops::model::{
+    AnnotationColor, FontFamily, FreeTextStyle, MarkupKind, TextAlign,
+};
 use noctua_core::pdfium_ops::{BindSource, Command, CommandResult, PdfOpsManager};
 use std::path::{Path, PathBuf};
 
@@ -376,8 +377,11 @@ fn add_annotations_and_save() {
         mgr.execute(Command::AddFreeTextAnnotation {
             page: 1,
             text: "test note".to_string(),
-            font_size: 16.0,
-            color: palette::RED,
+            style: FreeTextStyle {
+                font_size: 16.0,
+                color: palette::RED,
+                ..FreeTextStyle::default()
+            },
             position: (40.0, 70.0),
             max_width: 160.0,
         }),
@@ -589,8 +593,11 @@ fn free_text_wraps_without_a_frame() {
     let index = match mgr.execute(Command::AddFreeTextAnnotation {
         page: 1,
         text: "Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod".to_string(),
-        font_size: 12.0,
-        color: AnnotationColor::rgb(255, 0, 0),
+        style: FreeTextStyle {
+            font_size: 12.0,
+            color: AnnotationColor::rgb(255, 0, 0),
+            ..FreeTextStyle::default()
+        },
         position: (60.0, 700.0),
         max_width: 200.0,
     }) {
@@ -675,8 +682,11 @@ fn free_text_edit_keeps_its_layout() {
         mgr.execute(Command::AddFreeTextAnnotation {
             page: 1,
             text: text.to_string(),
-            font_size: 12.0,
-            color: AnnotationColor::rgb(0, 0, 0),
+            style: FreeTextStyle {
+                font_size: 12.0,
+                color: AnnotationColor::rgb(0, 0, 0),
+                ..FreeTextStyle::default()
+            },
             position: (60.0, 700.0),
             max_width: 200.0,
         }),
@@ -697,8 +707,11 @@ fn free_text_edit_keeps_its_layout() {
                 page: 1,
                 index: current.index,
                 text: text.to_string(),
-                font_size: 12.0,
-                color: AnnotationColor::rgb(0, 0, 0),
+                style: FreeTextStyle {
+                    font_size: 12.0,
+                    color: AnnotationColor::rgb(0, 0, 0),
+                    ..FreeTextStyle::default()
+                },
                 position: (current.x, current.y + current.height),
                 max_width: current.width,
                 cursor: text.chars().count(),
@@ -743,8 +756,11 @@ fn free_text_caret_follows_the_cursor() {
     let created = mgr.execute(Command::AddFreeTextAnnotation {
         page: 1,
         text: text.to_string(),
-        font_size: 12.0,
-        color: AnnotationColor::rgb(0, 0, 0),
+        style: FreeTextStyle {
+            font_size: 12.0,
+            color: AnnotationColor::rgb(0, 0, 0),
+            ..FreeTextStyle::default()
+        },
         position: (60.0, 700.0),
         max_width: 100.0,
     });
@@ -756,8 +772,11 @@ fn free_text_caret_follows_the_cursor() {
         page: 1,
         index: 0,
         text: text.to_string(),
-        font_size: 12.0,
-        color: AnnotationColor::rgb(0, 0, 0),
+        style: FreeTextStyle {
+            font_size: 12.0,
+            color: AnnotationColor::rgb(0, 0, 0),
+            ..FreeTextStyle::default()
+        },
         position: (60.0, 700.0),
         max_width: 100.0,
         cursor: 0,
@@ -770,6 +789,68 @@ fn free_text_caret_follows_the_cursor() {
     assert!((start.0 - 62.0).abs() < 0.5, "x {}", start.0);
     assert!(start.1 > end.1, "start {} end {}", start.1, end.1);
     assert!(start.0 < end.0, "start {} end {}", start.0, end.0);
+
+    common::remove_dir(&dir);
+}
+
+/// Every style attribute round-trips through `/DA` and the `NoctuaStyle` entry,
+/// so re-opening an annotation keeps its look.
+#[test]
+fn free_text_style_round_trips() {
+    let Some(pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("free-text-style");
+    let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
+
+    let style = FreeTextStyle {
+        family: FontFamily::Times,
+        font_size: 20.0,
+        color: AnnotationColor::rgb(10, 20, 30),
+        background: Some(AnnotationColor::rgb(200, 210, 220)),
+        bold: true,
+        italic: true,
+        underline: true,
+        strikethrough: true,
+        align: TextAlign::Center,
+    };
+    assert!(matches!(
+        mgr.execute(Command::AddFreeTextAnnotation {
+            page: 1,
+            text: "styled".to_string(),
+            style,
+            position: (60.0, 700.0),
+            max_width: 200.0,
+        }),
+        CommandResult::FreeTextWritten { .. }
+    ));
+
+    let annotations = match mgr.execute(Command::ListFreeTextAnnotations { page: 1 }) {
+        CommandResult::FreeTextAnnotations(list) => list,
+        other => panic!("expected FreeTextAnnotations, got {other:?}"),
+    };
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(annotations[0].style, style);
+
+    // The styled appearance stream must still parse and paint pixels.
+    let (_, _, rgba) = match mgr.execute(Command::RenderPage { page: 1, zoom: 1.0 }) {
+        CommandResult::Rendered {
+            width,
+            height,
+            rgba_data,
+        } => (width, height, rgba_data),
+        other => panic!("expected Rendered, got {other:?}"),
+    };
+    assert!(
+        rgba.chunks(4)
+            .any(|pixel| pixel[0] < 240 || pixel[1] < 240 || pixel[2] < 240),
+        "the styled annotation must leave visible pixels"
+    );
 
     common::remove_dir(&dir);
 }

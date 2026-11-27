@@ -10,12 +10,15 @@ mod document;
 mod error;
 mod manager;
 pub mod model;
+pub mod text;
 
 pub use command::{Command, CommandResult};
 pub use error::PdfOpsError;
-pub use manager::{PdfOpsManager, helvetica_text_width, read_pdf_metadata};
+pub use manager::{PdfOpsManager, read_pdf_metadata};
 pub use model::{
-    AnnotationColor, BindSource, FormField, FormFieldKind, FreeTextAnnotation, PageRef, PdfMetadata,
+    AnnotationColor, BindSource, FontFamily, FormField, FormFieldKind, FreeTextAnnotation,
+    FreeTextStyle, PageRef, PdfMetadata, TextAlign,
 };
+pub use text::helvetica_text_width;
 
 pub use bindings::try_pdfium;

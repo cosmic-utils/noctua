@@ -5,7 +5,7 @@
 // document are expressed as commands.
 
 use crate::pdfium_ops::model::{
-    AnnotationColor, BindSource, FormField, FreeTextAnnotation, MarkupKind,
+    AnnotationColor, BindSource, FormField, FreeTextAnnotation, FreeTextStyle, MarkupKind,
 };
 use std::path::PathBuf;
 
@@ -55,8 +55,7 @@ pub enum Command {
     AddFreeTextAnnotation {
         page: u32,
         text: String,
-        font_size: f32,
-        color: AnnotationColor,
+        style: FreeTextStyle,
         position: (f32, f32),
         max_width: f32,
     },
@@ -70,8 +69,7 @@ pub enum Command {
         page: u32,
         index: usize,
         text: String,
-        font_size: f32,
-        color: AnnotationColor,
+        style: FreeTextStyle,
         position: (f32, f32),
         max_width: f32,
         cursor: usize,
@@ -148,12 +146,12 @@ pub enum Command {
     /// Drop the form environment's input focus.
     BlurFormField,
 
-    /// Change the text colour and font size of an existing free-text annotation.
+    /// Change the style of an existing free-text annotation, keeping its
+    /// top-left corner and wrap width.
     SetFreeTextStyle {
         page: u32,
         index: usize,
-        color: AnnotationColor,
-        font_size: f32,
+        style: FreeTextStyle,
     },
 
     /// Save the current document to its open path.

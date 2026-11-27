@@ -60,6 +60,61 @@ impl AnnotationColor {
     }
 }
 
+/// Base font family of a free-text annotation. Mapped onto the standard 14
+/// PDF fonts, so no font has to be embedded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontFamily {
+    #[default]
+    Helvetica,
+    Times,
+    Courier,
+}
+
+/// Horizontal alignment of the lines of a free-text annotation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+/// The complete style of a free-text annotation. Font family, size and colour
+/// live in the annotation's `/DA`; the remaining attributes are drawn in the
+/// appearance stream and stored in the annotation's `NoctuaStyle` entry so they
+/// survive a round trip.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FreeTextStyle {
+    pub family: FontFamily,
+    /// Font size in points.
+    pub font_size: f32,
+    pub color: AnnotationColor,
+    /// Background fill; `None` is transparent.
+    pub background: Option<AnnotationColor>,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub align: TextAlign,
+}
+
+impl Default for FreeTextStyle {
+    fn default() -> Self {
+        Self {
+            family: FontFamily::Helvetica,
+            font_size: 24.0,
+            color: AnnotationColor::rgb(0, 0, 0),
+            background: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            align: TextAlign::Left,
+        }
+    }
+}
+
 /// PDF properties read from a file via pdfium.
 #[derive(Debug, Clone)]
 pub struct PdfMetadata {
@@ -81,10 +136,8 @@ pub struct FreeTextAnnotation {
     pub index: usize,
     /// The annotation's text (`/Contents`).
     pub contents: String,
-    /// Text colour parsed from `/DA` (black when absent).
-    pub color: AnnotationColor,
-    /// Font size in points parsed from `/DA` (12 pt when absent).
-    pub font_size: f32,
+    /// The annotation's style, recovered from `/DA` and `NoctuaStyle`.
+    pub style: FreeTextStyle,
     pub x: f32,
     pub y: f32,
     pub width: f32,

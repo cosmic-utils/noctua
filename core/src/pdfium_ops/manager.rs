@@ -14,9 +14,10 @@ use super::command::{Command, CommandResult};
 use super::document::Document;
 use super::error::PdfOpsError;
 use super::model::{
-    AnnotationColor, BindSource, FormField, FormFieldKind, FreeTextAnnotation, MarkupKind,
-    PdfMetadata,
+    AnnotationColor, BindSource, FormField, FormFieldKind, FreeTextAnnotation, FreeTextStyle,
+    MarkupKind, PdfMetadata,
 };
+use super::text::{self, CaretRect};
 
 use crate::storage::document::Format;
 
@@ -27,9 +28,6 @@ fn pdfium_err(e: PdfiumError) -> PdfOpsError {
 /// `FPDF_ANNOT_FLAG_PRINT` from `fpdf_annot.h`. The pdfium-render prelude does
 /// not re-export the flag constants.
 const ANNOT_FLAG_PRINT: i32 = 1 << 2;
-
-/// Rectangle in page points: `(x, y, width, height)`, origin bottom-left.
-type CaretRect = (f32, f32, f32, f32);
 
 /// Owns an annotation handle returned by `FPDFPage_CreateAnnot` or
 /// `FPDFPage_GetAnnot` and closes it on drop. pdfium requires
@@ -83,60 +81,6 @@ fn text_char_is_whitespace(
     }
 }
 
-/// Build a free-text `/DA` appearance string: RGB colour (0–1) plus the Helvetica
-/// font size in points.
-fn free_text_da(color: AnnotationColor, font_size: f32) -> String {
-    let r = color.red as f32 / 255.0;
-    let g = color.green as f32 / 255.0;
-    let b = color.blue as f32 / 255.0;
-    format!("{r:.3} {g:.3} {b:.3} rg /Helv {font_size} Tf")
-}
-
-/// Parse the colour and font size out of a free-text `/DA` string. Falls back to
-/// black and 12 pt, matching the PDF defaults.
-fn parse_free_text_da(da: &str) -> (AnnotationColor, f32) {
-    let tokens: Vec<&str> = da.split_whitespace().collect();
-    let number = |index: usize| {
-        tokens
-            .get(index)
-            .and_then(|token| token.parse::<f32>().ok())
-    };
-    let mut rgb = [0.0f32; 3];
-    let mut size = 12.0f32;
-    for (index, token) in tokens.iter().enumerate() {
-        match *token {
-            "rg" if index >= 3 => {
-                if let (Some(r), Some(g), Some(b)) =
-                    (number(index - 3), number(index - 2), number(index - 1))
-                {
-                    rgb = [r, g, b];
-                }
-            }
-            "g" if index >= 1 => {
-                if let Some(grey) = number(index - 1) {
-                    rgb = [grey; 3];
-                }
-            }
-            "Tf" if index >= 1 => {
-                if let Some(value) = number(index - 1).filter(|value| *value > 0.0) {
-                    size = value;
-                }
-            }
-            _ => {}
-        }
-    }
-    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-    (
-        AnnotationColor {
-            red: channel(rgb[0]),
-            green: channel(rgb[1]),
-            blue: channel(rgb[2]),
-            alpha: 255,
-        },
-        size.clamp(1.0, 400.0),
-    )
-}
-
 /// Read a string value from a raw annotation handle. pdfium returns UTF-16LE.
 fn read_annot_string(
     bindings: &dyn PdfiumLibraryBindings,
@@ -151,231 +95,6 @@ fn read_annot_string(
     bindings.FPDFAnnot_GetStringValue(annot, key, buffer.as_mut_ptr(), length);
     let text = String::from_utf16_lossy(&buffer);
     Some(text.trim_end_matches('\0').to_string())
-}
-
-/// Helvetica line advance as a multiple of the font size.
-const FREE_TEXT_LINE_HEIGHT: f32 = 1.2;
-
-/// Inset between the free-text box and its text, in points.
-const FREE_TEXT_PADDING: f32 = 2.0;
-
-/// Helvetica ascent and descent in em units (Adobe AFM metrics).
-const HELVETICA_ASCENT: f32 = 0.718;
-const HELVETICA_DESCENT: f32 = 0.207;
-
-/// Width of the insertion marker, in points.
-const CARET_WIDTH: f32 = 0.8;
-
-/// Helvetica advance widths for printable ASCII (32..=126), in 1/1000 em,
-/// taken from Adobe's Helvetica AFM.
-const HELVETICA_ASCII_WIDTHS: [u16; 95] = [
-    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, // 32..=47
-    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, // 48..=63
-    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722,
-    778, // 64..=79
-    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, // 80..=95
-    333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556,
-    556, // 96..=111
-    556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584, // 112..=126
-];
-
-/// Advance width of one character in 1/1000 em. Characters outside the table
-/// use a typical lowercase width; the full text stays in `/Contents`.
-fn helvetica_width_units(ch: char) -> u16 {
-    let code = ch as u32;
-    if (32..=126).contains(&code) {
-        return HELVETICA_ASCII_WIDTHS[(code - 32) as usize];
-    }
-    match ch {
-        'Ä' => 667,
-        'Ö' => 778,
-        'Ü' => 722,
-        'ç' => 500,
-        '°' => 400,
-        _ => 556,
-    }
-}
-
-/// Advance width of one character at `font_size` points.
-fn char_width(ch: char, font_size: f32) -> f32 {
-    f32::from(helvetica_width_units(ch)) * font_size / 1000.0
-}
-
-/// Rendered width of `text` at `font_size` points.
-fn text_width(text: &str, font_size: f32) -> f32 {
-    text.chars().map(|ch| char_width(ch, font_size)).sum()
-}
-
-/// Rendered width of `text` in Helvetica at `font_size` points.
-///
-/// Public because the UI places the caret inside a form field with the same
-/// metrics the appearance uses; the width table lives in this module.
-pub fn helvetica_text_width(text: &str, font_size: f32) -> f32 {
-    text_width(text, font_size)
-}
-
-/// Greedy wrap: break at spaces, split words that are wider than a line. Each
-/// line carries the character offset it starts at in the source text, so a
-/// caret index can be mapped back to a position.
-fn wrap_text(text: &str, font_size: f32, max_width: f32) -> Vec<(String, usize)> {
-    // Even the narrowest usable box must fit one character per line.
-    let max_width = max_width.max(char_width('m', font_size));
-    let mut lines = Vec::new();
-    let mut paragraph_start = 0;
-
-    for paragraph in text.split('\n') {
-        let characters: Vec<char> = paragraph.chars().collect();
-        let mut line = String::new();
-        let mut line_start = 0;
-        let mut line_width = 0.0_f32;
-
-        for (index, ch) in characters.iter().copied().enumerate() {
-            let advance = char_width(ch, font_size);
-            if line_width + advance > max_width && !line.is_empty() {
-                match line.rfind(' ') {
-                    // Keep the word that no longer fits for the next line.
-                    Some(space) => {
-                        let carry = line.split_off(space + 1);
-                        let carry_start = line_start + line[..=space].chars().count();
-                        line_width = text_width(&carry, font_size);
-                        lines.push((
-                            std::mem::take(&mut line).trim_end().to_string(),
-                            paragraph_start + line_start,
-                        ));
-                        line = carry;
-                        line_start = carry_start;
-                    }
-                    None => {
-                        lines.push((std::mem::take(&mut line), paragraph_start + line_start));
-                        line_start = index;
-                        line_width = 0.0;
-                    }
-                }
-            }
-            line.push(ch);
-            line_width += advance;
-        }
-
-        lines.push((line, paragraph_start + line_start));
-        paragraph_start += characters.len() + 1;
-    }
-
-    lines
-}
-
-/// Laid-out free-text: the wrapped lines plus the box that holds them.
-struct FreeTextLayout {
-    lines: Vec<String>,
-    /// Character offset of each line's first character in the source text.
-    starts: Vec<usize>,
-    width: f32,
-    height: f32,
-}
-
-fn layout_free_text(text: &str, font_size: f32, max_width: f32) -> FreeTextLayout {
-    let wrapped = wrap_text(text, font_size, max_width);
-    let widest = wrapped
-        .iter()
-        .map(|(line, _)| text_width(line, font_size))
-        .fold(0.0_f32, f32::max)
-        // An empty box still needs a clickable width.
-        .max(char_width('n', font_size));
-    let line_count = wrapped.len().max(1) as f32;
-    FreeTextLayout {
-        width: widest + 2.0 * FREE_TEXT_PADDING,
-        height: line_count * font_size * FREE_TEXT_LINE_HEIGHT + 2.0 * FREE_TEXT_PADDING,
-        starts: wrapped.iter().map(|(_, start)| *start).collect(),
-        lines: wrapped.into_iter().map(|(line, _)| line).collect(),
-    }
-}
-
-/// Escape `text` as a PDF literal string. pdfium re-encodes the whole stream
-/// through PDFDocEncoding, so characters outside Latin-1 would corrupt the
-/// operators; those are replaced (the real text stays in `/Contents`).
-fn pdf_text_string(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('(');
-    for ch in text.chars() {
-        match ch {
-            '(' => out.push_str("\\("),
-            ')' => out.push_str("\\)"),
-            '\\' => out.push_str("\\\\"),
-            ch if (ch as u32) < 0x20 || (0x7F..=0x9F).contains(&(ch as u32)) => out.push('?'),
-            ch if (ch as u32) > 0xFF => out.push('?'),
-            ch => out.push(ch),
-        }
-    }
-    out.push(')');
-    out
-}
-
-/// Baseline of the first line of a box whose top edge is `top`.
-fn first_baseline(top: f32, font_size: f32) -> f32 {
-    top - FREE_TEXT_PADDING - font_size * HELVETICA_ASCENT
-}
-
-/// Build the normal appearance stream of a free-text annotation. Writing the
-/// stream ourselves keeps the frame off (pdfium's own generator always draws
-/// one) and gives us line breaks, which its generator does not produce.
-fn free_text_appearance(
-    layout: &FreeTextLayout,
-    font_size: f32,
-    color: AnnotationColor,
-    top_left: (f32, f32),
-) -> String {
-    let (left, top) = top_left;
-    let r = color.red as f32 / 255.0;
-    let g = color.green as f32 / 255.0;
-    let b = color.blue as f32 / 255.0;
-    let x = left + FREE_TEXT_PADDING;
-    let line_step = font_size * FREE_TEXT_LINE_HEIGHT;
-    let mut baseline = first_baseline(top, font_size);
-
-    let mut content = format!("q\n{r:.3} {g:.3} {b:.3} rg\nBT\n/Helv {font_size:.3} Tf\n");
-    for line in &layout.lines {
-        content.push_str(&format!("1 0 0 1 {x:.3} {baseline:.3} Tm\n"));
-        content.push_str(&format!("{} Tj\n", pdf_text_string(line)));
-        baseline -= line_step;
-    }
-    content.push_str("ET\nQ");
-    content
-}
-
-/// Rectangle of the insertion marker at the end of the laid-out text, in page
-/// points with the origin at the bottom-left.
-fn free_text_caret(
-    layout: &FreeTextLayout,
-    font_size: f32,
-    top_left: (f32, f32),
-    cursor: usize,
-) -> CaretRect {
-    let (left, top) = top_left;
-
-    // The cursor sits on the last line that starts at or before it.
-    let mut line = 0;
-    for (index, start) in layout.starts.iter().enumerate() {
-        if *start <= cursor {
-            line = index;
-        }
-    }
-
-    let prefix: String = layout
-        .lines
-        .get(line)
-        .map(|text| {
-            text.chars()
-                .take(cursor.saturating_sub(layout.starts[line]))
-                .collect()
-        })
-        .unwrap_or_default();
-    let baseline = first_baseline(top, font_size) - line as f32 * font_size * FREE_TEXT_LINE_HEIGHT;
-
-    (
-        left + FREE_TEXT_PADDING + text_width(&prefix, font_size),
-        baseline - font_size * HELVETICA_DESCENT,
-        CARET_WIDTH,
-        font_size * (HELVETICA_ASCENT + HELVETICA_DESCENT),
-    )
 }
 
 /// `FPDF_FORMFIELD_*` from `fpdf_formfill.h`: the field type pdfium reports.
@@ -506,13 +225,10 @@ impl PdfOpsManager {
             Command::AddFreeTextAnnotation {
                 page,
                 text,
-                font_size,
-                color,
+                style,
                 position,
                 max_width,
-            } => match self
-                .add_free_text_annotation(page, &text, font_size, color, position, max_width)
-            {
+            } => match self.add_free_text_annotation(page, &text, style, position, max_width) {
                 Ok((index, caret)) => CommandResult::FreeTextWritten {
                     index: Some(index),
                     caret,
@@ -523,17 +239,17 @@ impl PdfOpsManager {
                 page,
                 index,
                 text,
-                font_size,
-                color,
+                style,
                 position,
                 max_width,
                 cursor,
-            } => match self.update_free_text(
-                page, index, &text, font_size, color, position, max_width, cursor,
-            ) {
-                Ok(caret) => CommandResult::FreeTextWritten { index: None, caret },
-                Err(error) => CommandResult::Error(error),
-            },
+            } => {
+                match self.update_free_text(page, index, &text, style, position, max_width, cursor)
+                {
+                    Ok(caret) => CommandResult::FreeTextWritten { index: None, caret },
+                    Err(error) => CommandResult::Error(error),
+                }
+            }
             Command::RemoveAnnotation { page, index } => self.remove_annotation(page, index).into(),
             Command::AddInkAnnotation {
                 page,
@@ -593,14 +309,9 @@ impl PdfOpsManager {
                 }
                 CommandResult::Ok
             }
-            Command::SetFreeTextStyle {
-                page,
-                index,
-                color,
-                font_size,
-            } => self
-                .set_free_text_style(page, index, color, font_size)
-                .into(),
+            Command::SetFreeTextStyle { page, index, style } => {
+                self.set_free_text_style(page, index, style).into()
+            }
             Command::Save => self.save().into(),
             Command::SaveAs { path } => self.save_as(&path).into(),
             Command::PageCount => match self.page_count() {
@@ -855,8 +566,7 @@ impl PdfOpsManager {
         &mut self,
         page: u32,
         text: &str,
-        font_size: f32,
-        color: AnnotationColor,
+        style: FreeTextStyle,
         position: (f32, f32),
         max_width: f32,
     ) -> Result<(usize, CaretRect), PdfOpsError> {
@@ -885,8 +595,7 @@ impl PdfOpsManager {
                 bindings,
                 annot.handle,
                 text,
-                font_size,
-                color,
+                style,
                 position,
                 max_width,
                 text.chars().count(),
@@ -908,13 +617,12 @@ impl PdfOpsManager {
         bindings: &dyn PdfiumLibraryBindings,
         annot: FPDF_ANNOTATION,
         text: &str,
-        font_size: f32,
-        color: AnnotationColor,
+        style: FreeTextStyle,
         position: (f32, f32),
         max_width: f32,
         cursor: usize,
     ) -> Result<CaretRect, PdfOpsError> {
-        let layout = layout_free_text(text, font_size, max_width);
+        let layout = text::layout(text, &style, max_width);
         let (left, top) = position;
         let rect = PdfRect::new(
             PdfPoints::new(top - layout.height),
@@ -926,13 +634,19 @@ impl PdfOpsManager {
         bindings.FPDFAnnot_SetRect(annot, &fs_rect);
 
         // `/Contents` and `/DA` keep the annotation readable for other viewers;
-        // the appearance below is what pdfium renders.
+        // the appearance below is what pdfium renders. The decorations a `/DA`
+        // string cannot carry are stored in their own entry so they round-trip.
         bindings.FPDFAnnot_SetStringValue_str(annot, "Contents", text);
-        bindings.FPDFAnnot_SetStringValue_str(annot, "DA", &free_text_da(color, font_size));
+        bindings.FPDFAnnot_SetStringValue_str(annot, "DA", &text::default_appearance(&style));
+        bindings.FPDFAnnot_SetStringValue_str(
+            annot,
+            text::DECORATIONS_KEY,
+            &text::serialize_decorations(text::Decorations::from_style(&style)),
+        );
 
         // pdfium re-encodes the stream as a PDFDocEncoding string, so it has to
         // be passed as UTF-16 and terminated.
-        let mut wide: Vec<u16> = free_text_appearance(&layout, font_size, color, position)
+        let mut wide: Vec<u16> = text::appearance_stream(&layout, &style, position)
             .encode_utf16()
             .collect();
         wide.push(0);
@@ -942,7 +656,7 @@ impl PdfOpsManager {
             ));
         }
 
-        Ok(free_text_caret(&layout, font_size, position, cursor))
+        Ok(text::caret_rect(&layout, &style, position, cursor))
     }
 
     /// List the free-text annotations on a page, in page points. `index` is the
@@ -977,15 +691,24 @@ impl PdfOpsManager {
             if bindings.FPDFAnnot_GetRect(handle.handle, &mut rect) == 0 {
                 continue;
             }
-            // The colour and size live in `/DA`, which has no typed getter.
+            // Family, colour and size live in `/DA`; the remaining style in the
+            // `NoctuaStyle` entry, both written by `write_free_text`.
             let da = read_annot_string(bindings, handle.handle, "DA").unwrap_or_default();
-            let (color, font_size) = parse_free_text_da(&da);
+            let (family, color, font_size) = text::parse_default_appearance(&da);
+            let extras = read_annot_string(bindings, handle.handle, text::DECORATIONS_KEY)
+                .unwrap_or_default();
+            let mut style = FreeTextStyle {
+                family,
+                font_size,
+                color,
+                ..FreeTextStyle::default()
+            };
+            text::parse_decorations(&extras).apply(&mut style);
             annotations.push(FreeTextAnnotation {
                 index,
                 contents: read_annot_string(bindings, handle.handle, "Contents")
                     .unwrap_or_default(),
-                color,
-                font_size,
+                style,
                 x: rect.left,
                 y: rect.bottom,
                 width: rect.right - rect.left,
@@ -1042,7 +765,7 @@ impl PdfOpsManager {
             };
 
             let da = read_annot_string(bindings, annot.handle, "DA").unwrap_or_default();
-            let (_, font_size) = parse_free_text_da(&da);
+            let (_, _, font_size) = text::parse_default_appearance(&da);
 
             let mut options = Vec::new();
             let mut labels_complete = true;
@@ -1150,8 +873,7 @@ impl PdfOpsManager {
         page: u32,
         index: usize,
         text: &str,
-        font_size: f32,
-        color: AnnotationColor,
+        style: FreeTextStyle,
         position: (f32, f32),
         max_width: f32,
         cursor: usize,
@@ -1174,8 +896,7 @@ impl PdfOpsManager {
                 bindings,
                 annot.handle,
                 text,
-                font_size,
-                color,
+                style,
                 position,
                 max_width,
                 cursor,
@@ -1205,14 +926,13 @@ impl PdfOpsManager {
         Ok(())
     }
 
-    /// Rewrite the appearance of a free-text annotation with a new text colour
-    /// and font size, keeping its top-left corner and wrap width.
+    /// Rewrite the appearance of a free-text annotation with a new style,
+    /// keeping its top-left corner and wrap width.
     fn set_free_text_style(
         &mut self,
         page: u32,
         index: usize,
-        color: AnnotationColor,
-        font_size: f32,
+        style: FreeTextStyle,
     ) -> Result<(), PdfOpsError> {
         if page == 0 {
             return Err(PdfOpsError::PageOutOfRange(0));
@@ -1244,8 +964,7 @@ impl PdfOpsManager {
             page,
             index,
             &text,
-            font_size,
-            color,
+            style,
             position,
             max_width,
             text.chars().count(),
