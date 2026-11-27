@@ -11,7 +11,15 @@ Noctua – a document viewer for the COSMIC™ desktop
 >
 > Please open issues and pull requests on [Codeberg](https://codeberg.org/wfx/noctua/issues).
 
+## Features
 
+- Browse images, SVG and multi-page PDFs.
+- Annotate PDFs with text: a floating format bar offers font, size, colour, emphasis and alignment.
+- Fill interactive PDF forms.
+
+| Text editing | PDF form filling |
+|:--:|:--:|
+| ![Text editing](docs/screenshot_text_edit.png) | ![PDF form filling](docs/screenshot_pdf_form.png) |
 
 ## Installation
 
