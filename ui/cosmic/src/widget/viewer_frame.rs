@@ -34,6 +34,7 @@ pub(crate) fn viewer_frame(
     cursor: mouse::Interaction,
     on_state_change: impl Fn(f32, f32, f32) -> Message + 'static,
     on_click: Option<Box<dyn Fn(Point, Point) -> Message>>,
+    on_double_click: Option<Box<dyn Fn(Point, Point) -> Message>>,
     hover_cursor: Option<Box<dyn Fn(Point) -> Option<mouse::Interaction>>>,
     caret: Option<TextCaret>,
 ) -> Element<'static, Message> {
@@ -64,6 +65,9 @@ pub(crate) fn viewer_frame(
     }
     if let Some(on_click) = on_click {
         viewer = viewer.on_click(on_click);
+    }
+    if let Some(on_double_click) = on_double_click {
+        viewer = viewer.on_double_click(on_double_click);
     }
 
     widget::container(viewer).padding(space.space_m).into()

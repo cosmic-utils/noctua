@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use cosmic::iced::advanced::image as img_renderer;
 use cosmic::iced::advanced::layout;
@@ -32,6 +33,12 @@ const OFFSET_EPSILON: f32 = 0.01;
 
 /// Pan distance per Ctrl+arrow key press, in logical pixels.
 const PAN_STEP: f32 = 50.0;
+
+/// Maximum time between two clicks to count as a double-click.
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
+
+/// Maximum distance between two clicks to count as a double-click, in pixels.
+const DOUBLE_CLICK_DISTANCE: f32 = 5.0;
 
 /// Callback for viewer state changes (scale, `offset_x`, `offset_y`).
 type StateChangeCallback<Message> = Box<dyn Fn(f32, f32, f32) -> Message>;
@@ -68,6 +75,8 @@ pub(crate) struct Viewer<Handle, Message> {
     on_state_change: Option<StateChangeCallback<Message>>,
     /// Optional callback notified when the image is clicked (annotation mode).
     on_click: Option<ClickCallback<Message>>,
+    /// Optional callback notified when the image is double-clicked.
+    on_double_click: Option<ClickCallback<Message>>,
     /// Optional cell the widget writes its viewport into each frame, so the
     /// app can derive the effective zoom factor (incl. fit mode).
     reported_bounds: Option<Rc<Cell<Size>>>,
@@ -89,6 +98,7 @@ impl<Handle, Message> Viewer<Handle, Message> {
             external_state: None,
             on_state_change: None,
             on_click: None,
+            on_double_click: None,
             reported_bounds: None,
             text_caret: None,
         }
@@ -123,6 +133,16 @@ impl<Handle, Message> Viewer<Handle, Message> {
         F: 'static + Fn(Point, Point) -> Message,
     {
         self.on_click = Some(Box::new(f));
+        self
+    }
+
+    /// Sets a callback notified when the image is double-clicked. The second
+    /// click of a double-click reports here instead of through `on_click`.
+    pub(crate) fn on_double_click<F>(mut self, f: F) -> Self
+    where
+        F: 'static + Fn(Point, Point) -> Message,
+    {
+        self.on_double_click = Some(Box::new(f));
         self
     }
 
@@ -366,7 +386,7 @@ where
 
                 // In annotation mode a left click reports the position in
                 // native image pixels instead of starting a pan.
-                if let Some(on_click) = &self.on_click {
+                if self.on_click.is_some() || self.on_double_click.is_some() {
                     let final_size = scaled_image_size(
                         renderer,
                         &self.handle,
@@ -384,10 +404,27 @@ where
                         (cursor_position.x - image_top_left.x) / (final_size.width / native_w),
                         (cursor_position.y - image_top_left.y) / (final_size.height / native_h),
                     );
-                    shell.publish(on_click(
-                        native,
-                        Point::new(cursor_position.x - bounds.x, cursor_position.y - bounds.y),
-                    ));
+                    let anchor =
+                        Point::new(cursor_position.x - bounds.x, cursor_position.y - bounds.y);
+
+                    let now = Instant::now();
+                    let is_double_click = state.last_click.is_some_and(|(time, pos)| {
+                        now.duration_since(time) < DOUBLE_CLICK_WINDOW
+                            && (pos.x - cursor_position.x).abs() < DOUBLE_CLICK_DISTANCE
+                            && (pos.y - cursor_position.y).abs() < DOUBLE_CLICK_DISTANCE
+                    });
+
+                    if is_double_click {
+                        state.last_click = None;
+                        if let Some(on_double_click) = &self.on_double_click {
+                            shell.publish(on_double_click(native, anchor));
+                        }
+                    } else {
+                        state.last_click = Some((now, cursor_position));
+                        if let Some(on_click) = &self.on_click {
+                            shell.publish(on_click(native, anchor));
+                        }
+                    }
                     shell.capture_event();
                     return;
                 }
@@ -651,6 +688,8 @@ struct State {
     current_offset: Vector,
     cursor_grabbed_at: Option<Point>,
     keyboard_modifiers: Modifiers,
+    /// Time and position of the last left click, for double-click detection.
+    last_click: Option<(Instant, Point)>,
 }
 
 impl Default for State {
@@ -661,6 +700,7 @@ impl Default for State {
             current_offset: Vector::default(),
             cursor_grabbed_at: None,
             keyboard_modifiers: Modifiers::default(),
+            last_click: None,
         }
     }
 }

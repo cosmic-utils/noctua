@@ -10,14 +10,17 @@ use cosmic::widget::image::Handle;
 
 use noctua_core::pdfium_ops::FormField;
 use noctua_core::pdfium_ops::model::AnnotationColor;
+use noctua_core::pdfium_ops::model::palette;
 
 use super::{CurrentImage, ViewState};
 
-/// Annotation tools offered by the annotation mode. Text is implemented
-/// first; the remaining tools follow in later steps.
+/// Annotation tools offered by the annotation mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationTool {
+    /// Place or edit a free-text annotation.
     Text,
+    /// Highlight the word of text under a double-click.
+    Highlight,
 }
 
 /// Volatile view state of an annotation tab. Every mutation goes through a
@@ -39,6 +42,8 @@ pub(crate) struct AnnotationUiState {
     active_tool: Option<AnnotationTool>,
     /// Selected free-text colour.
     annotation_color: AnnotationColor,
+    /// Selected highlight colour.
+    highlight_color: AnnotationColor,
     /// Selected free-text font size in points.
     font_size_pt: f32,
     /// An in-progress free-text placement; `None` when no text is being entered.
@@ -76,6 +81,7 @@ impl Default for AnnotationUiState {
                 blue: 0,
                 alpha: 255,
             },
+            highlight_color: palette::YELLOW,
             font_size_pt: 24.0,
             pending_text: None,
             caret_visible: true,
@@ -134,6 +140,11 @@ impl AnnotationUiState {
     /// The selected free-text colour.
     pub(crate) fn annotation_color(&self) -> AnnotationColor {
         self.annotation_color
+    }
+
+    /// The selected highlight colour.
+    pub(crate) fn highlight_color(&self) -> AnnotationColor {
+        self.highlight_color
     }
 
     /// The selected free-text font size in points.

@@ -12,7 +12,6 @@ use cosmic::widget::{self, tab_bar};
 
 use std::path::Path;
 
-use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::storage;
 
 use crate::fl;
@@ -169,10 +168,10 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
         return empty_placeholder("image-x-generic-symbolic", fl!("select-hint"));
     };
 
-    let cursor = if state.active_tool() == Some(AnnotationTool::Text) {
-        mouse::Interaction::Text
-    } else {
-        mouse::Interaction::Grab
+    let cursor = match state.active_tool() {
+        Some(AnnotationTool::Text) => mouse::Interaction::Text,
+        Some(AnnotationTool::Highlight) => mouse::Interaction::Crosshair,
+        None => mouse::Interaction::Grab,
     };
 
     // The core reports the caret in page points with the origin at the
@@ -238,6 +237,14 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
                 anchor,
             })
         })),
+        Some(Box::new(move |native, anchor| {
+            Message::Annotation(AnnotationMessage::AnnotationDoubleClicked {
+                tab,
+                x: native.x,
+                y: native.y,
+                anchor,
+            })
+        })),
         Some(Box::new({
             let fields = state.form_fields().to_vec();
             move |point: Point| crate::widget::form_fields::cursor_for(&fields, point, image_height)
@@ -248,6 +255,22 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     .capture(&[Named::Tab, Named::Escape])
     .on_key(|key| Message::Annotation(AnnotationMessage::AnnotationTextKey(key)))
     .into();
+
+    // While a free-text annotation is being entered, show the format bar.
+    let element: Element<'static, Message> = if state.pending_text().is_some() {
+        let bar = widget::container(crate::widget::text_format::text_format_bar(
+            state.font_size_pt(),
+            state.annotation_color(),
+        ))
+        .center_x(Length::Fill)
+        .padding([cosmic::theme::spacing().space_xxs, 0]);
+        widget::column::with_capacity(2)
+            .push(bar)
+            .push(element)
+            .into()
+    } else {
+        element
+    };
 
     // The option list of a choice field is drawn over the page where the field
     // was clicked. The viewer sits inside its frame's padding, so the click
@@ -273,23 +296,6 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
             AnnotationMessage::AnnotationFormMenuClosed,
         ))
         .into()
-}
-
-/// Free-text font size presets, in points.
-const FONT_SIZE_PRESETS: [f32; 8] = [12.0, 16.0, 20.0, 24.0, 32.0, 48.0, 64.0, 96.0];
-
-/// Preset text colours for the free-text tool (label, colour).
-fn text_color_presets() -> Vec<(String, AnnotationColor)> {
-    use noctua_core::pdfium_ops::model::palette;
-    vec![
-        (fl!("color-black"), AnnotationColor::rgb(0, 0, 0)),
-        (fl!("color-white"), AnnotationColor::rgb(255, 255, 255)),
-        (fl!("color-red"), palette::RED),
-        (fl!("color-orange"), palette::ORANGE),
-        (fl!("color-yellow"), palette::YELLOW),
-        (fl!("color-green"), palette::GREEN),
-        (fl!("color-blue"), palette::BLUE),
-    ]
 }
 
 /// A toolbar icon button with a tooltip, publishing the message when pressed.
@@ -361,6 +367,7 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
         _ => None,
     }) {
         let text_active = state.active_tool() == Some(AnnotationTool::Text);
+        let highlight_active = state.active_tool() == Some(AnnotationTool::Highlight);
         toolbar = toolbar.start(
             widget::button::icon(widget::icon::from_name("insert-text-symbolic"))
                 .tooltip(fl!("text-tool"))
@@ -369,33 +376,14 @@ fn view_toolbar(app: &AppModel) -> Element<'_, Message> {
                     AnnotationMessage::AnnotationToolToggled(AnnotationTool::Text),
                 )),
         );
-        if text_active {
-            let labels: Vec<String> = FONT_SIZE_PRESETS
-                .iter()
-                .map(|size| format!("{size:.0} pt"))
-                .collect();
-            let selected = FONT_SIZE_PRESETS
-                .iter()
-                .position(|size| (*size - state.font_size_pt()).abs() < f32::EPSILON);
-            toolbar = toolbar.start(cosmic::widget::dropdown(labels, selected, |index| {
-                Message::Annotation(AnnotationMessage::AnnotationFontSizeChanged(
-                    FONT_SIZE_PRESETS[index],
-                ))
-            }));
-
-            let colors = text_color_presets();
-            let color_labels: Vec<String> = colors.iter().map(|(name, _)| name.clone()).collect();
-            let color_selected = colors
-                .iter()
-                .position(|(_, color)| *color == state.annotation_color());
-            toolbar = toolbar.start(cosmic::widget::dropdown(
-                color_labels,
-                color_selected,
-                move |index| {
-                    Message::Annotation(AnnotationMessage::AnnotationColorChanged(colors[index].1))
-                },
-            ));
-        }
+        toolbar = toolbar.start(
+            widget::button::icon(widget::icon::from_name("format-text-highlight-symbolic"))
+                .tooltip(fl!("highlight-tool"))
+                .selected(highlight_active)
+                .on_press(Message::Annotation(
+                    AnnotationMessage::AnnotationToolToggled(AnnotationTool::Highlight),
+                )),
+        );
     }
 
     toolbar = toolbar
@@ -559,6 +547,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                         offset_y,
                     })
                 },
+                None,
                 None,
                 None,
                 None,

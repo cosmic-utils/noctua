@@ -11,6 +11,7 @@ pub(crate) mod form_fields;
 pub(crate) mod image_viewer;
 pub(crate) mod scroll_zoom;
 pub(crate) mod strip;
+pub(crate) mod text_format;
 pub(crate) mod thumbnail_strip;
 pub(crate) mod toolbar;
 pub(crate) mod viewer_frame;

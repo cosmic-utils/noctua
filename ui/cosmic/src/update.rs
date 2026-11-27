@@ -2943,6 +2943,15 @@ impl AppModel {
             }
 
             AnnotationMessage::AnnotationPointerClicked { tab, x, y, anchor } => {
+                // The highlight tool only reacts to double-clicks; a single
+                // click is ignored.
+                if self
+                    .annotation_ui
+                    .get(&tab)
+                    .is_some_and(|state| state.active_tool() == Some(AnnotationTool::Highlight))
+                {
+                    return iced::Task::none();
+                }
                 // Any click dismisses an open option list first; a click on a
                 // choice field opens it again at the new position.
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
@@ -2997,6 +3006,35 @@ impl AppModel {
                     })
                 });
                 return cosmic::task::batch(vec![finish, click]);
+            }
+
+            AnnotationMessage::AnnotationDoubleClicked { tab, x, y, .. } => {
+                let Some(state) = self.annotation_ui.get(&tab) else {
+                    return iced::Task::none();
+                };
+                if state.active_tool() != Some(AnnotationTool::Highlight) {
+                    return iced::Task::none();
+                }
+                let color = state.highlight_color();
+                let Some(document) = self.annotation_document(tab) else {
+                    return iced::Task::none();
+                };
+                let Some(page) = self.selected_page(tab) else {
+                    return iced::Task::none();
+                };
+                let Some((page_x, page_y)) = self.annotation_page_coords(tab, x, y) else {
+                    return iced::Task::none();
+                };
+                return self.annotation_mutate(
+                    tab,
+                    document,
+                    Command::HighlightTextAt {
+                        page,
+                        x: page_x,
+                        y: page_y,
+                        color,
+                    },
+                );
             }
 
             AnnotationMessage::AnnotationTargetsKnown {

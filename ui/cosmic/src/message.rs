@@ -172,6 +172,13 @@ pub enum AnnotationMessage {
         y: f32,
         anchor: Point,
     },
+    /// A double-click on the page; used by the highlight tool.
+    AnnotationDoubleClicked {
+        tab: Entity,
+        x: f32,
+        y: f32,
+        anchor: Point,
+    },
     AnnotationTargetsKnown {
         tab: Entity,
         annotations: Vec<FreeTextAnnotation>,

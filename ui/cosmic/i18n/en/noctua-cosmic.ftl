@@ -30,6 +30,7 @@ move-page-up = Move Page Up
 move-page-down = Move Page Down
 delete-page = Delete Page
 text-tool = Text
+highlight-tool = Highlight
 color-black = Black
 color-white = White
 color-red = Red
