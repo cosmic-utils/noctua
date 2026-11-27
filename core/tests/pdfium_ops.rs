@@ -426,6 +426,55 @@ fn add_annotations_and_save() {
 }
 
 #[test]
+fn highlight_text_at_marks_the_word_under_the_click() {
+    let Some(pdfium) = pdfium() else {
+        eprintln!("SKIP: libpdfium.so not available");
+        return;
+    };
+    let _guard = pdfium_guard();
+    let dir = common::temp_dir("highlight");
+    let doc = common::make_pdf(pdfium, &dir, "doc.pdf", 1);
+
+    let mut mgr = PdfOpsManager::new();
+    assert!(matches!(mgr.execute(open_command(&doc)), CommandResult::Ok));
+
+    // The fixture writes "page 1" at (40, 700) in 14 pt Helvetica; a click on
+    // the word must create a highlight markup.
+    assert!(matches!(
+        mgr.execute(Command::HighlightTextAt {
+            page: 1,
+            x: 45.0,
+            y: 705.0,
+            color: palette::YELLOW,
+        }),
+        CommandResult::Ok
+    ));
+    assert!(mgr.dirty(), "a click on text should mark a word");
+
+    // A click on empty space is a no-op and must not create a markup.
+    let mut empty = PdfOpsManager::new();
+    assert!(matches!(
+        empty.execute(open_command(&doc)),
+        CommandResult::Ok
+    ));
+    assert!(matches!(
+        empty.execute(Command::HighlightTextAt {
+            page: 1,
+            x: 400.0,
+            y: 400.0,
+            color: palette::YELLOW,
+        }),
+        CommandResult::Ok
+    ));
+    assert!(
+        !empty.dirty(),
+        "a click on empty space must not mark anything"
+    );
+
+    common::remove_dir(&dir);
+}
+
+#[test]
 fn save_keeps_page_count_after_reload() {
     let Some(pdfium) = pdfium() else {
         eprintln!("SKIP: libpdfium.so not available");

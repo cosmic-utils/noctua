@@ -104,6 +104,17 @@ pub enum Command {
         height: f32,
     },
 
+    /// Highlight the word of text under the given point. `x`/`y` are page
+    /// points (origin bottom-left); pdfium's text layer locates the word and
+    /// a highlight markup is created over its bounding box. A click that is
+    /// not on a word is a no-op.
+    HighlightTextAt {
+        page: u32,
+        x: f32,
+        y: f32,
+        color: AnnotationColor,
+    },
+
     /// List the free-text annotations on a 1-based page, in page points.
     ListFreeTextAnnotations { page: u32 },
 

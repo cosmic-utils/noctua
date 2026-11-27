@@ -51,6 +51,38 @@ impl Drop for AnnotGuard<'_> {
     }
 }
 
+/// Owns a text page handle returned by `FPDFText_LoadPage` and closes it on
+/// drop. pdfium requires `FPDFText_ClosePage` before the page is closed.
+struct TextPageGuard<'a> {
+    bindings: &'a dyn PdfiumLibraryBindings,
+    handle: FPDF_TEXTPAGE,
+}
+
+impl<'a> TextPageGuard<'a> {
+    fn new(bindings: &'a dyn PdfiumLibraryBindings, handle: FPDF_TEXTPAGE) -> Option<Self> {
+        (!handle.is_null()).then_some(Self { bindings, handle })
+    }
+}
+
+impl Drop for TextPageGuard<'_> {
+    fn drop(&mut self) {
+        self.bindings.FPDFText_ClosePage(self.handle);
+    }
+}
+
+/// Whether the character at `index` in `text_page` separates words (no unicode
+/// mapping or whitespace). Used to find word boundaries around a click.
+fn text_char_is_whitespace(
+    bindings: &dyn PdfiumLibraryBindings,
+    text_page: FPDF_TEXTPAGE,
+    index: i32,
+) -> bool {
+    match char::from_u32(bindings.FPDFText_GetUnicode(text_page, index)) {
+        Some(c) => c.is_whitespace(),
+        None => true,
+    }
+}
+
 /// Build a free-text `/DA` appearance string: RGB colour (0–1) plus the Helvetica
 /// font size in points.
 fn free_text_da(color: AnnotationColor, font_size: f32) -> String {
@@ -525,6 +557,9 @@ impl PdfOpsManager {
             } => self
                 .add_markup_annotation(page, kind, color, (x, y, width, height))
                 .into(),
+            Command::HighlightTextAt { page, x, y, color } => {
+                self.highlight_text_at(page, x, y, color).into()
+            }
             Command::ListFreeTextAnnotations { page } => {
                 match self.list_free_text_annotations(page) {
                     Ok(list) => CommandResult::FreeTextAnnotations(list),
@@ -1314,6 +1349,84 @@ impl PdfOpsManager {
         bindings.FPDFAnnot_AppendAttachmentPoints(handle.handle, &annot_quad(x, y, width, height));
 
         self.dirty = true;
+        Ok(())
+    }
+
+    /// Highlight the word of text under `(x, y)`. The word is located through
+    /// pdfium's text layer; a click that is not on a word is a no-op.
+    fn highlight_text_at(
+        &mut self,
+        page: u32,
+        x: f32,
+        y: f32,
+        color: AnnotationColor,
+    ) -> Result<(), PdfOpsError> {
+        if page == 0 {
+            return Err(PdfOpsError::PageOutOfRange(0));
+        }
+
+        // Locate the word's bounding box first, so the mutable document borrow
+        // is released before the markup annotation is created.
+        let bounds = {
+            let document = self.document.as_mut().ok_or(PdfOpsError::NoDocumentOpen)?;
+            let pdf_page = document.page(page - 1)?;
+            let bindings = document.bindings();
+            let text_page =
+                TextPageGuard::new(bindings, bindings.FPDFText_LoadPage(pdf_page.handle()))
+                    .ok_or_else(|| {
+                        PdfOpsError::Pdfium("failed to load the page text layer".to_string())
+                    })?;
+
+            let index = bindings.FPDFText_GetCharIndexAtPos(
+                text_page.handle,
+                f64::from(x),
+                f64::from(y),
+                1.0,
+                1.0,
+            );
+            if index < 0 {
+                return Ok(());
+            }
+
+            let char_count = bindings.FPDFText_CountChars(text_page.handle);
+            let mut start = index;
+            while start > 0 && !text_char_is_whitespace(bindings, text_page.handle, start - 1) {
+                start -= 1;
+            }
+            let mut end = index;
+            while end + 1 < char_count
+                && !text_char_is_whitespace(bindings, text_page.handle, end + 1)
+            {
+                end += 1;
+            }
+
+            let (mut left, mut right, mut bottom, mut top) =
+                (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+            for i in start..=end {
+                let (mut l, mut r, mut b, mut t) = (0.0, 0.0, 0.0, 0.0);
+                if bindings.FPDFText_GetCharBox(text_page.handle, i, &mut l, &mut r, &mut b, &mut t)
+                    != 0
+                {
+                    left = left.min(l);
+                    right = right.max(r);
+                    bottom = bottom.min(b);
+                    top = top.max(t);
+                }
+            }
+            if left == f64::MAX {
+                return Ok(());
+            }
+            Some((
+                left as f32,
+                bottom as f32,
+                (right - left) as f32,
+                (top - bottom) as f32,
+            ))
+        };
+
+        if let Some(bounds) = bounds {
+            self.add_markup_annotation(page, MarkupKind::Highlight, color, bounds)?;
+        }
         Ok(())
     }
 
