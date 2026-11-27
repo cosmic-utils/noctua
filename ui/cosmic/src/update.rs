@@ -3434,3 +3434,69 @@ fn delete_at(text: &mut String, cursor: usize) {
     let offset = byte_offset(text, cursor);
     text.remove(offset);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_chosen_creates_a_folder_tab() {
+        let mut app = AppModel::new_for_test();
+        let dir = PathBuf::from("/tmp/noctua-test-folder");
+
+        let _task = app.handle_message(Message::Browser(BrowserMessage::FolderChosen(Some(
+            dir.clone(),
+        ))));
+
+        assert_eq!(app.tabs.len(), 1);
+        let tab = app.active_tab().expect("a tab is active");
+        assert!(matches!(&app.tabs[&tab], TabContent::Folder { path, .. } if path == &dir));
+        assert!(app.tab_ui.contains_key(&tab));
+    }
+
+    #[test]
+    fn context_opened_sets_the_action_target() {
+        let mut app = AppModel::new_for_test();
+        let path = PathBuf::from("/tmp/noctua-test-file.pdf");
+
+        let _task = app.handle_message(Message::Browser(BrowserMessage::ContextOpened {
+            path: path.clone(),
+        }));
+
+        assert_eq!(app.context_target.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn take_action_target_prefers_context_then_displayed() {
+        let mut app = AppModel::new_for_test();
+
+        // Without a context target, the displayed target wins.
+        app.displayed_target = Some(Target::File {
+            path: PathBuf::from("/tmp/shown.pdf"),
+        });
+        assert_eq!(
+            app.take_action_target(),
+            Some(PathBuf::from("/tmp/shown.pdf"))
+        );
+
+        // A context target takes precedence and is consumed.
+        app.context_target = Some(PathBuf::from("/tmp/right-clicked.pdf"));
+        assert_eq!(
+            app.take_action_target(),
+            Some(PathBuf::from("/tmp/right-clicked.pdf"))
+        );
+        assert!(app.context_target.is_none());
+    }
+
+    #[test]
+    fn close_tab_removes_the_tab() {
+        let mut app = AppModel::new_for_test();
+        let dir = PathBuf::from("/tmp/noctua-test-folder");
+        let _open = app.handle_message(Message::Browser(BrowserMessage::FolderChosen(Some(dir))));
+
+        let _close = app.handle_message(Message::Browser(BrowserMessage::CloseTab));
+
+        assert!(app.tabs.is_empty());
+        assert!(app.tab_ui.is_empty());
+    }
+}

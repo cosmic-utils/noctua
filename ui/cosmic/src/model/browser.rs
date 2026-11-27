@@ -163,3 +163,89 @@ impl TabUiState {
         self.expanded = expanded;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(path: &str) -> StripEntry {
+        StripEntry {
+            target: Target::File {
+                path: PathBuf::from(path),
+            },
+            name: path.to_string(),
+            thumb: None,
+            expandable: false,
+            view: ViewState::default(),
+        }
+    }
+
+    fn preview(path: &str) -> DocumentPreview {
+        DocumentPreview {
+            path: PathBuf::from(path),
+            page_sizes: vec![(100.0, 200.0)],
+            pages: vec![PageSlot::Empty],
+            zoom: 1.0,
+            rotation: 0,
+            flip_h: false,
+            scroll: 0.0,
+            viewport_height: 800.0,
+            viewport_width: 800.0,
+            full_order: Vec::new(),
+            requested: None,
+        }
+    }
+
+    #[test]
+    fn new_selects_the_first_entry() {
+        let state = TabUiState::new(vec![entry("a"), entry("b")]);
+        assert_eq!(state.entries().len(), 2);
+        assert_eq!(state.selected(), Some(0));
+    }
+
+    #[test]
+    fn new_without_entries_has_no_selection() {
+        let state = TabUiState::new(Vec::new());
+        assert_eq!(state.selected(), None);
+    }
+
+    #[test]
+    fn selected_and_expanded_roundtrip() {
+        let mut state = TabUiState::new(vec![entry("a"), entry("b")]);
+
+        state.set_selected(Some(1));
+        assert_eq!(state.selected(), Some(1));
+        state.set_selected(None);
+        assert_eq!(state.selected(), None);
+
+        let path = PathBuf::from("/tmp/a.pdf");
+        state.set_expanded(Some(path.clone()));
+        assert_eq!(state.expanded(), Some(&path));
+        state.set_expanded(None);
+        assert!(state.expanded().is_none());
+    }
+
+    #[test]
+    fn preview_roundtrip_consumes_state() {
+        let mut state = TabUiState::new(Vec::new());
+        state.set_preview(Some(preview("/tmp/a.pdf")));
+        assert!(state.preview().is_some());
+
+        let preview = state.into_preview().expect("preview was set");
+        assert_eq!(preview.path, PathBuf::from("/tmp/a.pdf"));
+    }
+
+    #[test]
+    fn from_parts_rebuilds_all_fields() {
+        let state = TabUiState::from_parts(
+            vec![entry("a")],
+            Some(0),
+            Some(preview("/tmp/a.pdf")),
+            Some(PathBuf::from("/tmp/a.pdf")),
+        );
+        assert_eq!(state.entries().len(), 1);
+        assert_eq!(state.selected(), Some(0));
+        assert!(state.preview().is_some());
+        assert!(state.expanded().is_some());
+    }
+}

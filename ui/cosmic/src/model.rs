@@ -186,6 +186,35 @@ pub struct AppModel {
     pub(crate) rename: Option<RenameDraft>,
 }
 
+#[cfg(test)]
+impl AppModel {
+    /// Build an `AppModel` for tests without touching the filesystem or a
+    /// display. Only compiled for `cargo test`; never part of release builds.
+    pub(crate) fn new_for_test() -> Self {
+        Self {
+            core: cosmic::Core::default(),
+            config: NoctuaConfig::default(),
+            about: About::default(),
+            key_binds: HashMap::new(),
+            tab_model: SingleSelectModel::default(),
+            tabs: HashMap::new(),
+            tab_ui: HashMap::new(),
+            annotation_ui: HashMap::new(),
+            displayed_target: None,
+            displayed_image: None,
+            viewer_bounds: Rc::new(Cell::new(Size::ZERO)),
+            keyboard_modifiers: Modifiers::default(),
+            show_nav_panel: true,
+            worker: SharedWorker::spawn(),
+            displayed_size: None,
+            context_target: None,
+            pending_select: None,
+            start_error: None,
+            rename: None,
+        }
+    }
+}
+
 /// Text being edited in the rename dialog of an annotation tab.
 pub(crate) struct RenameDraft {
     /// The annotation tab whose target file is being renamed.

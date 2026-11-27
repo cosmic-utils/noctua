@@ -350,3 +350,118 @@ pub(crate) struct PendingText {
     /// reported by the core after the last write.
     pub(crate) caret: (f32, f32, f32, f32),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image() -> CurrentImage {
+        CurrentImage {
+            handle: Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+            rgba: (1, 1, vec![0, 0, 0, 255]),
+        }
+    }
+
+    fn pending() -> PendingText {
+        PendingText {
+            index: 0,
+            original_text: String::new(),
+            is_new: true,
+            text: String::new(),
+            cursor: 0,
+            origin: (0.0, 0.0),
+            max_width: 100.0,
+            caret: (0.0, 0.0, 0.0, 0.0),
+        }
+    }
+
+    #[test]
+    fn select_page_clears_dependent_state() {
+        let mut state = AnnotationUiState::default();
+        state.set_page_sizes(vec![(100.0, 100.0), (200.0, 200.0)]);
+        state.begin_form_edit(0, "draft".to_string(), Some(Point::new(1.0, 2.0)));
+
+        state.select_page(2);
+
+        assert_eq!(state.selected(), 2);
+        assert!(state.current().is_none());
+        assert!(state.form_fields().is_empty());
+        assert!(state.form_focus().is_none());
+        assert!(state.form_menu().is_none());
+    }
+
+    #[test]
+    fn set_page_sizes_clamps_selection_and_resets_thumbs() {
+        let mut state = AnnotationUiState::default();
+        state.select_page(5);
+
+        state.set_page_sizes(vec![(10.0, 10.0)]);
+
+        assert_eq!(state.selected(), 1);
+        assert_eq!(state.thumbs().len(), 1);
+        assert!(state.current().is_none());
+    }
+
+    #[test]
+    fn restore_form_draft_reverts_to_original() {
+        let mut state = AnnotationUiState::default();
+        state.begin_form_edit(0, "original".to_string(), None);
+        let (draft, _) = state.form_draft_mut();
+        *draft = "changed".to_string();
+
+        state.restore_form_draft();
+
+        assert_eq!(state.form_draft(), "original");
+        assert!(state.form_menu().is_none());
+    }
+
+    #[test]
+    fn move_form_caret_clamps_to_draft() {
+        let mut state = AnnotationUiState::default();
+        state.begin_form_edit(0, "abc".to_string(), None);
+        assert_eq!(state.form_caret(), 3);
+
+        state.move_form_caret(-10);
+        assert_eq!(state.form_caret(), 0);
+
+        state.move_form_caret(10);
+        assert_eq!(state.form_caret(), 3);
+    }
+
+    #[test]
+    fn toggle_tool_switches_on_and_off() {
+        let mut state = AnnotationUiState::default();
+        assert!(state.active_tool().is_none());
+
+        state.toggle_tool(AnnotationTool::Text);
+        assert_eq!(state.active_tool(), Some(AnnotationTool::Text));
+
+        state.toggle_tool(AnnotationTool::Text);
+        assert!(state.active_tool().is_none());
+    }
+
+    #[test]
+    fn text_edit_begin_and_take() {
+        let mut state = AnnotationUiState::default();
+        state.begin_text_edit(pending());
+        assert!(state.pending_text().is_some());
+        assert!(state.caret_visible());
+
+        assert!(state.take_pending_text().is_some());
+        assert!(state.pending_text().is_none());
+    }
+
+    #[test]
+    fn apply_page_render_drops_stale_renders() {
+        let mut state = AnnotationUiState::default();
+        state.select_page(2);
+
+        // A render for a page that is no longer selected is dropped.
+        assert!(!state.apply_page_render(1, Some(image())));
+        assert!(state.current().is_none());
+
+        // A render for the selected page is applied.
+        assert!(state.apply_page_render(2, Some(image())));
+        assert!(state.current().is_some());
+    }
+}
