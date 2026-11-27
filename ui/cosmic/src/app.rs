@@ -89,6 +89,7 @@ impl cosmic::Application for AppModel {
             displayed_target: None,
             displayed_image: None,
             viewer_bounds: Rc::new(Cell::new(Size::ZERO)),
+            caret_position: Rc::new(Cell::new(None)),
             keyboard_modifiers: iced::keyboard::Modifiers::default(),
             show_nav_panel: true,
             worker: SharedWorker::spawn(),

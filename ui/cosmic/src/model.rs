@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use cosmic::iced::Size;
 use cosmic::iced::keyboard::Modifiers;
+use cosmic::iced::{Point, Size};
 use cosmic::widget;
 use cosmic::widget::about::About;
 use cosmic::widget::menu;
@@ -165,6 +165,10 @@ pub struct AppModel {
     /// zoom-from-fit continue from the displayed factor instead of jumping to
     /// 1:1. The viewport is stable across image changes, so reads never lag.
     pub(crate) viewer_bounds: Rc<Cell<Size>>,
+    /// Position of the annotation caret in the active viewer, relative to the
+    /// viewer's top-left, written by the `Viewer` widget each frame. Lets the
+    /// format bar anchor at the text being edited.
+    pub(crate) caret_position: Rc<Cell<Option<Point>>>,
     /// Current keyboard modifiers, tracked so widgets know the state at
     /// creation time (e.g. Ctrl already held).
     pub(crate) keyboard_modifiers: Modifiers,
@@ -203,6 +207,7 @@ impl AppModel {
             displayed_target: None,
             displayed_image: None,
             viewer_bounds: Rc::new(Cell::new(Size::ZERO)),
+            caret_position: Rc::new(Cell::new(None)),
             keyboard_modifiers: Modifiers::default(),
             show_nav_panel: true,
             worker: SharedWorker::spawn(),

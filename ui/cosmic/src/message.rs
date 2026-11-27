@@ -14,7 +14,7 @@ use cosmic::widget::menu;
 use cosmic::widget::segmented_button::Entity;
 
 use noctua_core::pdfium_ops::FormField;
-use noctua_core::pdfium_ops::model::{AnnotationColor, FreeTextAnnotation};
+use noctua_core::pdfium_ops::model::{FreeTextAnnotation, FreeTextStyle};
 use noctua_core::render::worker::DocumentId;
 use noctua_core::storage::browser::BrowserEntry;
 
@@ -164,8 +164,7 @@ pub enum AnnotationMessage {
         ok: bool,
     },
     AnnotationToolToggled(AnnotationTool),
-    AnnotationFontSizeChanged(f32),
-    AnnotationColorChanged(AnnotationColor),
+    AnnotationStyleChanged(FreeTextStyle),
     AnnotationPointerClicked {
         tab: Entity,
         x: f32,

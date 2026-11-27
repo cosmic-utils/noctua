@@ -80,6 +80,9 @@ pub(crate) struct Viewer<Handle, Message> {
     /// Optional cell the widget writes its viewport into each frame, so the
     /// app can derive the effective zoom factor (incl. fit mode).
     reported_bounds: Option<Rc<Cell<Size>>>,
+    /// Optional cell the widget writes the caret's position into each frame,
+    /// relative to the viewer's top-left, so overlays can anchor at it.
+    caret_position: Option<Rc<Cell<Option<Point>>>>,
     /// Optional insertion marker drawn over the image.
     text_caret: Option<TextCaret>,
 }
@@ -100,6 +103,7 @@ impl<Handle, Message> Viewer<Handle, Message> {
             on_click: None,
             on_double_click: None,
             reported_bounds: None,
+            caret_position: None,
             text_caret: None,
         }
     }
@@ -171,6 +175,13 @@ impl<Handle, Message> Viewer<Handle, Message> {
     /// Sets the cell the viewer reports its viewport into.
     pub(crate) fn reported_bounds(mut self, cell: Rc<Cell<Size>>) -> Self {
         self.reported_bounds = Some(cell);
+        self
+    }
+
+    /// Sets the cell the viewer reports the caret's viewer-relative position
+    /// into (`None` when there is no caret).
+    pub(crate) fn caret_position(mut self, cell: Rc<Cell<Option<Point>>>) -> Self {
+        self.caret_position = Some(cell);
         self
     }
 
@@ -645,6 +656,22 @@ where
             );
             Some((rect, caret.color))
         });
+
+        // Report the caret's position so overlays (the format bar) can anchor
+        // at it. The offset is relative to the viewer's top-left. It is only
+        // written while a caret is drawn: the app blinks the marker by dropping
+        // it, and a stale `None` would make the format bar jump to its fallback
+        // anchor on every blink.
+        if let Some(cell) = &self.caret_position
+            && let Some((rect, _)) = caret.as_ref()
+        {
+            let top_left = rect.position();
+            let origin = bounds.position();
+            cell.set(Some(Point::new(
+                top_left.x - origin.x,
+                top_left.y - origin.y,
+            )));
+        }
 
         renderer.with_layer(bounds, |renderer| {
             renderer.with_translation(translation, |renderer| {

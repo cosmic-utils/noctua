@@ -180,7 +180,7 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
     let image_height = current.rgba.1 as f32;
     let caret = if let Some(pending) = state.pending_text().filter(|_| state.caret_visible()) {
         let (x, y, width, height) = pending.caret;
-        let color = state.annotation_color();
+        let color = state.style().color;
         Some(TextCaret {
             position: Point::new(x, image_height - (y + height)),
             size: Size::new(width, height),
@@ -250,23 +250,25 @@ fn annotation_view(app: &AppModel) -> Element<'_, Message> {
             move |point: Point| crate::widget::form_fields::cursor_for(&fields, point, image_height)
         })),
         caret,
+        Some(app.caret_position.clone()),
     ))
     .active(editing)
     .capture(&[Named::Tab, Named::Escape])
     .on_key(|key| Message::Annotation(AnnotationMessage::AnnotationTextKey(key)))
     .into();
 
-    // While a free-text annotation is being entered, show the format bar.
+    // While a free-text annotation is being entered, show the format bar as a
+    // floating popover anchored at the caret. The viewer reports the caret's
+    // position every frame; the first frame falls back to the viewer's top-left.
     let element: Element<'static, Message> = if state.pending_text().is_some() {
-        let bar = widget::container(crate::widget::text_format::text_format_bar(
-            state.font_size_pt(),
-            state.annotation_color(),
-        ))
-        .center_x(Length::Fill)
-        .padding([cosmic::theme::spacing().space_xxs, 0]);
-        widget::column::with_capacity(2)
-            .push(bar)
-            .push(element)
+        let padding = f32::from(cosmic::theme::spacing().space_m);
+        let anchor = app.caret_position.get().unwrap_or(Point::ORIGIN);
+        widget::popover(element)
+            .position(widget::popover::Position::Point(Point::new(
+                anchor.x + padding,
+                anchor.y + padding,
+            )))
+            .popup(crate::widget::text_format::text_format_bar(state.style()))
             .into()
     } else {
         element
@@ -547,6 +549,7 @@ fn content_view(app: &AppModel) -> Element<'_, Message> {
                         offset_y,
                     })
                 },
+                None,
                 None,
                 None,
                 None,

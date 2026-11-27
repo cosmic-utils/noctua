@@ -1599,7 +1599,7 @@ impl AppModel {
         let Some(position) = self.annotation_page_coords(tab, x, y) else {
             return iced::Task::none();
         };
-        let (document, page, font_size, max_width) = {
+        let (document, page, max_width) = {
             let Some(state) = self.annotation_ui.get(&tab) else {
                 return iced::Task::none();
             };
@@ -1614,7 +1614,6 @@ impl AppModel {
             (
                 document,
                 state.selected(),
-                state.font_size_pt(),
                 (page_width - position.0).max(0.0),
             )
         };
@@ -1641,17 +1640,16 @@ impl AppModel {
                 // Filled in by the first update that reaches the core.
                 caret: (0.0, 0.0, 0.0, 0.0),
             };
-            let (color, font_size) = (annotation.color, annotation.font_size);
+            let style = annotation.style;
             if let Some(state) = self.annotation_ui.get_mut(&tab) {
                 state.begin_text_edit(pending);
                 // Start the toolbar from the annotation's real style.
-                state.set_color(color);
-                state.set_font_size(font_size);
+                state.set_style(style);
             }
             return self.update_pending_text(tab, document, page);
         }
 
-        self.add_pending_text(tab, document, page, font_size, position, max_width)
+        self.add_pending_text(tab, document, page, position, max_width)
     }
 
     /// Focus, toggle or open the option list of the form field under the click.
@@ -1741,14 +1739,13 @@ impl AppModel {
         tab: Entity,
         document: DocumentId,
         page: u32,
-        font_size: f32,
         origin: (f32, f32),
         max_width: f32,
     ) -> iced::Task<cosmic::Action<Message>> {
         let Some(state) = self.annotation_ui.get(&tab) else {
             return iced::Task::none();
         };
-        let color = state.annotation_color();
+        let style = state.style();
         let worker = self.worker.clone();
         cosmic::task::future(async move {
             let (_, result) = worker
@@ -1757,8 +1754,7 @@ impl AppModel {
                     Command::AddFreeTextAnnotation {
                         page,
                         text: String::new(),
-                        font_size,
-                        color,
+                        style,
                         position: origin,
                         max_width,
                     },
@@ -1804,8 +1800,7 @@ impl AppModel {
                 page,
                 index: pending.index,
                 text: pending.text.clone(),
-                font_size: state.font_size_pt(),
-                color: state.annotation_color(),
+                style: state.style(),
                 position: pending.origin,
                 max_width: pending.max_width,
                 cursor: pending.cursor,
@@ -1819,19 +1814,14 @@ impl AppModel {
         let Some(document) = self.annotation_document(tab) else {
             return iced::Task::none();
         };
-        let (page, font_size, color, pending) = {
+        let (page, style, pending) = {
             let Some(state) = self.annotation_ui.get_mut(&tab) else {
                 return iced::Task::none();
             };
             let Some(pending) = state.take_pending_text() else {
                 return iced::Task::none();
             };
-            (
-                state.selected(),
-                state.font_size_pt(),
-                state.annotation_color(),
-                pending,
-            )
+            (state.selected(), state.style(), pending)
         };
 
         if pending.is_new && pending.text.is_empty() {
@@ -1851,8 +1841,7 @@ impl AppModel {
                 page,
                 index: pending.index,
                 text: pending.text,
-                font_size,
-                color,
+                style,
                 position: pending.origin,
                 max_width: pending.max_width,
                 cursor: pending.cursor,
@@ -1869,8 +1858,7 @@ impl AppModel {
             return iced::Task::none();
         };
         let page = state.selected();
-        let font_size = state.font_size_pt();
-        let color = state.annotation_color();
+        let style = state.style();
         let Some(pending) = state.take_pending_text() else {
             return iced::Task::none();
         };
@@ -1892,8 +1880,7 @@ impl AppModel {
                 page,
                 index: pending.index,
                 text: pending.original_text,
-                font_size,
-                color,
+                style,
                 position: pending.origin,
                 max_width: pending.max_width,
                 cursor: 0,
@@ -2909,30 +2896,14 @@ impl AppModel {
                 return finish;
             }
 
-            AnnotationMessage::AnnotationFontSizeChanged(size) => {
+            AnnotationMessage::AnnotationStyleChanged(style) => {
                 let Some(tab) = self.active_tab() else {
                     return iced::Task::none();
                 };
                 if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.set_font_size(size);
+                    state.set_style(style);
                 }
                 // Restyle the text that is being typed right away.
-                let Some(document) = self.annotation_document(tab) else {
-                    return iced::Task::none();
-                };
-                let Some(page) = self.selected_page(tab) else {
-                    return iced::Task::none();
-                };
-                return self.update_pending_text(tab, document, page);
-            }
-
-            AnnotationMessage::AnnotationColorChanged(color) => {
-                let Some(tab) = self.active_tab() else {
-                    return iced::Task::none();
-                };
-                if let Some(state) = self.annotation_ui.get_mut(&tab) {
-                    state.set_color(color);
-                }
                 let Some(document) = self.annotation_document(tab) else {
                     return iced::Task::none();
                 };

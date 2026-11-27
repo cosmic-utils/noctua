@@ -37,6 +37,7 @@ pub(crate) fn viewer_frame(
     on_double_click: Option<Box<dyn Fn(Point, Point) -> Message>>,
     hover_cursor: Option<Box<dyn Fn(Point) -> Option<mouse::Interaction>>>,
     caret: Option<TextCaret>,
+    caret_position: Option<Rc<Cell<Option<Point>>>>,
 ) -> Element<'static, Message> {
     let space = cosmic::theme::spacing();
     let content_fit = if view.fit {
@@ -60,6 +61,9 @@ pub(crate) fn viewer_frame(
         .with_state(scale, offset_x, offset_y)
         .on_state_change(on_state_change)
         .text_caret(caret);
+    if let Some(caret_position) = caret_position {
+        viewer = viewer.caret_position(caret_position);
+    }
     if let Some(hover) = hover_cursor {
         viewer = viewer.hover_cursor(hover);
     }

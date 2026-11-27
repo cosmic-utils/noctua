@@ -9,8 +9,8 @@ use cosmic::iced::Point;
 use cosmic::widget::image::Handle;
 
 use noctua_core::pdfium_ops::FormField;
-use noctua_core::pdfium_ops::model::AnnotationColor;
 use noctua_core::pdfium_ops::model::palette;
+use noctua_core::pdfium_ops::model::{AnnotationColor, FreeTextStyle};
 
 use super::{CurrentImage, ViewState};
 
@@ -40,12 +40,10 @@ pub(crate) struct AnnotationUiState {
     view: ViewState,
     /// Currently active annotation tool; `None` means browse/pan.
     active_tool: Option<AnnotationTool>,
-    /// Selected free-text colour.
-    annotation_color: AnnotationColor,
+    /// Selected free-text style, applied to the annotation being typed.
+    style: FreeTextStyle,
     /// Selected highlight colour.
     highlight_color: AnnotationColor,
-    /// Selected free-text font size in points.
-    font_size_pt: f32,
     /// An in-progress free-text placement; `None` when no text is being entered.
     pending_text: Option<PendingText>,
     /// Whether the insertion marker is currently shown; toggled by the blink
@@ -75,14 +73,8 @@ impl Default for AnnotationUiState {
             current: None,
             view: ViewState::default(),
             active_tool: None,
-            annotation_color: AnnotationColor {
-                red: 0,
-                green: 0,
-                blue: 0,
-                alpha: 255,
-            },
+            style: FreeTextStyle::default(),
             highlight_color: palette::YELLOW,
-            font_size_pt: 24.0,
             pending_text: None,
             caret_visible: true,
             form_fields: Vec::new(),
@@ -137,19 +129,14 @@ impl AnnotationUiState {
         self.active_tool
     }
 
-    /// The selected free-text colour.
-    pub(crate) fn annotation_color(&self) -> AnnotationColor {
-        self.annotation_color
+    /// The selected free-text style.
+    pub(crate) fn style(&self) -> FreeTextStyle {
+        self.style
     }
 
     /// The selected highlight colour.
     pub(crate) fn highlight_color(&self) -> AnnotationColor {
         self.highlight_color
-    }
-
-    /// The selected free-text font size in points.
-    pub(crate) fn font_size_pt(&self) -> f32 {
-        self.font_size_pt
     }
 
     /// The in-progress free-text placement, if any.
@@ -248,14 +235,9 @@ impl AnnotationUiState {
         };
     }
 
-    /// Set the free-text font size in points.
-    pub(crate) fn set_font_size(&mut self, size: f32) {
-        self.font_size_pt = size;
-    }
-
-    /// Set the free-text colour.
-    pub(crate) fn set_color(&mut self, color: AnnotationColor) {
-        self.annotation_color = color;
+    /// Set the free-text style.
+    pub(crate) fn set_style(&mut self, style: FreeTextStyle) {
+        self.style = style;
     }
 
     /// Start editing a free-text annotation.
